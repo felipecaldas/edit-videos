@@ -1,0 +1,13 @@
+{
+  "font_name": "DejaVu Sans",
+  "font_size": 22,
+  "bold": 1,
+  "outline": 2,
+  "shadow": 1,
+  "primary_colour_ass": "&H0000FFFF",
+  "outline_colour_ass": "&H00000000",
+  "margin_v": 80,
+  "margin_top": 60,
+  "margin_bottom": 60,
+  "margin_middle": 80
+}

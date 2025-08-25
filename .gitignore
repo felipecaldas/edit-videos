@@ -1,0 +1,63 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+
+# Environments
+.env
+.env.*
+.venv/
+venv/
+env/
+ENV/
+
+# Packaging
+build/
+dist/
+.eggs/
+*.egg-info/
+*.egg
+wheels/
+
+# Testing
+.pytest_cache/
+.coverage*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.cache/
+
+# Logs
+logs/
+*.log
+
+# Editors/OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Temp
+/tmp/
+/temp/
+/tmp_*/
+TemporaryItems/
+
+# App generated media/artifacts
+*.srt
+*.ass
+*.vtt
+*.mp4
+*.mkv
+*.mov
+outputs/
+output/
+
+# Docker
+.docker/
+ docker-data/
+
+# Node (if present)
+node_modules/
