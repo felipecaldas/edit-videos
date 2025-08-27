@@ -1,5 +1,5 @@
 from fastapi import FastAPI, File, UploadFile, HTTPException, Form
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from typing import Optional, List
 import json
 import subprocess
@@ -318,6 +318,46 @@ async def stitch_videos_with_voiceover(req: StitchRequest):
 @app.get("/health")
 async def health_check():
     return {"status": "healthy"}
+
+@app.post("/audio_duration")
+async def get_audio_duration(audio: UploadFile = File(..., description="MP3 or WAV audio file")):
+    """Get the duration of an audio file in seconds."""
+    # Validate audio file type by content type
+    if not (audio.content_type and ('audio' in audio.content_type.lower() or 
+                                  'wav' in audio.content_type.lower() or 
+                                  'mp3' in audio.content_type.lower())):
+        raise HTTPException(status_code=400, detail="File must be an audio format (MP3 or WAV)")
+    
+    # Generate unique ID for this processing session
+    session_id = str(uuid.uuid4())
+    temp_dir = Path(f"/tmp/media/{session_id}")
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    
+    try:
+        # Save uploaded audio file
+        audio_path = temp_dir / "input_audio"
+        with open(audio_path, "wb") as f:
+            content = await audio.read()
+            f.write(content)
+        
+        # Get duration of audio
+        duration = get_duration(audio_path)
+        
+        if not duration:
+            raise HTTPException(
+                status_code=500,
+                detail="Could not determine audio duration"
+            )
+        
+        # Return the duration in seconds
+        return JSONResponse(content={"duration": duration})
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
+    except Exception as e:
+        print(f"[audio_duration] Unexpected error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
 def is_url(s: str) -> bool:
     return s.lower().startswith("http://") or s.lower().startswith("https://")
