@@ -14,6 +14,23 @@ import shutil
 
 app = FastAPI(title="Video Audio Merger")
 
+def get_duration(file_path):
+    """Get duration of media file in seconds using ffprobe"""
+    try:
+        cmd = [
+            'ffprobe', '-v', 'quiet', '-show_entries', 'format=duration',
+            '-of', 'csv=p=0', str(file_path)
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode == 0:
+            return float(result.stdout.strip())
+        else:
+            print(f"FFprobe error: {result.stderr}")
+            return None
+    except Exception as e:
+        print(f"Error getting duration: {e}")
+        return None
+
 def download_video(url: str, file_path: Path) -> None:
     """Download video from URL to specified path"""
     try:
@@ -98,23 +115,6 @@ async def merge_video_audio(
         print(f"Audio saved: {audio_path.exists()}, size: {audio_path.stat().st_size if audio_path.exists() else 0}")
         
         # Get durations of video and audio
-        def get_duration(file_path):
-            """Get duration of media file in seconds using ffprobe"""
-            try:
-                cmd = [
-                    'ffprobe', '-v', 'quiet', '-show_entries', 'format=duration',
-                    '-of', 'csv=p=0', str(file_path)
-                ]
-                result = subprocess.run(cmd, capture_output=True, text=True)
-                if result.returncode == 0:
-                    return float(result.stdout.strip())
-                else:
-                    print(f"FFprobe error: {result.stderr}")
-                    return None
-            except Exception as e:
-                print(f"Error getting duration: {e}")
-                return None
-        
         video_duration = get_duration(video_path)
         audio_duration = get_duration(audio_path)
         
