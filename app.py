@@ -235,6 +235,16 @@ class SubtitlesRequest(BaseModel):
     model_size: Optional[str] = "small"  # e.g., tiny, base, small, medium, large-v2
     subtitle_position: Optional[str] = "bottom"  # top | middle | bottom
 
+class StitchWithSubsRequest(StitchRequest):
+    language: Optional[str] = "pt"
+    model_size: Optional[str] = "small"
+    subtitle_position: Optional[str] = "bottom"
+
+class FolderStitchWithSubsRequest(FolderStitchRequest):
+    language: Optional[str] = "pt"
+    model_size: Optional[str] = "small"
+    subtitle_position: Optional[str] = "bottom"
+
 @app.post("/stitch")
 async def stitch_videos_with_voiceover(req: Union[StitchRequest, FolderStitchRequest]):
     # Create temp working directory
@@ -353,6 +363,113 @@ async def stitch_videos_with_voiceover(req: Union[StitchRequest, FolderStitchReq
         raise
     except Exception as e:
         print(f"[stitch] Unexpected error: {e}")
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+
+@app.post("/stitch_with_subtitles")
+async def stitch_with_subtitles(req: Union[StitchWithSubsRequest, FolderStitchWithSubsRequest]):
+    """Stitch videos with a voiceover and burn generated subtitles in one go.
+    Accepts either the explicit list (voiceover + videos) or folder_path discovery.
+    """
+    session_id = str(uuid.uuid4())
+    temp_dir = Path(f"/tmp/media/{session_id}")
+    temp_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"[stitch+subs] Processing session: {session_id}")
+
+    try:
+        # Discover or obtain inputs (reuse logic from /stitch)
+        voiceover_path: Path
+        video_paths: List[Path] = []
+
+        if isinstance(req, StitchWithSubsRequest):
+            if not req.voiceover:
+                raise HTTPException(status_code=400, detail="'voiceover' is required")
+            if not req.videos or len(req.videos) == 0:
+                raise HTTPException(status_code=400, detail="'videos' must contain at least one item")
+            voiceover_path = temp_dir / "voiceover.mp3"
+            obtain_source_to_path(req.voiceover, voiceover_path)
+            if not voiceover_path.exists() or voiceover_path.stat().st_size == 0:
+                raise HTTPException(status_code=400, detail="Voiceover could not be obtained or is empty")
+            for idx, src in enumerate(req.videos):
+                vp = temp_dir / f"video_{idx:03d}.mp4"
+                obtain_source_to_path(src, vp)
+                if not vp.exists() or vp.stat().st_size == 0:
+                    raise HTTPException(status_code=400, detail=f"Video at index {idx} could not be obtained or is empty")
+                video_paths.append(vp)
+            language = req.language or "pt"
+            model_size = req.model_size or "small"
+            subtitle_position = req.subtitle_position or "bottom"
+        else:
+            folder = Path(req.folder_path)
+            if not folder.exists() or not folder.is_dir():
+                raise HTTPException(status_code=400, detail=f"folder_path does not exist or is not a directory: {folder}")
+            mp3s = sorted([p for p in folder.iterdir() if p.is_file() and p.suffix.lower() == ".mp3"])
+            wavs = sorted([p for p in folder.iterdir() if p.is_file() and p.suffix.lower() == ".wav"])
+            selected_audio: Optional[Path] = mp3s[0] if mp3s else (wavs[0] if wavs else None)
+            if not selected_audio:
+                raise HTTPException(status_code=400, detail="No mp3 or wav voiceover file found in folder")
+            voiceover_path = temp_dir / f"voiceover{selected_audio.suffix.lower()}"
+            shutil.copyfile(selected_audio, voiceover_path)
+            if not voiceover_path.exists() or voiceover_path.stat().st_size == 0:
+                raise HTTPException(status_code=400, detail="Voiceover could not be obtained or is empty")
+            raw_videos = sorted([p for p in folder.iterdir() if p.is_file() and p.suffix.lower() == ".mp4"])
+            if not raw_videos:
+                raise HTTPException(status_code=400, detail="No mp4 video files found in folder")
+            for idx, vp_src in enumerate(raw_videos):
+                vp = temp_dir / f"video_{idx:03d}.mp4"
+                shutil.copyfile(vp_src, vp)
+                if not vp.exists() or vp.stat().st_size == 0:
+                    raise HTTPException(status_code=400, detail=f"Video at index {idx} could not be obtained or is empty")
+                video_paths.append(vp)
+            language = getattr(req, 'language', None) or "pt"
+            model_size = getattr(req, 'model_size', None) or "small"
+            subtitle_position = getattr(req, 'subtitle_position', None) or "bottom"
+
+        # Concat the videos and apply voiceover (same as /stitch)
+        concat_list = temp_dir / "inputs.txt"
+        with open(concat_list, "w", encoding="utf-8") as f:
+            for p in video_paths:
+                f.write(f"file '{p.resolve().as_posix()}'\n")
+
+        stitched_path = temp_dir / "stitched_output.mp4"
+        cmd = [
+            'ffmpeg', '-y',
+            '-f', 'concat', '-safe', '0',
+            '-i', str(concat_list),
+            '-i', str(voiceover_path),
+            '-filter_complex', '[1:a]loudnorm=I=-14:TP=-1.5:LRA=7,apad[aud]',
+            '-map', '0:v:0', '-map', '[aud]',
+            '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23',
+            '-c:a', 'aac',
+            '-shortest',
+            '-movflags', '+faststart',
+            str(stitched_path)
+        ]
+        print(f"[stitch+subs] FFmpeg concat cmd: {' '.join(cmd)}")
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        print(f"[stitch+subs] FFmpeg rc={result.returncode}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}")
+        if result.returncode != 0:
+            raise HTTPException(status_code=500, detail=f"FFmpeg error: {result.stderr}")
+        if not stitched_path.exists() or stitched_path.stat().st_size == 0:
+            raise HTTPException(status_code=500, detail="Stitched output not created or empty")
+
+        # Generate subtitles via Whisper
+        segments = _run_whisper_segments(stitched_path, language=language, model_size=model_size)
+        srt_path = temp_dir / "generated.srt"
+        chunks = _build_chunks_from_words(segments, max_words=4, min_chunk_duration=0.6)
+        _write_srt_from_chunks(chunks, srt_path)
+
+        # Burn subtitles
+        final_path = temp_dir / "stitched_subtitled.mp4"
+        _burn_subtitles(stitched_path, srt_path, final_path, position=subtitle_position or "bottom", margin_v=None)
+        if not final_path.exists() or final_path.stat().st_size == 0:
+            raise HTTPException(status_code=500, detail="Final output not created or empty")
+
+        return FileResponse(path=str(final_path), media_type='video/mp4', filename=f"stitched_subtitled_{session_id}.mp4")
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[stitch+subs] Unexpected error: {e}")
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
 @app.get("/health")
