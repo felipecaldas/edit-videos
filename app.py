@@ -1,6 +1,6 @@
 from fastapi import FastAPI, File, UploadFile, HTTPException, Form
 from fastapi.responses import FileResponse, JSONResponse
-from typing import Optional, List
+from typing import Optional, List, Union
 import json
 import subprocess
 import tempfile
@@ -226,6 +226,9 @@ class StitchRequest(BaseModel):
     voiceover: str  # URL or absolute/accessible file path to voiceover.mp3
     videos: List[str]  # Ordered list of URLs or file paths to videos
 
+class FolderStitchRequest(BaseModel):
+    folder_path: str  # Directory containing one mp3/wav voiceover and mp4 videos
+
 class SubtitlesRequest(BaseModel):
     source: str  # URL or container-visible file path to audio/video
     language: Optional[str] = "pt"  # default Brazilian Portuguese
@@ -233,13 +236,7 @@ class SubtitlesRequest(BaseModel):
     subtitle_position: Optional[str] = "bottom"  # top | middle | bottom
 
 @app.post("/stitch")
-async def stitch_videos_with_voiceover(req: StitchRequest):
-    # Validate input
-    if not req.voiceover:
-        raise HTTPException(status_code=400, detail="'voiceover' is required")
-    if not req.videos or len(req.videos) == 0:
-        raise HTTPException(status_code=400, detail="'videos' must contain at least one item")
-
+async def stitch_videos_with_voiceover(req: Union[StitchRequest, FolderStitchRequest]):
     # Create temp working directory
     session_id = str(uuid.uuid4())
     temp_dir = Path(f"/tmp/media/{session_id}")
@@ -248,20 +245,63 @@ async def stitch_videos_with_voiceover(req: StitchRequest):
     print(f"[stitch] Processing session: {session_id}")
 
     try:
-        # Resolve/download voiceover
-        voiceover_path = temp_dir / "voiceover.mp3"
-        obtain_source_to_path(req.voiceover, voiceover_path)
-        if not voiceover_path.exists() or voiceover_path.stat().st_size == 0:
-            raise HTTPException(status_code=400, detail="Voiceover could not be obtained or is empty")
-
-        # Resolve/download videos in order
+        voiceover_path: Path
         video_paths: List[Path] = []
-        for idx, src in enumerate(req.videos):
-            vp = temp_dir / f"video_{idx:03d}.mp4"
-            obtain_source_to_path(src, vp)
-            if not vp.exists() or vp.stat().st_size == 0:
-                raise HTTPException(status_code=400, detail=f"Video at index {idx} could not be obtained or is empty")
-            video_paths.append(vp)
+
+        # Branch based on request type
+        if isinstance(req, StitchRequest):
+            # Validate input
+            if not req.voiceover:
+                raise HTTPException(status_code=400, detail="'voiceover' is required")
+            if not req.videos or len(req.videos) == 0:
+                raise HTTPException(status_code=400, detail="'videos' must contain at least one item")
+
+            # Resolve/download voiceover (kept as mp3 filename for backward compatibility)
+            voiceover_path = temp_dir / "voiceover.mp3"
+            obtain_source_to_path(req.voiceover, voiceover_path)
+            if not voiceover_path.exists() or voiceover_path.stat().st_size == 0:
+                raise HTTPException(status_code=400, detail="Voiceover could not be obtained or is empty")
+
+            # Resolve/download videos in order
+            for idx, src in enumerate(req.videos):
+                vp = temp_dir / f"video_{idx:03d}.mp4"
+                obtain_source_to_path(src, vp)
+                if not vp.exists() or vp.stat().st_size == 0:
+                    raise HTTPException(status_code=400, detail=f"Video at index {idx} could not be obtained or is empty")
+                video_paths.append(vp)
+        else:
+            # Folder mode: discover files inside provided folder
+            folder = Path(req.folder_path)
+            if not folder.exists() or not folder.is_dir():
+                raise HTTPException(status_code=400, detail=f"folder_path does not exist or is not a directory: {folder}")
+
+            # Find audio: prefer mp3 over wav; if multiple, pick first lexicographically
+            mp3s = sorted([p for p in folder.iterdir() if p.is_file() and p.suffix.lower() == ".mp3"])
+            wavs = sorted([p for p in folder.iterdir() if p.is_file() and p.suffix.lower() == ".wav"])
+            selected_audio: Optional[Path] = None
+            if mp3s:
+                selected_audio = mp3s[0]
+            elif wavs:
+                selected_audio = wavs[0]
+            else:
+                raise HTTPException(status_code=400, detail="No mp3 or wav voiceover file found in folder")
+
+            # Copy audio preserving extension
+            voiceover_path = temp_dir / f"voiceover{selected_audio.suffix.lower()}"
+            shutil.copyfile(selected_audio, voiceover_path)
+            if not voiceover_path.exists() or voiceover_path.stat().st_size == 0:
+                raise HTTPException(status_code=400, detail="Voiceover could not be obtained or is empty")
+
+            # Find and copy videos, sorted lexicographically
+            raw_videos = sorted([p for p in folder.iterdir() if p.is_file() and p.suffix.lower() == ".mp4"])
+            if not raw_videos:
+                raise HTTPException(status_code=400, detail="No mp4 video files found in folder")
+            for idx, vp_src in enumerate(raw_videos):
+                vp = temp_dir / f"video_{idx:03d}.mp4"
+                shutil.copyfile(vp_src, vp)
+                if not vp.exists() or vp.stat().st_size == 0:
+                    raise HTTPException(status_code=400, detail=f"Video at index {idx} could not be obtained or is empty")
+                video_paths.append(vp)
 
         # Prepare concat list file for ffmpeg (use absolute posix paths for portability)
         concat_list = temp_dir / "inputs.txt"
