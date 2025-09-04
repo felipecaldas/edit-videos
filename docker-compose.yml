@@ -1,4 +1,5 @@
-version: '3.8'
+name: video-editor
+
 services:
   video-merger:
     build: .
@@ -6,12 +7,14 @@ services:
     ports:
       - "8086:8000"
     volumes:
-      - "/home/caleidro/containers/self-hosted-ai-starter-kit/shared:/data/shared:ro"
+      - "/mnt/tp-share/n8n-shared:/data/shared:ro"
       - .:/app
+    environment:
+      - TZ=Australia/Melbourne
     restart: unless-stopped
-    command: ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    command: ["uvicorn", "videomerge.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8086/health"]
-      interval: 30s
+      interval: 200s
       timeout: 10s
       retries: 3
