@@ -93,23 +93,43 @@ def _parse_history_outputs(
     return preferred if preferred else generic
 
 
-def _queue_says_check_history(prompt_id: str) -> bool:
+def _queue_says_check_history(prompt_id: str) -> Optional[bool]:
     q_url = f"{COMFYUI_URL.rstrip('/')}/queue"
     try:
         r = requests.get(q_url, timeout=10)
         r.raise_for_status()
         data = r.json()
-        # ComfyUI returns queue info under various keys; look for our prompt_id in both running and pending
-        for section_key in ("queue_running", "queue_pending", "running", "pending"):
-            items = data.get(section_key) or []
-            for item in items:
-                # item may be {"prompt_id": "...", "shouldCheckHistory": true, ...}
-                pid = item.get("prompt_id") or item.get("id")
-                if pid == prompt_id:
-                    return bool(item.get("shouldCheckHistory"))
+        # If the root is a list, try to match by common shapes
+        if isinstance(data, list):
+            for item in data:
+                # Shape could be [prompt_id, ...]
+                if isinstance(item, (list, tuple)) and item and item[0] == prompt_id:
+                    return None  # unknown readiness, but we found it; proceed to history immediately
+                if isinstance(item, dict):
+                    pid = item.get("prompt_id") or item.get("id")
+                    if pid == prompt_id:
+                        return bool(item.get("shouldCheckHistory")) if "shouldCheckHistory" in item else None
+            return None
+        # Otherwise expect a dict with known sections
+        if isinstance(data, dict):
+            for section_key in ("queue_running", "queue_pending", "running", "pending"):
+                items = data.get(section_key) or []
+                # Items might be list of ids, list/tuples, or dicts
+                for item in items:
+                    if isinstance(item, (list, tuple)) and item:
+                        if item[0] == prompt_id:
+                            return None
+                    elif isinstance(item, str):
+                        if item == prompt_id:
+                            return None
+                    elif isinstance(item, dict):
+                        pid = item.get("prompt_id") or item.get("id")
+                        if pid == prompt_id:
+                            return bool(item.get("shouldCheckHistory")) if "shouldCheckHistory" in item else None
+            return None
     except Exception as e:
         logger.debug("[comfyui] queue poll error: %s", e)
-    return False
+        return None
 
 
 def poll_until_complete(
@@ -131,8 +151,9 @@ def poll_until_complete(
     attempts = 0
     while time.time() < deadline:
         try:
-            # First consult the queue to see if we should check history
-            if not _queue_says_check_history(prompt_id):
+            # First consult the queue; only block if it explicitly says not ready
+            queue_ready = _queue_says_check_history(prompt_id)
+            if queue_ready is False:
                 attempts += 1
                 logger.debug(
                     "[comfyui] queue indicates not ready (shouldCheckHistory=false). attempt=%d, sleep %.1fs",
