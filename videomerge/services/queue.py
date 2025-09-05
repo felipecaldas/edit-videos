@@ -7,6 +7,7 @@ from redis.asyncio import Redis
 
 QUEUE_KEY = "video_orchestrator:queue"
 JOB_PREFIX = "video_orchestrator:job:"
+DLQ_KEY = "video_orchestrator:dead_letter"
 
 
 @dataclass
@@ -53,3 +54,15 @@ async def get_job(redis: Redis, job_id: str) -> Optional[Job]:
     if not raw:
         return None
     return Job.from_json(raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw)
+
+
+async def push_dead_letter(redis: Redis, job: Job, reason: str) -> None:
+    record = {
+        "job_id": job.job_id,
+        "run_id": (job.payload.get("run_id") if isinstance(job.payload, dict) else None),
+        "status": job.status,
+        "error": job.error,
+        "reason": reason,
+        "payload": job.payload,
+    }
+    await redis.rpush(DLQ_KEY, json.dumps(record, ensure_ascii=False))

@@ -8,13 +8,15 @@ from fastapi import HTTPException
 
 from videomerge.config import DATA_SHARED_BASE, ENABLE_IMAGE_GEN, COMFYUI_TIMEOUT_SECONDS, COMFYUI_POLL_INTERVAL_SECONDS
 from videomerge.services.redis_client import get_redis
-from videomerge.services.queue import QUEUE_KEY, get_job, set_job, Job
+from videomerge.services.queue import QUEUE_KEY, get_job, set_job, Job, push_dead_letter
 from videomerge.services.voiceover import synthesize_voice
 from videomerge.services.comfyui import (
     submit_text_to_image,
     submit_image_to_video,
     poll_until_complete,
     download_outputs,
+    fetch_output_bytes,
+    upload_image_to_input,
 )
 from videomerge.utils.logging import get_logger
 
@@ -108,6 +110,8 @@ class Worker:
             comfy_ids: list[str] = []
             # Maintain strict index alignment: map prompt index -> first image filename returned
             image_by_index: dict[int, str] = {}
+            # Map prompt index -> uploaded filename in ComfyUI input directory
+            uploaded_image_by_index: dict[int, str] = {}
             # Determine whether to run image generation for this job
             enable_image = ENABLE_IMAGE_GEN
             if isinstance(payload.get("enable_image_gen"), bool):
@@ -156,8 +160,13 @@ class Worker:
                             job.job_id,
                         )
                     except Exception as e:
-                        logger.exception("[worker] Image generation failed for prompt %d: %s", idx + 1, e)
-                        # Do not fail the whole job; continue to next prompt
+                        # Abort entire job and push to DLQ on any image-generation failure
+                        job.status = "failed"
+                        job.error = f"image_generation_failed at index {idx+1}: {e}"
+                        await set_job(redis, job)
+                        await push_dead_letter(redis, job, reason="image_generation_failed")
+                        logger.exception("[worker] Image generation failed for prompt %d: %s. Job aborted and sent to DLQ.", idx + 1, e)
+                        return
                 _t1_imgs_total = time.perf_counter()
                 logger.info(
                     "[metrics] total_images_generation_seconds=%.3f images_count=%d run_id=%s job_id=%s",
@@ -166,6 +175,22 @@ class Worker:
                     run_id,
                     job.job_id,
                 )
+
+            # Before I2V: ensure images exist in ComfyUI input; fetch from output and upload
+            if image_by_index:
+                for idx, hint in image_by_index.items():
+                    try:
+                        fname, content = fetch_output_bytes(hint)
+                        uploaded_name = upload_image_to_input(fname, content, overwrite=True)
+                        uploaded_image_by_index[idx] = uploaded_name
+                        logger.debug("[worker] Uploaded image for index %d to ComfyUI input as %s", idx + 1, uploaded_name)
+                    except Exception as e:
+                        job.status = "failed"
+                        job.error = f"image_upload_failed at index {idx+1}: {e}"
+                        await set_job(redis, job)
+                        await push_dead_letter(redis, job, reason="image_upload_failed")
+                        logger.exception("[worker] Failed to upload image for index %d: %s. Job aborted and sent to DLQ.", idx + 1, e)
+                        return
 
             # Image-to-Video generation per prompt (strict index alignment)
             video_files: list[str] = []
@@ -176,7 +201,8 @@ class Worker:
                     v_prompt = (item.get("video_prompt") or "").strip()
                     if not v_prompt:
                         continue
-                    image_name = image_by_index.get(idx)
+                    # Use uploaded input filename if available; else fallback to original hint
+                    image_name = uploaded_image_by_index.get(idx) or image_by_index.get(idx)
                     if not image_name:
                         logger.warning(
                             "[worker] No image found for prompt index %d; skipping video generation for this index.",

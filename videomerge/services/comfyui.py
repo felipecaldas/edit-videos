@@ -42,7 +42,13 @@ def submit_text_to_image(prompt_text: str, *, client_id: Optional[str] = None, t
     payload = {"prompt": workflow, "client_id": client_id}
     logger.info("[comfyui] Submitting text->image prompt to %s", url)
     resp = requests.post(url, json=payload, timeout=30)
-    resp.raise_for_status()
+    if not resp.ok:
+        # Log response body to help diagnose node_errors
+        try:
+            logger.error("[comfyui] /prompt error: status=%s body=%s", resp.status_code, resp.text)
+        except Exception:
+            pass
+        resp.raise_for_status()
     data = resp.json()
     # ComfyUI returns { "prompt_id": "...", "number": 0, "node_errors": {} }
     prompt_id = data.get("prompt_id") or data.get("promptId")
@@ -192,3 +198,43 @@ def download_outputs(file_hints: List[str], dest_dir: Path) -> List[Path]:
                     f.write(chunk)
         saved.append(out_path)
     return saved
+
+
+def fetch_output_bytes(hint: str) -> Tuple[str, bytes]:
+    """Fetch a single output file from ComfyUI /view and return (filename, bytes)."""
+    if "/" in hint:
+        subfolder, filename = hint.split("/", 1)
+    else:
+        subfolder, filename = "", hint
+    params = {"filename": filename, "type": "output"}
+    if subfolder:
+        params["subfolder"] = subfolder
+    url = f"{COMFYUI_URL.rstrip('/')}/view"
+    r = requests.get(url, params=params, timeout=60)
+    r.raise_for_status()
+    return filename, r.content
+
+
+def upload_image_to_input(filename: str, content: bytes, overwrite: bool = True) -> str:
+    """Upload image bytes to ComfyUI input directory via /upload/image and return the stored filename.
+
+    Many ComfyUI setups accept multipart form with key 'image'.
+    """
+    url = f"{COMFYUI_URL.rstrip('/')}/upload/image"
+    files = {"image": (filename, content, "application/octet-stream")}
+    data = {"overwrite": "true" if overwrite else "false"}
+    logger.info("[comfyui] Uploading image to input: %s", filename)
+    resp = requests.post(url, files=files, data=data, timeout=60)
+    if not resp.ok:
+        try:
+            logger.error("[comfyui] /upload/image error: status=%s body=%s", resp.status_code, resp.text)
+        except Exception:
+            pass
+        resp.raise_for_status()
+    # Some deployments return JSON with name/subfolder/type; fallback to original name
+    try:
+        data = resp.json()
+        uploaded_name = data.get("name") or filename
+    except Exception:
+        uploaded_name = filename
+    return uploaded_name
