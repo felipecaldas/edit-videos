@@ -57,74 +57,123 @@ def submit_text_to_image(prompt_text: str, *, client_id: Optional[str] = None, t
     return prompt_id
 
 
-def _parse_history_outputs(hist: Dict[str, Any]) -> List[Tuple[str, Optional[str]]]:
-    # Returns list of (filename, subfolder). Works for images and videos.
-    outputs: List[Tuple[str, Optional[str]]] = []
-    # hist structure: { prompt_id: { "outputs": { node_id: { "images": [...], "videos": [...] } } } }
+def _parse_history_outputs(
+    hist: Dict[str, Any], *, prefer_node_ids: Optional[List[str]] = None
+) -> List[Tuple[str, Optional[str]]]:
+    """Return list of (filename, subfolder) from history outputs.
+
+    If prefer_node_ids is provided, try extracting in that order from those nodes first
+    (useful for SaveVideo/GIF nodes that may place outputs under specific keys).
+    Supports 'images', 'videos', and 'gifs' arrays.
+    """
+    preferred: List[Tuple[str, Optional[str]]] = []
+    generic: List[Tuple[str, Optional[str]]] = []
+
     for _pid, item in hist.items():
         out = item.get("outputs") or {}
+        # Preferred nodes first
+        if prefer_node_ids:
+            for nid in prefer_node_ids:
+                node_out = out.get(nid) or {}
+                for arr_name in ("images", "videos", "gifs"):
+                    for entry in node_out.get(arr_name) or []:
+                        fn = entry.get("filename")
+                        sf = entry.get("subfolder")
+                        if fn:
+                            preferred.append((fn, sf))
+        # Then collect generically from all nodes
         for _node_id, node_out in out.items():
-            # Images
-            for img in node_out.get("images") or []:
-                filename = img.get("filename")
-                subfolder = img.get("subfolder")
-                if filename:
-                    outputs.append((filename, subfolder))
-            # Videos
-            for vid in node_out.get("videos") or []:
-                filename = vid.get("filename")
-                subfolder = vid.get("subfolder")
-                if filename:
-                    outputs.append((filename, subfolder))
-    return outputs
+            for arr_name in ("images", "videos", "gifs"):
+                for entry in node_out.get(arr_name) or []:
+                    fn = entry.get("filename")
+                    sf = entry.get("subfolder")
+                    if fn:
+                        generic.append((fn, sf))
+
+    return preferred if preferred else generic
 
 
-def poll_until_complete(prompt_id: str, *, timeout_s: int, poll_interval_s: float) -> List[str]:
-    """Poll /history/{prompt_id} until outputs are available or timeout.
+def _queue_says_check_history(prompt_id: str) -> bool:
+    q_url = f"{COMFYUI_URL.rstrip('/')}/queue"
+    try:
+        r = requests.get(q_url, timeout=10)
+        r.raise_for_status()
+        data = r.json()
+        # ComfyUI returns queue info under various keys; look for our prompt_id in both running and pending
+        for section_key in ("queue_running", "queue_pending", "running", "pending"):
+            items = data.get(section_key) or []
+            for item in items:
+                # item may be {"prompt_id": "...", "shouldCheckHistory": true, ...}
+                pid = item.get("prompt_id") or item.get("id")
+                if pid == prompt_id:
+                    return bool(item.get("shouldCheckHistory"))
+    except Exception as e:
+        logger.debug("[comfyui] queue poll error: %s", e)
+    return False
 
-    Returns a list of image path hints. We keep filenames (optionally prefixed with subfolder if present).
+
+def poll_until_complete(
+    prompt_id: str,
+    *,
+    timeout_s: int,
+    poll_interval_s: float,
+    prefer_node_ids: Optional[List[str]] = None,
+) -> List[str]:
+    """Poll ComfyUI until outputs are available or timeout.
+
+    Strategy: poll /queue and wait for shouldCheckHistory for our prompt, then query /history/{prompt_id}.
+    If /queue does not contain our ID, still attempt /history.
     """
-    url = f"{COMFYUI_URL.rstrip('/')}/history/{prompt_id}"
-    logger.info("[comfyui] Polling history for prompt_id=%s", prompt_id)
+    hist_url = f"{COMFYUI_URL.rstrip('/')}/history"
+    logger.info("[comfyui] Polling history for prompt_id=%s (via /history)", prompt_id)
     deadline = time.time() + timeout_s
     last_error = None
     attempts = 0
     while time.time() < deadline:
         try:
-            resp = requests.get(url, timeout=15)
-            if resp.status_code == 404:
-                # Not available yet
+            # First consult the queue to see if we should check history
+            if not _queue_says_check_history(prompt_id):
                 attempts += 1
                 logger.debug(
-                    "[comfyui] history not found yet (404). attempt=%d, sleeping %.1fs",
+                    "[comfyui] queue indicates not ready (shouldCheckHistory=false). attempt=%d, sleep %.1fs",
                     attempts,
                     poll_interval_s,
                 )
                 time.sleep(poll_interval_s)
                 continue
+
+            # Query history (full), then select our prompt_id entry
+            resp = requests.get(hist_url, timeout=15)
             resp.raise_for_status()
             data = resp.json()
             hist = data.get("history") or data
-            outputs = _parse_history_outputs(hist)
+            entry = hist.get(prompt_id) or {}
+            if not entry:
+                attempts += 1
+                logger.debug("[comfyui] history entry not found for prompt_id. attempt=%d, sleep %.1fs", attempts, poll_interval_s)
+                time.sleep(poll_interval_s)
+                continue
+
+            # Ensure job reports completed if status present
+            status = (entry.get("status") or {})
+            if status and not status.get("completed"):
+                attempts += 1
+                logger.debug("[comfyui] history found but not completed. attempt=%d, sleep %.1fs", attempts, poll_interval_s)
+                time.sleep(poll_interval_s)
+                continue
+
+            outputs = _parse_history_outputs({prompt_id: entry}, prefer_node_ids=prefer_node_ids)
             if outputs:
-                # Compose strings; if subfolder provided, keep it in the hint
                 result = [f"{sf + '/' if sf else ''}{fn}" for (fn, sf) in outputs]
                 return result
             # No outputs yet; sleep before next attempt
             attempts += 1
-            logger.debug(
-                "[comfyui] no outputs yet. attempt=%d, sleeping %.1fs", attempts, poll_interval_s
-            )
+            logger.debug("[comfyui] no outputs yet. attempt=%d, sleep %.1fs", attempts, poll_interval_s)
             time.sleep(poll_interval_s)
         except Exception as e:
             last_error = e
             attempts += 1
-            logger.debug(
-                "[comfyui] polling error: %s. attempt=%d, sleeping %.1fs",
-                e,
-                attempts,
-                poll_interval_s,
-            )
+            logger.debug("[comfyui] polling error: %s. attempt=%d, sleep %.1fs", e, attempts, poll_interval_s)
             time.sleep(poll_interval_s)
     raise TimeoutError(f"Timed out waiting for ComfyUI results for {prompt_id}. Last error: {last_error}")
 

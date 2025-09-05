@@ -216,6 +216,7 @@ class Worker:
                             v_pid,
                             timeout_s=COMFYUI_TIMEOUT_SECONDS,
                             poll_interval_s=COMFYUI_POLL_INTERVAL_SECONDS,
+                            prefer_node_ids=["61", "60"],
                         )
                         # Filter to common video extensions to avoid re-downloading images here
                         video_hints = [h for h in v_outputs if h.lower().endswith((".mp4", ".webm", ".mov", ".mkv"))]
