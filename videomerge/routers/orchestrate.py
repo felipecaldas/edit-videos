@@ -47,4 +47,5 @@ async def orchestrate_status(job_id: str):
         "voiceover_path": job.voiceover_path,
         "image_files": job.image_files,
         "comfy_prompt_ids": job.comfy_prompt_ids,
+        "final_video_path": job.final_video_path,
     })

@@ -23,6 +23,8 @@ class Job:
     comfy_prompt_ids: List[str] | None = None
     # Image-to-Video results (saved on disk)
     video_files: List[str] | None = None
+    # Final stitched-with-subtitles video path
+    final_video_path: Optional[str] = None
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), ensure_ascii=False)

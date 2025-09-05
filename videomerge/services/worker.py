@@ -19,6 +19,10 @@ from videomerge.services.comfyui import (
     upload_image_to_input,
 )
 from videomerge.utils.logging import get_logger
+from videomerge.services.stitcher import (
+    concat_videos_with_voiceover,
+    generate_and_burn_subtitles,
+)
 
 logger = get_logger(__name__)
 
@@ -251,6 +255,33 @@ class Worker:
                     job.job_id,
                 )
 
+            # Final stitching with subtitles (if we have at least one video)
+            final_video_path_str: str | None = None
+            if video_files:
+                try:
+                    _t0_stitch = time.perf_counter()
+                    stitched_path = concat_videos_with_voiceover(
+                        [Path(p) for p in video_files], audio_path, run_dir / "stitched_output.mp4"
+                    )
+                    _t1_stitch = time.perf_counter()
+
+                    _t0_subs = time.perf_counter()
+                    final_path = generate_and_burn_subtitles(
+                        stitched_path, run_dir / "stitched_subtitled.mp4", language='pt', model_size='small', position='bottom'
+                    )
+                    _t1_subs = time.perf_counter()
+
+                    final_video_path_str = str(final_path)
+                    logger.info(
+                        "[metrics] stitch_seconds=%.3f subtitles_seconds=%.3f run_id=%s job_id=%s",
+                        _t1_stitch - _t0_stitch,
+                        _t1_subs - _t0_subs,
+                        run_id,
+                        job.job_id,
+                    )
+                except Exception as e:
+                    logger.exception("[worker] Stitch with subtitles failed: %s", e)
+
             job.status = "completed"
             job.output_dir = str(run_dir)
             job.voiceover_path = str(audio_path)
@@ -259,6 +290,8 @@ class Worker:
                 job.comfy_prompt_ids = comfy_ids
             if video_files:
                 job.video_files = video_files
+            if final_video_path_str:
+                job.final_video_path = final_video_path_str
             await set_job(redis, job)
             logger.info("[worker] Completed job_id=%s", job.job_id)
         except Exception as e:

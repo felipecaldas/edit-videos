@@ -19,6 +19,10 @@ from videomerge.services.subtitles import (
     write_srt_from_chunks,
     burn_subtitles,
 )
+from videomerge.services.stitcher import (
+    concat_videos_with_voiceover,
+    generate_and_burn_subtitles,
+)
 from videomerge.utils.logging import get_logger
 
 router = APIRouter(prefix="", tags=["subtitles"])
@@ -173,37 +177,24 @@ async def stitch_with_subtitles(req: Union[StitchWithSubsRequest, FolderStitchWi
             for p in video_paths:
                 f.write(f"file '{p.resolve().as_posix()}'\n")
 
-        stitched_path = temp_dir / "stitched_output.mp4"
-        cmd = [
-            'ffmpeg', '-y',
-            '-f', 'concat', '-safe', '0',
-            '-i', str(concat_list),
-            '-i', str(voiceover_path),
-            '-filter_complex', '[1:a]loudnorm=I=-14:TP=-1.5:LRA=7,apad[aud]',
-            '-map', '0:v:0', '-map', '[aud]',
-            '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23',
-            '-c:a', 'aac',
-            '-shortest',
-            '-movflags', '+faststart',
-            str(stitched_path)
-        ]
-        logger.debug("[stitch+subs] FFmpeg concat cmd: %s", ' '.join(cmd))
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            raise HTTPException(status_code=500, detail=f"FFmpeg error: {result.stderr}")
-        if not stitched_path.exists() or stitched_path.stat().st_size == 0:
-            raise HTTPException(status_code=500, detail="Stitched output not created or empty")
+        try:
+            stitched_path = concat_videos_with_voiceover(video_paths, voiceover_path, temp_dir / "stitched_output.mp4")
+        except Exception as e:
+            logger.exception("[stitch+subs] Concat failed: %s", e)
+            raise HTTPException(status_code=500, detail=str(e))
 
-        # Subtitles
-        segments = run_whisper_segments(stitched_path, language=language, model_size=model_size)
-        srt_path = temp_dir / "generated.srt"
-        chunks = build_chunks_from_words(segments, max_words=4, min_chunk_duration=0.6)
-        write_srt_from_chunks(chunks, srt_path)
-
-        final_path = temp_dir / "stitched_subtitled.mp4"
-        burn_subtitles(stitched_path, srt_path, final_path, position=subtitle_position or "bottom", margin_v=None)
-        if not final_path.exists() or final_path.stat().st_size == 0:
-            raise HTTPException(status_code=500, detail="Final output not created or empty")
+        # Subtitles (reuse helper)
+        try:
+            final_path = generate_and_burn_subtitles(
+                stitched_path,
+                temp_dir / "stitched_subtitled.mp4",
+                language=language,
+                model_size=model_size,
+                position=subtitle_position or "bottom",
+            )
+        except Exception as e:
+            logger.exception("[stitch+subs] Subtitles failed: %s", e)
+            raise HTTPException(status_code=500, detail=str(e))
 
         return FileResponse(path=str(final_path), media_type='video/mp4', filename=f"stitched_subtitled_{session_id}.mp4")
     except HTTPException:

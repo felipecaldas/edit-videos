@@ -1,7 +1,6 @@
 from pathlib import Path
 import uuid
 import shutil
-import subprocess
 from typing import List, Optional, Union
 
 from fastapi import APIRouter, HTTPException
@@ -13,6 +12,7 @@ from videomerge.models import (
     FolderStitchRequest,
 )
 from videomerge.services.downloads import obtain_source_to_path
+from videomerge.services.stitcher import concat_videos_with_voiceover
 from videomerge.utils.logging import get_logger
 
 router = APIRouter(prefix="", tags=["stitch"])
@@ -74,34 +74,11 @@ async def stitch_videos_with_voiceover(req: Union[StitchRequest, FolderStitchReq
                     raise HTTPException(status_code=400, detail=f"Video at index {idx} could not be obtained or is empty")
                 video_paths.append(vp)
 
-        concat_list = temp_dir / "inputs.txt"
-        with open(concat_list, "w", encoding="utf-8") as f:
-            for p in video_paths:
-                f.write(f"file '{p.resolve().as_posix()}'\n")
-
-        output_path = temp_dir / "stitched_output.mp4"
-        cmd = [
-            'ffmpeg', '-y',
-            '-f', 'concat', '-safe', '0',
-            '-i', str(concat_list),
-            '-i', str(voiceover_path),
-            '-filter_complex', '[1:a]loudnorm=I=-14:TP=-1.5:LRA=7,apad[aud]',
-            '-map', '0:v:0', '-map', '[aud]',
-            '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23',
-            '-c:a', 'aac',
-            '-shortest',
-            '-movflags', '+faststart',
-            str(output_path)
-        ]
-
-        logger.debug("[stitch] FFmpeg cmd: %s", ' '.join(cmd))
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        logger.debug("[stitch] rc=%s stdout=%s stderr=%s", result.returncode, result.stdout, result.stderr)
-
-        if result.returncode != 0:
-            raise HTTPException(status_code=500, detail=f"FFmpeg error: {result.stderr}")
-        if not output_path.exists() or output_path.stat().st_size == 0:
-            raise HTTPException(status_code=500, detail="Output video not created or empty")
+        try:
+            output_path = concat_videos_with_voiceover(video_paths, voiceover_path, temp_dir / "stitched_output.mp4")
+        except Exception as e:
+            logger.exception("[stitch] Concat failed: %s", e)
+            raise HTTPException(status_code=500, detail=str(e))
 
         return FileResponse(path=str(output_path), media_type='video/mp4', filename=f"stitched_{session_id}.mp4")
 
