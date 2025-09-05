@@ -16,8 +16,10 @@ services:
       - REDIS_URL=redis://192.168.68.52:8061/2
       - COMFYUI_URL=http://192.168.68.51:8188
       - ENABLE_IMAGE_GEN=true
-      - COMFYUI_TIMEOUT_SECONDS=1800
-      - COMFYUI_POLL_INTERVAL_SECONDS=2
+      - COMFYUI_TIMEOUT_SECONDS=600
+      - COMFYUI_POLL_INTERVAL_SECONDS=15
+      - LOG_LEVEL=DEBUG
+      - UVICORN_LOG_LEVEL=debug
     restart: unless-stopped
     command: ["uvicorn", "videomerge.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
     healthcheck:

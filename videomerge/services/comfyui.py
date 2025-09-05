@@ -82,11 +82,18 @@ def poll_until_complete(prompt_id: str, *, timeout_s: int, poll_interval_s: floa
     logger.info("[comfyui] Polling history for prompt_id=%s", prompt_id)
     deadline = time.time() + timeout_s
     last_error = None
+    attempts = 0
     while time.time() < deadline:
         try:
             resp = requests.get(url, timeout=15)
             if resp.status_code == 404:
                 # Not available yet
+                attempts += 1
+                logger.debug(
+                    "[comfyui] history not found yet (404). attempt=%d, sleeping %.1fs",
+                    attempts,
+                    poll_interval_s,
+                )
                 time.sleep(poll_interval_s)
                 continue
             resp.raise_for_status()
@@ -97,8 +104,21 @@ def poll_until_complete(prompt_id: str, *, timeout_s: int, poll_interval_s: floa
                 # Compose strings; if subfolder provided, keep it in the hint
                 result = [f"{sf + '/' if sf else ''}{fn}" for (fn, sf) in outputs]
                 return result
+            # No outputs yet; sleep before next attempt
+            attempts += 1
+            logger.debug(
+                "[comfyui] no outputs yet. attempt=%d, sleeping %.1fs", attempts, poll_interval_s
+            )
+            time.sleep(poll_interval_s)
         except Exception as e:
             last_error = e
+            attempts += 1
+            logger.debug(
+                "[comfyui] polling error: %s. attempt=%d, sleeping %.1fs",
+                e,
+                attempts,
+                poll_interval_s,
+            )
             time.sleep(poll_interval_s)
     raise TimeoutError(f"Timed out waiting for ComfyUI results for {prompt_id}. Last error: {last_error}")
 
