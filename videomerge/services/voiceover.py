@@ -9,7 +9,7 @@ from videomerge.utils.logging import get_logger
 logger = get_logger(__name__)
 
 
-def synthesize_voice(text: str, output_path: Path, timeout: int = 120) -> Path:
+def synthesize_voice(text: str, output_path: Path, timeout: int = 480) -> Path:
     """Call the external voiceover service to synthesize speech and save to output_path.
 
     - Uses VOICEOVER_SERVICE_URL from environment, endpoint: /synthesize/clone_voice
