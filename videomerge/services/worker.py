@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 from pathlib import Path
 from typing import Any, Dict
 
@@ -87,7 +88,15 @@ class Worker:
 
             # synthesize voiceover
             audio_path = run_dir / "voiceover.mp3"
+            _t0_vo = time.perf_counter()
             synthesize_voice(script, audio_path)
+            _t1_vo = time.perf_counter()
+            logger.info(
+                "[metrics] voiceover_generation_seconds=%.3f run_id=%s job_id=%s",
+                _t1_vo - _t0_vo,
+                run_id,
+                job.job_id,
+            )
 
             # Optional: ComfyUI text->image generation
             image_files: list[str] = []
@@ -99,12 +108,14 @@ class Worker:
 
             if enable_image and prompts:
                 logger.info("[worker] Image generation enabled. Processing %d prompt items", len(prompts))
+                _t0_imgs_total = time.perf_counter()
                 for idx, item in enumerate(prompts):
                     # item is a dict at this point (originated from model_dump)
                     img_prompt = (item.get("image_prompt") or "").strip()
                     if not img_prompt:
                         continue
                     try:
+                        _t0_img = time.perf_counter()
                         pid = submit_text_to_image(img_prompt)
                         comfy_ids.append(pid)
                         filenames = poll_until_complete(
@@ -117,10 +128,26 @@ class Worker:
                         job.image_files = image_files
                         job.comfy_prompt_ids = comfy_ids
                         await set_job(redis, job)
-                        logger.info("[worker] Image prompt %d completed: %s", idx + 1, filenames)
+                        _t1_img = time.perf_counter()
+                        logger.info(
+                            "[metrics] image_generation_seconds=%.3f prompt_index=%d filenames=%s run_id=%s job_id=%s",
+                            _t1_img - _t0_img,
+                            idx + 1,
+                            filenames,
+                            run_id,
+                            job.job_id,
+                        )
                     except Exception as e:
                         logger.exception("[worker] Image generation failed for prompt %d: %s", idx + 1, e)
                         # Do not fail the whole job; continue to next prompt
+                _t1_imgs_total = time.perf_counter()
+                logger.info(
+                    "[metrics] total_images_generation_seconds=%.3f images_count=%d run_id=%s job_id=%s",
+                    _t1_imgs_total - _t0_imgs_total,
+                    len(image_files),
+                    run_id,
+                    job.job_id,
+                )
 
             job.status = "completed"
             job.output_dir = str(run_dir)
