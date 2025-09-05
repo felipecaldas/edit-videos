@@ -29,3 +29,9 @@ WORKFLOW_IMAGE_PATH = Path(os.getenv(
     "WORKFLOW_IMAGE_PATH",
     str(Path(__file__).resolve().parent / "comfyui-workflows" / "qwen-image-fast.Olivio.json"),
 ))
+
+# Image-to-Video workflow template path
+WORKFLOW_I2V_PATH = Path(os.getenv(
+    "WORKFLOW_I2V_PATH",
+    str(Path(__file__).resolve().parent / "comfyui-workflows" / "I2V-Wan 2.2 Lightning.json"),
+))

@@ -10,7 +10,12 @@ from videomerge.config import DATA_SHARED_BASE, ENABLE_IMAGE_GEN, COMFYUI_TIMEOU
 from videomerge.services.redis_client import get_redis
 from videomerge.services.queue import QUEUE_KEY, get_job, set_job, Job
 from videomerge.services.voiceover import synthesize_voice
-from videomerge.services.comfyui import submit_text_to_image, poll_until_complete
+from videomerge.services.comfyui import (
+    submit_text_to_image,
+    submit_image_to_video,
+    poll_until_complete,
+    download_outputs,
+)
 from videomerge.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -99,8 +104,10 @@ class Worker:
             )
 
             # Optional: ComfyUI text->image generation
-            image_files: list[str] = []
+            image_files: list[str] = []  # flat list, ordered by prompt index where an image was produced
             comfy_ids: list[str] = []
+            # Maintain strict index alignment: map prompt index -> first image filename returned
+            image_by_index: dict[int, str] = {}
             # Determine whether to run image generation for this job
             enable_image = ENABLE_IMAGE_GEN
             if isinstance(payload.get("enable_image_gen"), bool):
@@ -123,7 +130,18 @@ class Worker:
                             timeout_s=COMFYUI_TIMEOUT_SECONDS,
                             poll_interval_s=COMFYUI_POLL_INTERVAL_SECONDS,
                         )
-                        image_files.extend(filenames)
+                        # Use the first filename for strict alignment; warn if multiple
+                        if not filenames:
+                            logger.warning("[worker] No image outputs for prompt index %d", idx + 1)
+                        else:
+                            if len(filenames) > 1:
+                                logger.warning(
+                                    "[worker] Multiple image outputs for prompt index %d; using the first one: %s",
+                                    idx + 1,
+                                    filenames[0],
+                                )
+                            image_by_index[idx] = filenames[0]
+                            image_files.append(filenames[0])
                         # update job state incrementally
                         job.image_files = image_files
                         job.comfy_prompt_ids = comfy_ids
@@ -149,12 +167,71 @@ class Worker:
                     job.job_id,
                 )
 
+            # Image-to-Video generation per prompt (strict index alignment)
+            video_files: list[str] = []
+            # Metrics total timer for videos
+            if prompts and image_by_index:
+                _t0_videos_total = time.perf_counter()
+                for idx, item in enumerate(prompts):
+                    v_prompt = (item.get("video_prompt") or "").strip()
+                    if not v_prompt:
+                        continue
+                    image_name = image_by_index.get(idx)
+                    if not image_name:
+                        logger.warning(
+                            "[worker] No image found for prompt index %d; skipping video generation for this index.",
+                            idx + 1,
+                        )
+                        continue
+                    try:
+                        _t0_vid = time.perf_counter()
+                        v_pid = submit_image_to_video(v_prompt, image_name)
+                        v_outputs = poll_until_complete(
+                            v_pid,
+                            timeout_s=COMFYUI_TIMEOUT_SECONDS,
+                            poll_interval_s=COMFYUI_POLL_INTERVAL_SECONDS,
+                        )
+                        # Filter to common video extensions to avoid re-downloading images here
+                        video_hints = [h for h in v_outputs if h.lower().endswith((".mp4", ".webm", ".mov", ".mkv"))]
+                        if not video_hints:
+                            # If ComfyUI marks outputs differently, attempt to download all and infer by extension
+                            video_hints = v_outputs
+                        saved = download_outputs(video_hints, run_dir)
+                        for p in saved:
+                            video_files.append(str(p))
+                        # Update job state incrementally
+                        job.video_files = video_files
+                        await set_job(redis, job)
+                        _t1_vid = time.perf_counter()
+                        logger.info(
+                            "[metrics] video_generation_seconds=%.3f prompt_index=%d image=%s outputs=%s run_id=%s job_id=%s",
+                            _t1_vid - _t0_vid,
+                            idx + 1,
+                            image_name,
+                            [p.name for p in saved],
+                            run_id,
+                            job.job_id,
+                        )
+                    except Exception as e:
+                        logger.exception("[worker] Video generation failed for prompt %d (image %s): %s", idx + 1, image_name, e)
+                        # Continue with next prompt
+                _t1_videos_total = time.perf_counter()
+                logger.info(
+                    "[metrics] total_videos_generation_seconds=%.3f videos_count=%d run_id=%s job_id=%s",
+                    _t1_videos_total - _t0_videos_total,
+                    len(video_files),
+                    run_id,
+                    job.job_id,
+                )
+
             job.status = "completed"
             job.output_dir = str(run_dir)
             job.voiceover_path = str(audio_path)
             if image_files:
                 job.image_files = image_files
                 job.comfy_prompt_ids = comfy_ids
+            if video_files:
+                job.video_files = video_files
             await set_job(redis, job)
             logger.info("[worker] Completed job_id=%s", job.job_id)
         except Exception as e:

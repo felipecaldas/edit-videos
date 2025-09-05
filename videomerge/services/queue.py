@@ -20,6 +20,8 @@ class Job:
     # Image generation (optional)
     image_files: List[str] | None = None
     comfy_prompt_ids: List[str] | None = None
+    # Image-to-Video results (saved on disk)
+    video_files: List[str] | None = None
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), ensure_ascii=False)

@@ -11,6 +11,7 @@ from videomerge.config import (
     COMFYUI_TIMEOUT_SECONDS,
     COMFYUI_POLL_INTERVAL_SECONDS,
     WORKFLOW_IMAGE_PATH,
+    WORKFLOW_I2V_PATH,
 )
 from videomerge.utils.logging import get_logger
 
@@ -51,16 +52,22 @@ def submit_text_to_image(prompt_text: str, *, client_id: Optional[str] = None, t
 
 
 def _parse_history_outputs(hist: Dict[str, Any]) -> List[Tuple[str, Optional[str]]]:
-    # Returns list of (filename, subfolder)
-    outputs = []
-    # hist structure: { prompt_id: { "outputs": { node_id: { "images": [ { filename, subfolder, type }, ... ] } } } }
+    # Returns list of (filename, subfolder). Works for images and videos.
+    outputs: List[Tuple[str, Optional[str]]] = []
+    # hist structure: { prompt_id: { "outputs": { node_id: { "images": [...], "videos": [...] } } } }
     for _pid, item in hist.items():
         out = item.get("outputs") or {}
         for _node_id, node_out in out.items():
-            imgs = node_out.get("images") or []
-            for img in imgs:
+            # Images
+            for img in node_out.get("images") or []:
                 filename = img.get("filename")
                 subfolder = img.get("subfolder")
+                if filename:
+                    outputs.append((filename, subfolder))
+            # Videos
+            for vid in node_out.get("videos") or []:
+                filename = vid.get("filename")
+                subfolder = vid.get("subfolder")
                 if filename:
                     outputs.append((filename, subfolder))
     return outputs
@@ -106,3 +113,62 @@ def generate_images_for_prompt(text_prompt: str) -> List[str]:
         timeout_s=COMFYUI_TIMEOUT_SECONDS,
         poll_interval_s=COMFYUI_POLL_INTERVAL_SECONDS,
     )
+
+
+def submit_image_to_video(prompt_text: str, image_filename: str, *, client_id: Optional[str] = None,
+                          template_path: Optional[Path] = None,
+                          prompt_node_id: str = "6", prompt_field: str = "text",
+                          image_node_id: str = "52", image_field: str = "image") -> str:
+    """Submit a ComfyUI image->video workflow and return the prompt_id.
+
+    Injects the prompt into node 6 text, and sets the LoadImage node (52) input image filename.
+    """
+    client_id = client_id or str(uuid.uuid4())
+    tpl_path = template_path or WORKFLOW_I2V_PATH
+    workflow = _load_workflow_template(tpl_path)
+    _inject_prompt(workflow, prompt_node_id, prompt_field, prompt_text)
+    # Set the image filename on the LoadImage node
+    node = workflow.get(image_node_id)
+    if not node or "inputs" not in node:
+        raise ValueError(f"Workflow missing node {image_node_id} or inputs")
+    node["inputs"][image_field] = image_filename
+
+    url = f"{COMFYUI_URL.rstrip('/')}/prompt"
+    payload = {"prompt": workflow, "client_id": client_id}
+    logger.info("[comfyui] Submitting image->video prompt to %s (image=%s)", url, image_filename)
+    resp = requests.post(url, json=payload, timeout=30)
+    resp.raise_for_status()
+    data = resp.json()
+    prompt_id = data.get("prompt_id") or data.get("promptId")
+    if not prompt_id:
+        raise ValueError(f"Unexpected response from ComfyUI: {data}")
+    return prompt_id
+
+
+def download_outputs(file_hints: List[str], dest_dir: Path) -> List[Path]:
+    """Download output files (images or videos) by filename/subfolder hints to dest_dir.
+
+    Accepts strings like "sub/filename.mp4" or "filename.png".
+    Returns list of saved Paths.
+    """
+    saved: List[Path] = []
+    for hint in file_hints:
+        if "/" in hint:
+            subfolder, filename = hint.split("/", 1)
+        else:
+            subfolder, filename = "", hint
+        params = {"filename": filename, "type": "output"}
+        if subfolder:
+            params["subfolder"] = subfolder
+        url = f"{COMFYUI_URL.rstrip('/')}/view"
+        logger.info("[comfyui] Downloading output %s from %s", hint, url)
+        r = requests.get(url, params=params, stream=True, timeout=60)
+        r.raise_for_status()
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        out_path = dest_dir / filename
+        with out_path.open("wb") as f:
+            for chunk in r.iter_content(chunk_size=8192):
+                if chunk:
+                    f.write(chunk)
+        saved.append(out_path)
+    return saved
