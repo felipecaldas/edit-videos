@@ -7,14 +7,21 @@ services:
     ports:
       - "8086:8000"
     volumes:
-      - "/mnt/tp-share/n8n-shared:/data/shared:ro"
+      - "/mnt/tp-share/n8n-shared:/data/shared"
       - .:/app
     environment:
       - TZ=Australia/Melbourne
+      - VOICEOVER_SERVICE_URL=http://192.168.68.51:8083
+      - DATA_SHARED_BASE=/data/shared
+      - REDIS_URL=redis://192.168.68.51:8061/1
+      - COMFYUI_URL=http://192.168.68.51:8188
+      - ENABLE_IMAGE_GEN=true
+      - COMFYUI_TIMEOUT_SECONDS=1800
+      - COMFYUI_POLL_INTERVAL_SECONDS=2
     restart: unless-stopped
     command: ["uvicorn", "videomerge.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8086/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 200s
       timeout: 10s
       retries: 3

@@ -28,3 +28,17 @@ class FolderStitchWithSubsRequest(FolderStitchRequest):
     language: Optional[str] = "pt"
     model_size: Optional[str] = "small"
     subtitle_position: Optional[str] = "bottom"
+
+
+# ---- Orchestration payloads ----
+class PromptItem(BaseModel):
+    image_prompt: Optional[str] = None
+    video_prompt: Optional[str] = None
+
+
+class OrchestrateStartRequest(BaseModel):
+    script: str
+    caption: str
+    run_id: str
+    prompts: List[PromptItem]
+    enable_image_gen: Optional[bool] = None
