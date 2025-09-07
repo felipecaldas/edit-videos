@@ -12,6 +12,8 @@ VOICEOVER_SERVICE_URL = os.getenv("VOICEOVER_SERVICE_URL", "http://192.168.68.51
 
 # Optional API key for voiceover service
 VOICEOVER_API_KEY = os.getenv("VOICEOVER_API_KEY")
+# Toggle voiceover generation inside this service. Default: disabled (handled externally via n8n)
+ENABLE_VOICEOVER_GEN = os.getenv("ENABLE_VOICEOVER_GEN", "false").lower() in {"1", "true", "yes", "on"}
 
 # Subtitle configuration path
 SUBTITLE_CONFIG_PATH = Path(os.getenv("SUBTITLE_CONFIG_PATH", "subtitle_config.json"))

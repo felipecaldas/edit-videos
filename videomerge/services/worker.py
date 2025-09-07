@@ -6,7 +6,7 @@ from typing import Any, Dict
 
 from fastapi import HTTPException
 
-from videomerge.config import DATA_SHARED_BASE, ENABLE_IMAGE_GEN, COMFYUI_TIMEOUT_SECONDS, COMFYUI_POLL_INTERVAL_SECONDS
+from videomerge.config import DATA_SHARED_BASE, ENABLE_IMAGE_GEN, COMFYUI_TIMEOUT_SECONDS, COMFYUI_POLL_INTERVAL_SECONDS, ENABLE_VOICEOVER_GEN
 from videomerge.services.redis_client import get_redis
 from videomerge.services.queue import QUEUE_KEY, get_job, set_job, Job, push_dead_letter
 from videomerge.services.voiceover import synthesize_voice
@@ -97,17 +97,29 @@ class Worker:
             except Exception as e:
                 logger.warning("[worker] failed to write manifest.json: %s", e)
 
-            # synthesize voiceover
-            audio_path = run_dir / "voiceover.mp3"
-            _t0_vo = time.perf_counter()
-            synthesize_voice(script, audio_path)
-            _t1_vo = time.perf_counter()
-            logger.info(
-                "[metrics] voiceover_generation_seconds=%.3f run_id=%s job_id=%s",
-                _t1_vo - _t0_vo,
-                run_id,
-                job.job_id,
-            )
+            # synthesize voiceover (optional)
+            audio_path: Path | None = None
+            if ENABLE_VOICEOVER_GEN:
+                audio_path = run_dir / "voiceover.mp3"
+                _t0_vo = time.perf_counter()
+                synthesize_voice(script, audio_path)
+                _t1_vo = time.perf_counter()
+                logger.info(
+                    "[metrics] voiceover_generation_seconds=%.3f run_id=%s job_id=%s",
+                    _t1_vo - _t0_vo,
+                    run_id,
+                    job.job_id,
+                )
+            else:
+                logger.info("[worker] Voiceover generation disabled by ENABLE_VOICEOVER_GEN. Skipping.")
+
+            # Helper for console progress bar
+            def _progress_bar(current: int, total: int, width: int = 30) -> str:
+                if total <= 0:
+                    return "[------------------------------] 0/0"
+                current = max(0, min(current, total))
+                filled = int(width * current / total)
+                return f"[{'#' * filled}{'.' * (width - filled)}] {current}/{total}"
 
             # Optional: ComfyUI text->image generation
             image_files: list[str] = []  # flat list, ordered by prompt index where an image was produced
@@ -121,9 +133,15 @@ class Worker:
             if isinstance(payload.get("enable_image_gen"), bool):
                 enable_image = bool(payload.get("enable_image_gen"))
 
-            if enable_image and prompts:
+            # Precompute image targets (only prompts with a non-empty image_prompt)
+            img_targets = [idx for idx, item in enumerate(prompts) if (item.get("image_prompt") or "").strip()]
+            images_total = len(img_targets)
+
+            if enable_image and images_total:
                 logger.info("[worker] Image generation enabled. Processing %d prompt items", len(prompts))
+                logger.info("[progress] Images %s", _progress_bar(0, images_total))
                 _t0_imgs_total = time.perf_counter()
+                images_done = 0
                 for idx, item in enumerate(prompts):
                     # item is a dict at this point (originated from model_dump)
                     img_prompt = (item.get("image_prompt") or "").strip()
@@ -163,6 +181,8 @@ class Worker:
                             run_id,
                             job.job_id,
                         )
+                        images_done += 1
+                        logger.info("[progress] Images %s", _progress_bar(images_done, images_total))
                     except Exception as e:
                         # Abort entire job and push to DLQ on any image-generation failure
                         job.status = "failed"
@@ -201,6 +221,16 @@ class Worker:
             # Metrics total timer for videos
             if prompts and image_by_index:
                 _t0_videos_total = time.perf_counter()
+                # Precompute video targets: only prompts with non-empty video_prompt and with an image available
+                video_targets = [
+                    idx for idx, item in enumerate(prompts)
+                    if (item.get("video_prompt") or "").strip() and (uploaded_image_by_index.get(idx) or image_by_index.get(idx))
+                ]
+                videos_total = len(video_targets)
+                videos_done = 0
+                if videos_total:
+                    logger.info("[progress] Videos %s", _progress_bar(0, videos_total))
+
                 for idx, item in enumerate(prompts):
                     v_prompt = (item.get("video_prompt") or "").strip()
                     if not v_prompt:
@@ -243,6 +273,9 @@ class Worker:
                             run_id,
                             job.job_id,
                         )
+                        if (item.get("video_prompt") or "").strip():
+                            videos_done += 1
+                            logger.info("[progress] Videos %s", _progress_bar(videos_done, videos_total))
                     except Exception as e:
                         logger.exception("[worker] Video generation failed for prompt %d (image %s): %s", idx + 1, image_name, e)
                         # Continue with next prompt
@@ -255,9 +288,9 @@ class Worker:
                     job.job_id,
                 )
 
-            # Final stitching with subtitles (if we have at least one video)
+            # Final stitching with subtitles (requires at least one video and voiceover when enabled)
             final_video_path_str: str | None = None
-            if video_files:
+            if video_files and ENABLE_VOICEOVER_GEN and audio_path and audio_path.exists():
                 try:
                     _t0_stitch = time.perf_counter()
                     stitched_path = concat_videos_with_voiceover(
@@ -284,7 +317,8 @@ class Worker:
 
             job.status = "completed"
             job.output_dir = str(run_dir)
-            job.voiceover_path = str(audio_path)
+            if audio_path and audio_path.exists():
+                job.voiceover_path = str(audio_path)
             if image_files:
                 job.image_files = image_files
                 job.comfy_prompt_ids = comfy_ids
