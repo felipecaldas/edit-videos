@@ -5,7 +5,7 @@ ENV TZ=Australia/Melbourne
 
 # Install ffmpeg, fonts for libass, and tzdata; configure timezone
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends ffmpeg fonts-dejavu tzdata && \
+    apt-get install -y --no-install-recommends ffmpeg fonts-dejavu tzdata curl && \
     ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*

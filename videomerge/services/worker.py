@@ -245,7 +245,10 @@ class Worker:
                         continue
                     try:
                         _t0_vid = time.perf_counter()
-                        v_pid = submit_image_to_video(v_prompt, image_name)
+                        v_pid = submit_image_to_video(
+                            v_prompt,
+                            image_name,
+                        )
                         v_outputs = poll_until_complete(
                             v_pid,
                             timeout_s=COMFYUI_TIMEOUT_SECONDS,

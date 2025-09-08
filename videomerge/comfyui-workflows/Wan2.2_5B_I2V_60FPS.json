@@ -96,6 +96,18 @@
       "title": "Upscaler"
     }
   },
+  "155": {
+    "inputs": {
+      "UPSCALE_MODEL": [
+        "154",
+        0
+      ]
+    },
+    "class_type": "Anything Everywhere",
+    "_meta": {
+      "title": "Anything Everywhere"
+    }
+  },
   "183": {
     "inputs": {
       "images": [
@@ -198,12 +210,12 @@
       "title": "Load Diffusion Model"
     }
   },
-  "6": {
+  "227": {
     "inputs": {
-      "text": "The fleur-de-lis overlay pulsates gently, a subtle ripple effect across the map, suggesting a historical “what if.” Smooth, mysterious motion, cinematic, 4K.",
+      "text": "Gentle pulsating light emanating from Brazil on the map, a subtle slow zoom towards Brazil, suggesting a significant historical revelation, smooth cinematic motion",
       "clip": [
-        "268",
-        1
+        "224",
+        0
       ]
     },
     "class_type": "CLIPTextEncode",
@@ -215,8 +227,8 @@
     "inputs": {
       "text": "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走",
       "clip": [
-        "268",
-        1
+        "224",
+        0
       ]
     },
     "class_type": "CLIPTextEncode",
@@ -226,7 +238,7 @@
   },
   "230": {
     "inputs": {
-      "seed": 739574214432590,
+      "seed": 259658292516866,
       "steps": 30,
       "cfg": 3.2,
       "sampler_name": "uni_pc",
@@ -252,6 +264,18 @@
     "class_type": "KSampler",
     "_meta": {
       "title": "KSampler"
+    }
+  },
+  "231": {
+    "inputs": {
+      "CONDITIONING": [
+        "228",
+        0
+      ]
+    },
+    "class_type": "Prompts Everywhere",
+    "_meta": {
+      "title": "Prompts Everywhere"
     }
   },
   "240": {
@@ -306,6 +330,30 @@
       "title": "Shift"
     }
   },
+  "256": {
+    "inputs": {
+      "CLIP": [
+        "224",
+        0
+      ]
+    },
+    "class_type": "Anything Everywhere",
+    "_meta": {
+      "title": "Anything Everywhere"
+    }
+  },
+  "257": {
+    "inputs": {
+      "VAE": [
+        "225",
+        0
+      ]
+    },
+    "class_type": "Anything Everywhere",
+    "_meta": {
+      "title": "Anything Everywhere"
+    }
+  },
   "268": {
     "inputs": {
       "PowerLoraLoaderHeaderWidget": {
@@ -319,10 +367,6 @@
       "➕ Add Lora": "",
       "model": [
         "240",
-        0
-      ],
-      "clip": [
-        "224",
         0
       ]
     },
@@ -376,9 +420,9 @@
   },
   "285": {
     "inputs": {
-      "width": 704,
-      "height": 1280,
-      "length": 121,
+      "width": 480,
+      "height": 832,
+      "length": 73,
       "batch_size": 1,
       "vae": [
         "225",
@@ -394,9 +438,9 @@
       "title": "Wan22ImageToVideoLatent"
     }
   },
-  "52": {
+  "286": {
     "inputs": {
-      "image": "ComfyUI_00003_.png"
+      "image": "example.png"
     },
     "class_type": "LoadImage",
     "_meta": {

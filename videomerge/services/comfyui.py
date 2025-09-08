@@ -56,6 +56,39 @@ def _default_headers() -> Dict[str, str]:
     }
 
 
+def _warn_if_bad_dimensions(workflow: Dict[str, Any]) -> None:
+    """Log warnings if any nodes specify width/height not multiples of 64.
+
+    Many diffusion/video nodes expect both dimensions to be divisible by 64.
+    This doesn't fail fast here, but provides context if ComfyUI rejects the prompt (400).
+    """
+    try:
+        offenders = []
+        for nid, node in workflow.items():
+            inputs = node.get("inputs") if isinstance(node, dict) else None
+            if not isinstance(inputs, dict):
+                continue
+            w = inputs.get("width")
+            h = inputs.get("height")
+            if isinstance(w, int) and isinstance(h, int):
+                ok_w = (w % 64 == 0)
+                ok_h = (h % 64 == 0)
+                if not (ok_w and ok_h):
+                    offenders.append((nid, node.get("class_type"), w, h))
+        if offenders:
+            for nid, ctype, w, h in offenders:
+                logger.warning(
+                    "[comfyui] dimension warning: node id=%s class=%s width=%s height=%s (expected multiples of 64)",
+                    nid,
+                    ctype,
+                    w,
+                    h,
+                )
+    except Exception:
+        # Never block on diagnostics
+        pass
+
+
 def _find_node_id_by_meta(nodes: Dict[str, Any], *, class_type: str, title_equals: str) -> Optional[str]:
     """Find a node id by matching class_type and _meta.title (case-insensitive).
 
@@ -308,10 +341,17 @@ def generate_images_for_prompt(text_prompt: str) -> List[str]:
     )
 
 
-def submit_image_to_video(prompt_text: str, image_filename: str, *, client_id: Optional[str] = None,
-                          template_path: Optional[Path] = None,
-                          prompt_node_id: str = "6", prompt_field: str = "text",
-                          image_node_id: str = "52", image_field: str = "image") -> str:
+def submit_image_to_video(
+    prompt_text: str,
+    image_filename: str,
+    *,
+    client_id: Optional[str] = None,
+    template_path: Optional[Path] = None,
+    prompt_node_id: str = "6",
+    prompt_field: str = "text",
+    image_node_id: str = "52",
+    image_field: str = "image",
+) -> str:
     """Submit a ComfyUI image->video workflow and return the prompt_id.
 
     Injects the prompt into node 6 text, and sets the LoadImage node (52) input image filename.
@@ -338,6 +378,8 @@ def submit_image_to_video(prompt_text: str, image_filename: str, *, client_id: O
         text_nid,
         before_keys,
     )
+    # Pre-flight diagnostics for common issues (e.g., non-64-multiple dimensions)
+    _warn_if_bad_dimensions(workflow)
 
     # LoadImage node detection
     img_nid = image_node_id if str(image_node_id) in workflow else None
@@ -353,12 +395,30 @@ def submit_image_to_video(prompt_text: str, image_filename: str, *, client_id: O
     if not node or "inputs" not in node:
         raise ValueError(f"Workflow missing node {img_nid} or inputs")
     node["inputs"][image_field] = image_filename
+    logger.debug(
+        "[comfyui] I2V mapped image into node id=%s field=%s value=%s",
+        img_nid,
+        image_field,
+        image_filename,
+    )
 
     url = f"{COMFYUI_URL.rstrip('/')}/prompt"
     payload = {"prompt": workflow, "client_id": client_id}
+    # Also print the payload to console for debugging/inspection
+    try:
+        logger.info("[comfyui] I2V /prompt payload: %s", json.dumps(payload, ensure_ascii=False))
+    except Exception:
+        # Fallback to repr if JSON serialization fails unexpectedly
+        logger.info("[comfyui] I2V /prompt payload (repr): %r", payload)
     logger.info("[comfyui] Submitting image->video prompt to %s (image=%s)", url, image_filename)
     resp = requests.post(url, json=payload, timeout=30, headers=_default_headers())
-    resp.raise_for_status()
+    # If ComfyUI rejects the workflow (400), log the response body for diagnostics
+    if not resp.ok:
+        try:
+            logger.error("[comfyui] /prompt error: status=%s body=%s", resp.status_code, resp.text)
+        except Exception:
+            pass
+        resp.raise_for_status()
     data = resp.json()
     prompt_id = data.get("prompt_id") or data.get("promptId")
     if not prompt_id:
