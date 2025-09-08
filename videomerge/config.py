@@ -27,13 +27,22 @@ ENABLE_IMAGE_GEN = os.getenv("ENABLE_IMAGE_GEN", "true").lower() in {"1", "true"
 # Allow long-running generations (e.g., 10+ minutes)
 COMFYUI_TIMEOUT_SECONDS = int(os.getenv("COMFYUI_TIMEOUT_SECONDS", str(20 * 60)))
 COMFYUI_POLL_INTERVAL_SECONDS = float(os.getenv("COMFYUI_POLL_INTERVAL_SECONDS", "2"))
+# Environment indicator (e.g., "local" or "runpod"). Defaults to local.
+RUN_ENV = os.getenv("RUN_ENV", "local").lower()
+
+DEFAULT_IMAGE_WORKFLOW = (
+    "Wan2.2_Text-To-Image.json" if RUN_ENV == "runpod" else "qwen-image-fast.Olivio.json"
+)
 WORKFLOW_IMAGE_PATH = Path(os.getenv(
     "WORKFLOW_IMAGE_PATH",
-    str(Path(__file__).resolve().parent / "comfyui-workflows" / "qwen-image-fast.Olivio.json"),
+    str(Path(__file__).resolve().parent / "comfyui-workflows" / DEFAULT_IMAGE_WORKFLOW),
 ))
 
 # Image-to-Video workflow template path
+DEFAULT_I2V_WORKFLOW = (
+    "Wan2.2_5B_I2V_60FPS.json" if RUN_ENV == "runpod" else "I2V-Wan 2.2 Lightning.json"
+)
 WORKFLOW_I2V_PATH = Path(os.getenv(
     "WORKFLOW_I2V_PATH",
-    str(Path(__file__).resolve().parent / "comfyui-workflows" / "I2V-Wan 2.2 Lightning.json"),
+    str(Path(__file__).resolve().parent / "comfyui-workflows" / DEFAULT_I2V_WORKFLOW),
 ))

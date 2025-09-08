@@ -142,6 +142,29 @@ The `concat` demuxer used by `/stitch` works best when input videos share the sa
   - `LRA=7` (loudness range)
 - For most voiceover use-cases, one-pass `loudnorm` is sufficient. If you need stricter compliance, we can implement a two-pass `loudnorm` (analyze then apply measured parameters).
 
+## ComfyUI workflows selection (environment-aware)
+
+This service dynamically selects ComfyUI workflow JSONs based on the `RUN_ENV` environment variable. You can still override the paths explicitly if needed.
+
+- When `RUN_ENV=runpod` (as set in `docker-compose.runpod.yml`):
+  - Text-to-Image default: `videomerge/comfyui-workflows/Wan2.2_Text-To-Image.json`
+  - Image-to-Video default: `videomerge/comfyui-workflows/Wan2.2_5B_I2V_60FPS.json`
+
+- When `RUN_ENV` is anything else (default is `local`):
+  - Text-to-Image default: `videomerge/comfyui-workflows/qwen-image-fast.Olivio.json`
+  - Image-to-Video default: `videomerge/comfyui-workflows/I2V-Wan 2.2 Lightning.json`
+
+You may override these defaults via environment variables:
+
+```bash
+WORKFLOW_IMAGE_PATH=/app/videomerge/comfyui-workflows/Wan2.2_Text-To-Image.json
+WORKFLOW_I2V_PATH=/app/videomerge/comfyui-workflows/Wan2.2_5B_I2V_60FPS.json
+```
+
+Notes:
+- In containers, the app path is `/app`, so the workflow files live under `/app/videomerge/comfyui-workflows/`.
+- `docker-compose.runpod.yml` already sets `RUN_ENV=runpod` to activate the RunPod defaults.
+
 ## Troubleshooting
 - 400 errors for local paths: Verify the path exists inside the container and that your volume mounts are correct.
 - 400 errors for URLs: Ensure the URL is reachable and returns the expected content.
