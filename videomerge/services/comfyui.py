@@ -3,6 +3,7 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 import requests
 
@@ -34,6 +35,27 @@ def _load_workflow_template(path: Path) -> Dict[str, Any]:
     return data
 
 
+def _default_headers() -> Dict[str, str]:
+    """Headers that mimic browser requests to satisfy certain proxies (e.g., RunPod).
+
+    Derives Origin/Referer from COMFYUI_URL base.
+    """
+    try:
+        parsed = urlparse(COMFYUI_URL)
+        origin = f"{parsed.scheme}://{parsed.netloc}"
+    except Exception:
+        origin = COMFYUI_URL.rstrip("/")
+    return {
+        "Accept": "*/*",
+        "User-Agent": (
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/121.0.0.0 Safari/537.36"
+        ),
+        "Origin": origin,
+        "Referer": origin + "/",
+    }
+
+
 def _find_node_id_by_meta(nodes: Dict[str, Any], *, class_type: str, title_equals: str) -> Optional[str]:
     """Find a node id by matching class_type and _meta.title (case-insensitive).
 
@@ -60,6 +82,29 @@ def _inject_prompt(workflow: Dict[str, Any], node_id: str, field: str, text: str
     node["inputs"][field] = text
 
 
+def _remap_positive_references(workflow: Dict[str, Any], target_node_id: str) -> None:
+    """Ensure any 'positive' inputs in nodes reference the given target node id.
+
+    Some templates may reference a non-existent id (e.g., '227') even though the
+    Positive Prompt node exists under a different id (e.g., '6'). This normalizes
+    those references in-memory before submitting to ComfyUI.
+    """
+    for nid, node in workflow.items():
+        try:
+            inputs = node.get("inputs")
+            if not isinstance(inputs, dict):
+                continue
+            pos = inputs.get("positive")
+            if isinstance(pos, list) and len(pos) >= 2:
+                ref_id = str(pos[0])
+                if ref_id != str(target_node_id):
+                    # If the referenced id does not exist in the workflow, remap it
+                    if ref_id not in workflow:
+                        inputs["positive"][0] = str(target_node_id)
+        except Exception:
+            continue
+
+
 def submit_text_to_image(prompt_text: str, *, client_id: Optional[str] = None, template_path: Optional[Path] = None,
                          prompt_node_id: str = "6", prompt_field: str = "text") -> str:
     """Submit a ComfyUI workflow for text->image and return the prompt_id."""
@@ -82,11 +127,18 @@ def submit_text_to_image(prompt_text: str, *, client_id: Optional[str] = None, t
         target_nid = auto_nid
 
     _inject_prompt(workflow, target_nid, prompt_field, prompt_text)
+    before_keys = list(workflow.keys())[:5]
+    _remap_positive_references(workflow, str(target_nid))
+    logger.debug(
+        "[comfyui] T2I using prompt node id=%s; sample keys=%s",
+        target_nid,
+        before_keys,
+    )
 
     url = f"{COMFYUI_URL.rstrip('/')}/prompt"
     payload = {"prompt": workflow, "client_id": client_id}
     logger.info("[comfyui] Submitting text->image prompt to %s", url)
-    resp = requests.post(url, json=payload, timeout=30)
+    resp = requests.post(url, json=payload, timeout=30, headers=_default_headers())
     if not resp.ok:
         # Log response body to help diagnose node_errors
         try:
@@ -141,7 +193,7 @@ def _parse_history_outputs(
 def _queue_says_check_history(prompt_id: str) -> Optional[bool]:
     q_url = f"{COMFYUI_URL.rstrip('/')}/queue"
     try:
-        r = requests.get(q_url, timeout=10)
+        r = requests.get(q_url, timeout=10, headers=_default_headers())
         r.raise_for_status()
         data = r.json()
         # If the root is a list, try to match by common shapes
@@ -209,7 +261,7 @@ def poll_until_complete(
                 continue
 
             # Query history (full), then select our prompt_id entry
-            resp = requests.get(hist_url, timeout=15)
+            resp = requests.get(hist_url, timeout=15, headers=_default_headers())
             resp.raise_for_status()
             data = resp.json()
             hist = data.get("history") or data
@@ -279,6 +331,13 @@ def submit_image_to_video(prompt_text: str, image_filename: str, *, client_id: O
                 "Could not locate Positive Prompt node for I2V. Tried id='{}' and meta lookup.".format(prompt_node_id)
             )
     _inject_prompt(workflow, text_nid, prompt_field, prompt_text)
+    before_keys = list(workflow.keys())[:5]
+    _remap_positive_references(workflow, str(text_nid))
+    logger.debug(
+        "[comfyui] I2V using prompt node id=%s; sample keys=%s",
+        text_nid,
+        before_keys,
+    )
 
     # LoadImage node detection
     img_nid = image_node_id if str(image_node_id) in workflow else None
@@ -298,7 +357,7 @@ def submit_image_to_video(prompt_text: str, image_filename: str, *, client_id: O
     url = f"{COMFYUI_URL.rstrip('/')}/prompt"
     payload = {"prompt": workflow, "client_id": client_id}
     logger.info("[comfyui] Submitting image->video prompt to %s (image=%s)", url, image_filename)
-    resp = requests.post(url, json=payload, timeout=30)
+    resp = requests.post(url, json=payload, timeout=30, headers=_default_headers())
     resp.raise_for_status()
     data = resp.json()
     prompt_id = data.get("prompt_id") or data.get("promptId")
@@ -324,7 +383,7 @@ def download_outputs(file_hints: List[str], dest_dir: Path) -> List[Path]:
             params["subfolder"] = subfolder
         url = f"{COMFYUI_URL.rstrip('/')}/view"
         logger.info("[comfyui] Downloading output %s from %s", hint, url)
-        r = requests.get(url, params=params, stream=True, timeout=60)
+        r = requests.get(url, params=params, stream=True, timeout=60, headers=_default_headers())
         r.raise_for_status()
         dest_dir.mkdir(parents=True, exist_ok=True)
         out_path = dest_dir / filename
@@ -346,7 +405,7 @@ def fetch_output_bytes(hint: str) -> Tuple[str, bytes]:
     if subfolder:
         params["subfolder"] = subfolder
     url = f"{COMFYUI_URL.rstrip('/')}/view"
-    r = requests.get(url, params=params, timeout=60)
+    r = requests.get(url, params=params, timeout=60, headers=_default_headers())
     r.raise_for_status()
     return filename, r.content
 
@@ -360,7 +419,7 @@ def upload_image_to_input(filename: str, content: bytes, overwrite: bool = True)
     files = {"image": (filename, content, "application/octet-stream")}
     data = {"overwrite": "true" if overwrite else "false"}
     logger.info("[comfyui] Uploading image to input: %s", filename)
-    resp = requests.post(url, files=files, data=data, timeout=60)
+    resp = requests.post(url, files=files, data=data, timeout=60, headers=_default_headers())
     if not resp.ok:
         try:
             logger.error("[comfyui] /upload/image error: status=%s body=%s", resp.status_code, resp.text)
