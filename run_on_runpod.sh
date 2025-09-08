@@ -10,7 +10,7 @@ PORT=8086
 DATA_SHARED="/data/shared"       # Runpod volume or local path inside pod
 # Environment values (update as needed)
 VOICEOVER_SERVICE_URL="http://..."
-DATA_SHARED_BASE="/data/shared"
+DATA_SHARED_BASE="/workspace/data/shared"
 REDIS_URL="redis://..."
 COMFYUI_URL="http://..."
 ENABLE_IMAGE_GEN="true"
