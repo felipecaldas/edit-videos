@@ -1,0 +1,406 @@
+{
+  "80": {
+    "inputs": {
+      "frame_rate": 24,
+      "loop_count": 0,
+      "filename_prefix": "teacache",
+      "format": "video/h264-mp4",
+      "pix_fmt": "yuv420p",
+      "crf": 19,
+      "save_metadata": true,
+      "trim_to_audio": false,
+      "pingpong": false,
+      "save_output": true,
+      "images": [
+        "269",
+        0
+      ]
+    },
+    "class_type": "VHS_VideoCombine",
+    "_meta": {
+      "title": "Initial 24FPS Video"
+    }
+  },
+  "94": {
+    "inputs": {
+      "frame_rate": 60,
+      "loop_count": 0,
+      "filename_prefix": "Hunyuan/videos/30/vid",
+      "format": "video/h264-mp4",
+      "pix_fmt": "yuv420p",
+      "crf": 19,
+      "save_metadata": true,
+      "trim_to_audio": false,
+      "pingpong": false,
+      "save_output": true,
+      "images": [
+        "280",
+        0
+      ]
+    },
+    "class_type": "VHS_VideoCombine",
+    "_meta": {
+      "title": "Video Combine 🎥🅥🅗🅢"
+    }
+  },
+  "95": {
+    "inputs": {
+      "frame_rate": 24,
+      "loop_count": 0,
+      "filename_prefix": "Hunyuan/videos/24/vid",
+      "format": "video/h264-mp4",
+      "pix_fmt": "yuv420p",
+      "crf": 19,
+      "save_metadata": true,
+      "trim_to_audio": false,
+      "pingpong": false,
+      "save_output": true,
+      "images": [
+        "98",
+        0
+      ]
+    },
+    "class_type": "VHS_VideoCombine",
+    "_meta": {
+      "title": "Upscaled 24FPS Video"
+    }
+  },
+  "98": {
+    "inputs": {
+      "upscale_method": "lanczos",
+      "width": [
+        "216",
+        0
+      ],
+      "height": [
+        "217",
+        0
+      ],
+      "crop": "center",
+      "image": [
+        "252",
+        0
+      ]
+    },
+    "class_type": "ImageScale",
+    "_meta": {
+      "title": "Upscale Image"
+    }
+  },
+  "154": {
+    "inputs": {
+      "model_name": "4xLSDIR.pth"
+    },
+    "class_type": "UpscaleModelLoader",
+    "_meta": {
+      "title": "Upscaler"
+    }
+  },
+  "183": {
+    "inputs": {
+      "images": [
+        "269",
+        0
+      ]
+    },
+    "class_type": "ImageListToImageBatch",
+    "_meta": {
+      "title": "Image List to Image Batch"
+    }
+  },
+  "184": {
+    "inputs": {
+      "start": 0,
+      "length": 1,
+      "image": [
+        "183",
+        0
+      ]
+    },
+    "class_type": "ImageFromBatch+",
+    "_meta": {
+      "title": "🔧 Image From Batch"
+    }
+  },
+  "215": {
+    "inputs": {
+      "image": [
+        "184",
+        0
+      ]
+    },
+    "class_type": "GetImageSize+",
+    "_meta": {
+      "title": "🔧 Get Image Size"
+    }
+  },
+  "216": {
+    "inputs": {
+      "value": "a*b",
+      "a": [
+        "215",
+        0
+      ],
+      "b": [
+        "283",
+        0
+      ]
+    },
+    "class_type": "SimpleMath+",
+    "_meta": {
+      "title": "width"
+    }
+  },
+  "217": {
+    "inputs": {
+      "value": "a*b",
+      "a": [
+        "215",
+        1
+      ],
+      "b": [
+        "283",
+        0
+      ]
+    },
+    "class_type": "SimpleMath+",
+    "_meta": {
+      "title": "height"
+    }
+  },
+  "224": {
+    "inputs": {
+      "clip_name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+      "type": "wan",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "Load CLIP"
+    }
+  },
+  "225": {
+    "inputs": {
+      "vae_name": "wan2.2_vae.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "226": {
+    "inputs": {
+      "unet_name": "wan2.2_ti2v_5B_fp16.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Diffusion Model"
+    }
+  },
+  "6": {
+    "inputs": {
+      "text": "The fleur-de-lis overlay pulsates gently, a subtle ripple effect across the map, suggesting a historical “what if.” Smooth, mysterious motion, cinematic, 4K.",
+      "clip": [
+        "268",
+        1
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "Positive Prompt"
+    }
+  },
+  "228": {
+    "inputs": {
+      "text": "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走",
+      "clip": [
+        "268",
+        1
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "Negative Prompt"
+    }
+  },
+  "230": {
+    "inputs": {
+      "seed": 739574214432590,
+      "steps": 30,
+      "cfg": 3.2,
+      "sampler_name": "uni_pc",
+      "scheduler": "simple",
+      "denoise": 1,
+      "model": [
+        "255",
+        0
+      ],
+      "positive": [
+        "227",
+        0
+      ],
+      "negative": [
+        "228",
+        0
+      ],
+      "latent_image": [
+        "285",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "KSampler"
+    }
+  },
+  "240": {
+    "inputs": {
+      "sage_attention": "auto",
+      "model": [
+        "226",
+        0
+      ]
+    },
+    "class_type": "PathchSageAttentionKJ",
+    "_meta": {
+      "title": "SageAttention"
+    }
+  },
+  "243": {
+    "inputs": {
+      "model": [
+        "268",
+        0
+      ]
+    },
+    "class_type": "ModelPassThrough",
+    "_meta": {
+      "title": "ModelPass"
+    }
+  },
+  "252": {
+    "inputs": {
+      "upscale_method": "lanczos",
+      "scale_by": 0.5,
+      "image": [
+        "269",
+        0
+      ]
+    },
+    "class_type": "ImageScaleBy",
+    "_meta": {
+      "title": "Upscale Image By"
+    }
+  },
+  "255": {
+    "inputs": {
+      "shift": 8.000000000000002,
+      "model": [
+        "243",
+        0
+      ]
+    },
+    "class_type": "ModelSamplingSD3",
+    "_meta": {
+      "title": "Shift"
+    }
+  },
+  "268": {
+    "inputs": {
+      "PowerLoraLoaderHeaderWidget": {
+        "type": "PowerLoraLoaderHeaderWidget"
+      },
+      "lora_1": {
+        "on": false,
+        "lora": "I2V-tittydrop-e26.safetensors",
+        "strength": 1
+      },
+      "➕ Add Lora": "",
+      "model": [
+        "240",
+        0
+      ],
+      "clip": [
+        "224",
+        0
+      ]
+    },
+    "class_type": "Power Lora Loader (rgthree)",
+    "_meta": {
+      "title": "Power Lora Loader (rgthree)"
+    }
+  },
+  "269": {
+    "inputs": {
+      "samples": [
+        "230",
+        0
+      ],
+      "vae": [
+        "225",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "280": {
+    "inputs": {
+      "ckpt_name": "rife49.pth",
+      "clear_cache_after_n_frames": 5,
+      "multiplier": 3,
+      "fast_mode": false,
+      "ensemble": true,
+      "scale_factor": 1,
+      "frames": [
+        "98",
+        0
+      ]
+    },
+    "class_type": "RIFE VFI",
+    "_meta": {
+      "title": "RIFE VFI (recommend rife47 and rife49)"
+    }
+  },
+  "283": {
+    "inputs": {
+      "Number": "1.5"
+    },
+    "class_type": "Float",
+    "_meta": {
+      "title": "Upscale Factor"
+    }
+  },
+  "285": {
+    "inputs": {
+      "width": 704,
+      "height": 1280,
+      "length": 121,
+      "batch_size": 1,
+      "vae": [
+        "225",
+        0
+      ],
+      "start_image": [
+        "286",
+        0
+      ]
+    },
+    "class_type": "Wan22ImageToVideoLatent",
+    "_meta": {
+      "title": "Wan22ImageToVideoLatent"
+    }
+  },
+  "52": {
+    "inputs": {
+      "image": "ComfyUI_00003_.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  }
+}
