@@ -19,8 +19,38 @@ logger = get_logger(__name__)
 
 
 def _load_workflow_template(path: Path) -> Dict[str, Any]:
+    """Load a workflow JSON.
+
+    Supports two shapes:
+    1) Flat: { "<node_id>": { ... }, ... }
+    2) Wrapped: { "client_id": "...", "prompt": { "<node_id>": { ... } } }
+
+    Always returns the nodes dictionary (shape 1).
+    """
     with path.open("r", encoding="utf-8") as f:
-        return json.load(f)
+        data = json.load(f)
+    if isinstance(data, dict) and isinstance(data.get("prompt"), dict):
+        return data["prompt"]
+    return data
+
+
+def _find_node_id_by_meta(nodes: Dict[str, Any], *, class_type: str, title_equals: str) -> Optional[str]:
+    """Find a node id by matching class_type and _meta.title (case-insensitive).
+
+    Returns the first matching node id, or None if not found.
+    """
+    target_title = (title_equals or "").strip().lower()
+    for nid, node in nodes.items():
+        try:
+            if node.get("class_type") != class_type:
+                continue
+            meta = node.get("_meta") or {}
+            title = (meta.get("title") or "").strip().lower()
+            if title == target_title:
+                return nid
+        except Exception:
+            continue
+    return None
 
 
 def _inject_prompt(workflow: Dict[str, Any], node_id: str, field: str, text: str) -> None:
@@ -36,7 +66,22 @@ def submit_text_to_image(prompt_text: str, *, client_id: Optional[str] = None, t
     client_id = client_id or str(uuid.uuid4())
     tpl_path = template_path or WORKFLOW_IMAGE_PATH
     workflow = _load_workflow_template(tpl_path)
-    _inject_prompt(workflow, prompt_node_id, prompt_field, prompt_text)
+
+    # Prefer explicit node id; if absent, fall back to meta-based lookup.
+    target_nid = prompt_node_id if str(prompt_node_id) in workflow else None
+    if not target_nid:
+        auto_nid = _find_node_id_by_meta(
+            workflow, class_type="CLIPTextEncode", title_equals="Positive Prompt"
+        )
+        if not auto_nid:
+            # As a last resort, keep legacy behavior to raise helpful error with context
+            raise ValueError(
+                "Could not locate Positive Prompt node. Tried id='{}' and class_type='CLIPTextEncode' with title='Positive Prompt'"
+                .format(prompt_node_id)
+            )
+        target_nid = auto_nid
+
+    _inject_prompt(workflow, target_nid, prompt_field, prompt_text)
 
     url = f"{COMFYUI_URL.rstrip('/')}/prompt"
     payload = {"prompt": workflow, "client_id": client_id}
@@ -222,11 +267,32 @@ def submit_image_to_video(prompt_text: str, image_filename: str, *, client_id: O
     client_id = client_id or str(uuid.uuid4())
     tpl_path = template_path or WORKFLOW_I2V_PATH
     workflow = _load_workflow_template(tpl_path)
-    _inject_prompt(workflow, prompt_node_id, prompt_field, prompt_text)
-    # Set the image filename on the LoadImage node
-    node = workflow.get(image_node_id)
+
+    # Positive prompt node detection
+    text_nid = prompt_node_id if str(prompt_node_id) in workflow else None
+    if not text_nid:
+        text_nid = _find_node_id_by_meta(
+            workflow, class_type="CLIPTextEncode", title_equals="Positive Prompt"
+        )
+        if not text_nid:
+            raise ValueError(
+                "Could not locate Positive Prompt node for I2V. Tried id='{}' and meta lookup.".format(prompt_node_id)
+            )
+    _inject_prompt(workflow, text_nid, prompt_field, prompt_text)
+
+    # LoadImage node detection
+    img_nid = image_node_id if str(image_node_id) in workflow else None
+    if not img_nid:
+        img_nid = _find_node_id_by_meta(
+            workflow, class_type="LoadImage", title_equals="Load Image"
+        )
+        if not img_nid:
+            raise ValueError(
+                "Could not locate Load Image node. Tried id='{}' and meta lookup.".format(image_node_id)
+            )
+    node = workflow.get(img_nid)
     if not node or "inputs" not in node:
-        raise ValueError(f"Workflow missing node {image_node_id} or inputs")
+        raise ValueError(f"Workflow missing node {img_nid} or inputs")
     node["inputs"][image_field] = image_filename
 
     url = f"{COMFYUI_URL.rstrip('/')}/prompt"
