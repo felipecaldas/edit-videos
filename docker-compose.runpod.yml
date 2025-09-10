@@ -3,15 +3,17 @@ services:
   video-merger:
     environment:
       - RUN_ENV=runpod
-      - DATA_SHARED_BASE=/workspace/data/shared
+      - DATA_SHARED_BASE=/data/shared
       - REDIS_URL=redis://192.168.68.52:8061/2
-      - COMFYUI_URL=https://jehnzwbz59y33o-8188.proxy.runpod.net/api
+      - COMFYUI_URL=https://3zz72pkl7t5b2j-8188.proxy.runpod.net/api
       - ENABLE_IMAGE_GEN=true
       - ENABLE_VOICEOVER_GEN=false
       - COMFYUI_TIMEOUT_SECONDS=600
       - COMFYUI_POLL_INTERVAL_SECONDS=40
       - LOG_LEVEL=DEBUG
       - UVICORN_LOG_LEVEL=debug
+      - WORKFLOW_IMAGE_PATH=/app/videomerge/comfyui-workflows/qwen-image-fast.Olivio.json
+      - WORKFLOW_I2V_PATH=/app/videomerge/comfyui-workflows/I2V-Wan 2.2 Lightning.json
     ports:
       - "8086:8000"
     volumes:

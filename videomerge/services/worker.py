@@ -6,7 +6,7 @@ from typing import Any, Dict
 
 from fastapi import HTTPException
 
-from videomerge.config import DATA_SHARED_BASE, ENABLE_IMAGE_GEN, COMFYUI_TIMEOUT_SECONDS, COMFYUI_POLL_INTERVAL_SECONDS, ENABLE_VOICEOVER_GEN
+from videomerge.config import DATA_SHARED_BASE, ENABLE_IMAGE_GEN, COMFYUI_TIMEOUT_SECONDS, COMFYUI_POLL_INTERVAL_SECONDS, ENABLE_VOICEOVER_GEN, RUN_ENV
 from videomerge.services.redis_client import get_redis
 from videomerge.services.queue import QUEUE_KEY, get_job, set_job, Job, push_dead_letter
 from videomerge.services.voiceover import synthesize_voice
@@ -20,6 +20,7 @@ from videomerge.services.comfyui import (
 )
 from videomerge.utils.logging import get_logger
 from videomerge.services.stitcher import (
+    concat_videos,
     concat_videos_with_voiceover,
     generate_and_burn_subtitles,
 )
@@ -111,7 +112,16 @@ class Worker:
                     job.job_id,
                 )
             else:
-                logger.info("[worker] Voiceover generation disabled by ENABLE_VOICEOVER_GEN. Skipping.")
+                # If generation is disabled, still try to pick up a pre-existing voiceover in the run folder
+                logger.info("[worker] Voiceover generation disabled by ENABLE_VOICEOVER_GEN. Looking for existing audio in run_dir.")
+                for candidate in (run_dir / "voiceover.mp3", run_dir / "voiceover.wav"):
+                    if candidate.exists() and candidate.stat().st_size > 0:
+                        audio_path = candidate
+                        logger.info("[worker] Found existing voiceover: %s", candidate)
+                        break
+                if audio_path is None:
+                    # Hard-require external audio to exist when generation is disabled
+                    raise HTTPException(status_code=400, detail="No voiceover audio found in run directory (expected voiceover.mp3 or voiceover.wav)")
 
             # Helper for console progress bar
             def _progress_bar(current: int, total: int, width: int = 30) -> str:
@@ -249,11 +259,15 @@ class Worker:
                             v_prompt,
                             image_name,
                         )
+                        # Prefer the correct VideoCombine node based on workflow/environment
+                        # - RunPod uses Wan2.2_5B_I2V_60FPS.json where node "94" saves to Hunyuan/videos/30/vid (60fps)
+                        # - Local Lightning workflow uses node "82" as VideoCombine
+                        prefer_nodes = ["94"] if RUN_ENV == "runpod" else ["82"]
                         v_outputs = poll_until_complete(
                             v_pid,
                             timeout_s=COMFYUI_TIMEOUT_SECONDS,
                             poll_interval_s=COMFYUI_POLL_INTERVAL_SECONDS,
-                            prefer_node_ids=["61", "60"],
+                            prefer_node_ids=prefer_nodes,
                         )
                         # Filter to common video extensions to avoid re-downloading images here
                         video_hints = [h for h in v_outputs if h.lower().endswith((".mp4", ".webm", ".mov", ".mkv"))]
@@ -291,19 +305,77 @@ class Worker:
                     job.job_id,
                 )
 
-            # Final stitching with subtitles (requires at least one video and voiceover when enabled)
+            # If no videos were generated via ComfyUI, discover local MP4s in run_dir
+            if not video_files:
+                from pathlib import Path as _P
+                candidates = [p for p in run_dir.iterdir() if p.is_file() and p.suffix.lower() == ".mp4" and p.name not in ("stitched_output.mp4", "stitched_subtitled.mp4")]
+                # Sort by common naming like vid_0001.mp4 or alphabetically as fallback
+                def _key(p: _P):
+                    stem = p.stem
+                    # extract trailing integer if present
+                    import re
+                    m = re.search(r"(\d+)$", stem)
+                    return (stem, int(m.group(1)) if m else -1)
+                candidates = sorted(candidates, key=_key)
+                video_files = [str(p) for p in candidates]
+                if video_files:
+                    logger.info("[worker] Discovered %d local mp4(s) in run_dir for stitching: %s", len(video_files), [Path(v).name for v in video_files])
+
+            # If an explicit concat list exists in run_dir/inputs.txt, honor its ordering
+            try:
+                concat_list_path = run_dir / "inputs.txt"
+                if concat_list_path.exists() and concat_list_path.stat().st_size > 0:
+                    ordered: list[str] = []
+                    for raw in concat_list_path.read_text(encoding="utf-8").splitlines():
+                        line = raw.strip()
+                        if not line:
+                            continue
+                        # Accept either ffmpeg concat syntax: file '/path/to.mp4' or plain path
+                        if line.lower().startswith("file "):
+                            # Remove leading file and surrounding quotes
+                            s = line[5:].strip()
+                            if s[:1] in {'"', "'"} and s[-1:] == s[:1]:
+                                s = s[1:-1]
+                            candidate = Path(s)
+                        else:
+                            candidate = Path(line)
+                        # Resolve relative paths against run_dir
+                        if not candidate.is_absolute():
+                            candidate = (run_dir / candidate).resolve()
+                        if candidate.exists() and candidate.suffix.lower() == ".mp4":
+                            ordered.append(str(candidate))
+                        else:
+                            logger.warning("[worker] inputs.txt entry not found or not mp4: %s", candidate)
+                    if ordered:
+                        video_files = ordered
+                        logger.info("[worker] Using ordering from inputs.txt (%d entries)", len(video_files))
+            except Exception as e:
+                logger.warning("[worker] Failed to parse inputs.txt: %s", e)
+
+            # Final stitching with subtitles (always run if we have at least one video)
             final_video_path_str: str | None = None
-            if video_files and ENABLE_VOICEOVER_GEN and audio_path and audio_path.exists():
+            if video_files:
                 try:
                     _t0_stitch = time.perf_counter()
-                    stitched_path = concat_videos_with_voiceover(
-                        [Path(p) for p in video_files], audio_path, run_dir / "stitched_output.mp4"
-                    )
+                    # If we have an audio file (either generated or pre-existing), include it in the stitch
+                    if audio_path and audio_path.exists():
+                        stitched_path = concat_videos_with_voiceover(
+                            [Path(p) for p in video_files], audio_path, run_dir / "stitched_output.mp4"
+                        )
+                    else:
+                        stitched_path = concat_videos(
+                            [Path(p) for p in video_files], run_dir / "stitched_output.mp4"
+                        )
                     _t1_stitch = time.perf_counter()
 
                     _t0_subs = time.perf_counter()
                     final_path = generate_and_burn_subtitles(
-                        stitched_path, run_dir / "stitched_subtitled.mp4", language='pt', model_size='small', position='bottom'
+                        stitched_path,
+                        run_dir / "stitched_subtitled.mp4",
+                        language='pt',
+                        model_size='small',
+                        position='bottom',
+                        audio_hint=audio_path,
                     )
                     _t1_subs = time.perf_counter()
 

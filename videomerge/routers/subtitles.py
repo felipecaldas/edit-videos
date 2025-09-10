@@ -1,6 +1,7 @@
 from pathlib import Path
 import uuid
 import subprocess
+import shutil
 from typing import Optional, Union, List
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
@@ -21,7 +22,7 @@ from videomerge.services.subtitles import (
 )
 from videomerge.services.stitcher import (
     concat_videos_with_voiceover,
-    generate_and_burn_subtitles,
+    generate_and_burn_subtitles as generate_and_burn_subtitles_service,
 )
 from videomerge.utils.logging import get_logger
 
@@ -185,7 +186,7 @@ async def stitch_with_subtitles(req: Union[StitchWithSubsRequest, FolderStitchWi
 
         # Subtitles (reuse helper)
         try:
-            final_path = generate_and_burn_subtitles(
+            final_path = generate_and_burn_subtitles_service(
                 stitched_path,
                 temp_dir / "stitched_subtitled.mp4",
                 language=language,
@@ -195,6 +196,16 @@ async def stitch_with_subtitles(req: Union[StitchWithSubsRequest, FolderStitchWi
         except Exception as e:
             logger.exception("[stitch+subs] Subtitles failed: %s", e)
             raise HTTPException(status_code=500, detail=str(e))
+
+        # If this was a folder-based request, also save a copy back to the folder_path
+        try:
+            if isinstance(req, FolderStitchWithSubsRequest):
+                dest_path = folder / "stitched_subtitled.mp4"
+                shutil.copyfile(final_path, dest_path)
+                logger.info("[stitch+subs] Saved output copy to folder: %s", dest_path)
+        except Exception as e:
+            # Do not fail the request if the save-back copy fails; log and continue
+            logger.warning("[stitch+subs] Failed to save output to folder_path: %s", e)
 
         return FileResponse(path=str(final_path), media_type='video/mp4', filename=f"stitched_subtitled_{session_id}.mp4")
     except HTTPException:

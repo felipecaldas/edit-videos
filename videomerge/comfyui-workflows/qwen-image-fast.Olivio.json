@@ -31,7 +31,7 @@
   },
   "6": {
     "inputs": {
-      "text": "A wide shot of an ancient, weathered map of South America, with a faint, glowing question mark hovering above Brazil, cinematic, mysterious blue and gold lighting, photorealistic, 4K, professional photography.",
+      "text": "Cinematic wide shot, two distinct landmasses (stylized Brazil and Africa) depicted as puzzle pieces on a deep blue ocean, just about to connect. Soft, ethereal lighting, gradient from deep ocean blues to warm land tones. Photorealistic, 4K, professional photography.",
       "clip": [
         "73",
         0
@@ -135,36 +135,6 @@
     "class_type": "SaveImage",
     "_meta": {
       "title": "Save Image"
-    }
-  },
-  "90": {
-    "inputs": {
-      "offload_model": false,
-      "offload_cache": true,
-      "anything": [
-        "86",
-        0
-      ]
-    },
-    "class_type": "VRAMCleanup",
-    "_meta": {
-      "title": "🎈VRAM-Cleanup"
-    }
-  },
-  "91": {
-    "inputs": {
-      "clean_file_cache": true,
-      "clean_processes": true,
-      "clean_dlls": true,
-      "retry_times": 3,
-      "anything": [
-        "86",
-        0
-      ]
-    },
-    "class_type": "RAMCleanup",
-    "_meta": {
-      "title": "🎈RAM-Cleanup"
     }
   }
 }

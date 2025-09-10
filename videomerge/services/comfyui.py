@@ -435,7 +435,10 @@ def download_outputs(file_hints: List[str], dest_dir: Path) -> List[Path]:
     saved: List[Path] = []
     for hint in file_hints:
         if "/" in hint:
-            subfolder, filename = hint.split("/", 1)
+            # Split on the LAST slash so nested subfolders are preserved.
+            # Example: "Hunyuan/videos/24/vid_00010.mp4" ->
+            #   subfolder="Hunyuan/videos/24", filename="vid_00010.mp4"
+            subfolder, filename = hint.rsplit("/", 1)
         else:
             subfolder, filename = "", hint
         params = {"filename": filename, "type": "output"}
@@ -458,7 +461,8 @@ def download_outputs(file_hints: List[str], dest_dir: Path) -> List[Path]:
 def fetch_output_bytes(hint: str) -> Tuple[str, bytes]:
     """Fetch a single output file from ComfyUI /view and return (filename, bytes)."""
     if "/" in hint:
-        subfolder, filename = hint.split("/", 1)
+        # Use last slash to preserve nested subfolders
+        subfolder, filename = hint.rsplit("/", 1)
     else:
         subfolder, filename = "", hint
     params = {"filename": filename, "type": "output"}

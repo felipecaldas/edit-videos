@@ -1,7 +1,7 @@
 {
   "6": {
     "inputs": {
-      "text": "The map subtly zooms in on Brazil while the question mark slowly pulsates, creating a sense of wonder and intrigue, smooth cinematic motion, 4K.",
+      "text": "Slow, deliberate animation of the two landmasses gently moving closer and connecting, with a subtle ripple effect on the surrounding water. Camera slowly zooms out, revealing the vastness. Smooth motion, cinematic, 4K",
       "clip": [
         "84",
         0
@@ -28,7 +28,7 @@
   "8": {
     "inputs": {
       "samples": [
-        "88",
+        "58",
         0
       ],
       "vae": [
@@ -80,7 +80,7 @@
   },
   "52": {
     "inputs": {
-      "image": "ComfyUI_00001_.png"
+      "image": "ComfyUI_00003_.png"
     },
     "class_type": "LoadImage",
     "_meta": {
@@ -90,7 +90,7 @@
   "57": {
     "inputs": {
       "add_noise": "enable",
-      "noise_seed": 784,
+      "noise_seed": 789,
       "steps": 5,
       "cfg": 1,
       "sampler_name": "uni_pc",
@@ -144,7 +144,7 @@
         1
       ],
       "latent_image": [
-        "87",
+        "57",
         0
       ]
     },
@@ -229,7 +229,7 @@
     "inputs": {
       "frame_rate": 24,
       "loop_count": 0,
-      "filename_prefix": "2025-09-05/ComfyUI_20250905_202641_Wan-2.2_I2V",
+      "filename_prefix": "2025-09-09/ComfyUI_20250909_162818_Wan-2.2_I2V",
       "format": "video/h264-mp4",
       "pix_fmt": "yuv420p",
       "crf": 15,
@@ -280,75 +280,11 @@
       "value": [
         "6",
         0
-      ],
-      "model": [
-        "84",
-        0
       ]
     },
     "class_type": "UnloadModel",
     "_meta": {
       "title": "UnloadModel"
-    }
-  },
-  "87": {
-    "inputs": {
-      "value": [
-        "57",
-        0
-      ],
-      "model": [
-        "61",
-        0
-      ]
-    },
-    "class_type": "UnloadModel",
-    "_meta": {
-      "title": "UnloadModel"
-    }
-  },
-  "88": {
-    "inputs": {
-      "value": [
-        "58",
-        0
-      ],
-      "model": [
-        "62",
-        0
-      ]
-    },
-    "class_type": "UnloadModel",
-    "_meta": {
-      "title": "UnloadModel"
-    }
-  },
-  "93": {
-    "inputs": {
-      "anything": [
-        "82",
-        0
-      ]
-    },
-    "class_type": "easy cleanGpuUsed",
-    "_meta": {
-      "title": "Clean VRAM Used"
-    }
-  },
-  "94": {
-    "inputs": {
-      "clean_file_cache": true,
-      "clean_processes": true,
-      "clean_dlls": true,
-      "retry_times": 3,
-      "anything": [
-        "82",
-        0
-      ]
-    },
-    "class_type": "RAMCleanup",
-    "_meta": {
-      "title": "🎈RAM-Cleanup"
     }
   }
 }
