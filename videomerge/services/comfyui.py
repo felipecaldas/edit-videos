@@ -404,12 +404,6 @@ def submit_image_to_video(
 
     url = f"{COMFYUI_URL.rstrip('/')}/prompt"
     payload = {"prompt": workflow, "client_id": client_id}
-    # Also print the payload to console for debugging/inspection
-    try:
-        logger.info("[comfyui] I2V /prompt payload: %s", json.dumps(payload, ensure_ascii=False))
-    except Exception:
-        # Fallback to repr if JSON serialization fails unexpectedly
-        logger.info("[comfyui] I2V /prompt payload (repr): %r", payload)
     logger.info("[comfyui] Submitting image->video prompt to %s (image=%s)", url, image_filename)
     resp = requests.post(url, json=payload, timeout=30, headers=_default_headers())
     # If ComfyUI rejects the workflow (400), log the response body for diagnostics
