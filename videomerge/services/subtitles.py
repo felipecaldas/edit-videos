@@ -165,7 +165,7 @@ def burn_subtitles(input_video: Path, srt_path: Path, output_path: Path, positio
     )
     sub_filter = f"subtitles='{srt_path.resolve().as_posix()}':force_style='{style}'"
     cmd = [
-        'ffmpeg', '-y',
+        'ffmpeg', '-hide_banner', '-loglevel', 'error', '-y',
         '-i', str(input_video),
         '-vf', sub_filter,
         '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23',

@@ -83,7 +83,7 @@ def concat_videos(video_paths: Iterable[Path], output_path: Path) -> Path:
 
     def _run_ffmpeg(dst: Path, with_faststart: bool) -> subprocess.CompletedProcess:
         cmd = [
-            'ffmpeg', '-y',
+            'ffmpeg', '-hide_banner', '-loglevel', 'error', '-y',
             '-f', 'concat', '-safe', '0',
             '-i', str(concat_list),
             '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23',
@@ -94,7 +94,8 @@ def concat_videos(video_paths: Iterable[Path], output_path: Path) -> Path:
         cmd += [str(dst)]
         logger.debug("[stitcher] FFmpeg concat(no-audio) cmd: %s", ' '.join(cmd))
         result = subprocess.run(cmd, capture_output=True, text=True)
-        logger.debug("[stitcher] ffmpeg rc=%s stdout=%s stderr=%s", result.returncode, result.stdout, result.stderr)
+        if result.returncode != 0:
+            logger.error("[stitcher] ffmpeg error rc=%s stderr=%s", result.returncode, result.stderr)
         return result
 
     # Always write to a local temp file first, then move to final location
@@ -184,7 +185,7 @@ def concat_videos_with_voiceover(video_paths: Iterable[Path], voiceover_path: Pa
             SAFETY_MARGIN_SEC = 0.05
             _target_len = min(_src_len, last_clip_target_len + SAFETY_MARGIN_SEC)
             trim_cmd = [
-                'ffmpeg', '-y',
+                'ffmpeg', '-hide_banner', '-loglevel', 'error', '-y',
                 '-ss', '0', '-t', f"{_target_len:.3f}",
                 '-i', str(last_src),
                 '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23',
@@ -193,7 +194,8 @@ def concat_videos_with_voiceover(video_paths: Iterable[Path], voiceover_path: Pa
             ]
             logger.debug("[stitcher] FFmpeg trim last clip cmd: %s", ' '.join(trim_cmd))
             t_res = subprocess.run(trim_cmd, capture_output=True, text=True)
-            logger.debug("[stitcher] ffmpeg trim rc=%s stdout=%s stderr=%s", t_res.returncode, t_res.stdout, t_res.stderr)
+            if t_res.returncode != 0:
+                logger.error("[stitcher] ffmpeg trim error rc=%s stderr=%s", t_res.returncode, t_res.stderr)
             if t_res.returncode != 0 or not trimmed_temp.exists() or trimmed_temp.stat().st_size == 0:
                 raise RuntimeError(f"Failed to trim last clip: {t_res.stderr}")
             # Replace last path with trimmed temp
@@ -211,7 +213,7 @@ def concat_videos_with_voiceover(video_paths: Iterable[Path], voiceover_path: Pa
 
     def _run_ffmpeg(dst: Path, with_faststart: bool) -> subprocess.CompletedProcess:
         cmd = [
-            'ffmpeg', '-y',
+            'ffmpeg', '-hide_banner', '-loglevel', 'error', '-y',
             '-f', 'concat', '-safe', '0',
             '-i', str(concat_list),
             '-i', str(voiceover_path),
@@ -231,7 +233,8 @@ def concat_videos_with_voiceover(video_paths: Iterable[Path], voiceover_path: Pa
         cmd += [str(dst)]
         logger.debug("[stitcher] FFmpeg concat cmd: %s", ' '.join(cmd))
         result = subprocess.run(cmd, capture_output=True, text=True)
-        logger.debug("[stitcher] ffmpeg rc=%s stdout=%s stderr=%s", result.returncode, result.stdout, result.stderr)
+        if result.returncode != 0:
+            logger.error("[stitcher] ffmpeg error rc=%s stderr=%s", result.returncode, result.stderr)
         return result
 
     # Always write to a local temp file first, then move to final location

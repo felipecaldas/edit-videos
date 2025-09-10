@@ -65,7 +65,7 @@ async def merge_video_audio(
             logger.info("Audio longer than video. Speeding audio by x%.2f", speed_ratio)
             sped_audio_path = temp_dir / "sped_audio.wav"
             speed_cmd = [
-                'ffmpeg', '-y',
+                'ffmpeg', '-hide_banner', '-loglevel', 'error', '-y',
                 '-i', str(audio_path),
                 '-filter:a', f'atempo={speed_ratio}',
                 str(sped_audio_path)
@@ -81,7 +81,7 @@ async def merge_video_audio(
             logger.info("No speed adjustment needed for audio")
 
         cmd = [
-            'ffmpeg', '-y',
+            'ffmpeg', '-hide_banner', '-loglevel', 'error', '-y',
             '-i', str(video_path),
             '-i', str(final_audio_path),
             '-filter_complex', '[1:a]loudnorm=I=-14:TP=-1.5:LRA=7[aud]',
@@ -94,7 +94,8 @@ async def merge_video_audio(
         ]
         logger.debug("FFmpeg merge cmd: %s", ' '.join(cmd))
         result = subprocess.run(cmd, capture_output=True, text=True)
-        logger.debug("FFmpeg rc=%s stdout=%s stderr=%s", result.returncode, result.stdout, result.stderr)
+        if result.returncode != 0:
+            logger.error("FFmpeg error rc=%s stderr=%s", result.returncode, result.stderr)
         if result.returncode != 0:
             raise HTTPException(status_code=500, detail=f"FFmpeg error: {result.stderr}")
 
