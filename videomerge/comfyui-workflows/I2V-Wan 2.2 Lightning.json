@@ -229,7 +229,7 @@
     "inputs": {
       "frame_rate": 24,
       "loop_count": 0,
-      "filename_prefix": "2025-09-09/ComfyUI_20250909_162818_Wan-2.2_I2V",
+      "filename_prefix": "2025-09-09/ComfyUI_Wan-2.2_I2V",
       "format": "video/h264-mp4",
       "pix_fmt": "yuv420p",
       "crf": 15,
