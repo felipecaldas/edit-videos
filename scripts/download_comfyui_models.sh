@@ -81,57 +81,43 @@ download_file() {
   fi
 }
 
-# Backwards-compat wrapper for existing calls in this script
-curl_download() { download_file "$@"; }
 
 # ------------------------------
-# Wan 2.2 I2V (GGUF) + Lightning LoRAs + UMT5 encoder (GGUF)
+# Download models from list
 # ------------------------------
-# VAE
-curl_download \
-  "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors" \
-  "$MODELS_DIR/vae/wan_2.1_vae.safetensors"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
+MODELS_LIST_FILE="$SCRIPT_DIR/models_to_download.txt"
 
-# UNETs (GGUF)
-curl_download \
-  "https://huggingface.co/QuantStack/Wan2.2-I2V-A14B-GGUF/resolve/main/HighNoise/Wan2.2-I2V-A14B-HighNoise-Q8_0.gguf" \
-  "$MODELS_DIR/diffusion_models/Wan2.2-I2V-A14B-HighNoise-Q8_0.gguf"
+if [ ! -f "$MODELS_LIST_FILE" ]; then
+  echo "ERROR: Models list not found: $MODELS_LIST_FILE" >&2
+  exit 1
+fi
 
-curl_download \
-  "https://huggingface.co/QuantStack/Wan2.2-I2V-A14B-GGUF/resolve/main/LowNoise/Wan2.2-I2V-A14B-LowNoise-Q8_0.gguf" \
-  "$MODELS_DIR/diffusion_models/Wan2.2-I2V-A14B-LowNoise-Q8_0.gguf"
+# Read the file line by line, skipping comments and empty lines
+# and download files.
+while IFS= read -r line || [[ -n "$line" ]]; do
+  # Trim leading/trailing whitespace
+  line=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
 
-# Lightning LoRAs
-curl_download \
-  "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Wan22-Lightning/Wan2.2-Lightning_I2V-A14B-4steps-lora_HIGH_fp16.safetensors" \
-  "$MODELS_DIR/loras/Wan2.2-Lightning_I2V-A14B-4steps-lora_HIGH_fp16.safetensors"
+  # Skip empty lines and comments
+  if [ -z "$line" ] || [[ "$line" == '#'* ]]; then
+    continue
+  fi
 
-curl_download \
-  "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Wan22-Lightning/Wan2.2-Lightning_I2V-A14B-4steps-lora_LOW_fp16.safetensors" \
-  "$MODELS_DIR/loras/Wan2.2-Lightning_I2V-A14B-4steps-lora_LOW_fp16.safetensors"
+  # Parse URL and destination subdir
+  url=$(echo "$line" | cut -d' ' -f1)
+  dest_subdir=$(echo "$line" | cut -d' ' -f2-)
 
-# Text encoder (GGUF)
-curl_download \
-  "https://huggingface.co/city96/umt5-xxl-encoder-gguf/resolve/main/umt5-xxl-encoder-Q5_K_M.gguf" \
-  "$MODELS_DIR/clip/umt5-xxl-encoder-Q5_K_M.gguf"
+  if [ -z "$url" ] || [ -z "$dest_subdir" ]; then
+    echo "WARNING: Skipping invalid line: '$line'" >&2
+    continue
+  fi
 
-# ------------------------------
-# Qwen Image (Distill GGUF) + VAE + Text Encoder (FP8 safetensors)
-# ------------------------------
-# VAE
-curl_download \
-  "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/vae/qwen_image_vae.safetensors" \
-  "$MODELS_DIR/vae/qwen_image_vae.safetensors"
+  filename=$(basename "$url")
+  output_path="$MODELS_DIR/$dest_subdir/$filename"
 
-# UNET (GGUF)
-curl_download \
-  "https://huggingface.co/QuantStack/Qwen-Image-Distill-GGUF/resolve/main/Qwen_Image_Distill-Q8_0.gguf" \
-  "$MODELS_DIR/unet/Qwen_Image_Distill-Q8_0.gguf"
-
-# Text encoder (FP8 safetensors)
-curl_download \
-  "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors" \
-  "$MODELS_DIR/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors"
+  download_file "$url" "$output_path"
+done < "$MODELS_LIST_FILE"
 
 # ------------------------------
 # Custom nodes required by workflows
@@ -155,18 +141,16 @@ pip_install_req "$CUSTOM_NODES_DIR/ComfyUI-Custom-Scripts/requirements.txt"
 clone_or_update "https://github.com/rgthree/rgthree-comfy" "$CUSTOM_NODES_DIR/rgthree-comfy"
 pip_install_req "$CUSTOM_NODES_DIR/rgthree-comfy/requirements.txt"
 
-# ------------------------------
-# Optional: RIFE VFI model (used by RIFE VFI node)
-# Note: The RIFE custom node often attempts auto-download. If you want to fetch it now,
-# uncomment one of the mirrors below and set a target folder you use with the node.
-# Common choices:
-#   - "$MODELS_DIR/frame_interpolation/rife/rife47.pth"
-#   - or custom_nodes/ComfyUI-Frame-Interpolation/models/rife47.pth
-#
-# mkdir -p "$MODELS_DIR/frame_interpolation/rife"
-# curl_download \
-#   "https://huggingface.co/wavespeed/misc/resolve/main/rife/rife47.pth" \
-#   "$MODELS_DIR/frame_interpolation/rife/rife47.pth"
+# 4) Unload Models node
+clone_or_update "https://github.com/willblaschko/ComfyUI-Unload-Models" "$CUSTOM_NODES_DIR/ComfyUI-Unload-Models"
+
+# 5) Easy-Use nodes (requires running its own installer)
+EASY_USE_DIR="$CUSTOM_NODES_DIR/ComfyUI-Easy-Use"
+clone_or_update "https://github.com/yolain/ComfyUI-Easy-Use" "$EASY_USE_DIR"
+if [ -f "$EASY_USE_DIR/install.sh" ]; then
+  echo "==> Running installer for ComfyUI-Easy-Use"
+  (cd "$EASY_USE_DIR" && bash install.sh)
+fi
 
 cat <<EOF
 
