@@ -173,7 +173,7 @@
   },
   "64": {
     "inputs": {
-      "lora_name": "Wan2.2-Lightning_I2V-A14B-4steps-lora_HIGH_fp16.safetensors",
+      "lora_name": "Wan22_A14B_T2V_HIGH_Lightning_4steps_lora_250928_rank128_fp16.safetensors",
       "strength_model": 0.9,
       "model": [
         "61",
@@ -187,7 +187,7 @@
   },
   "66": {
     "inputs": {
-      "lora_name": "Wan2.2-Lightning_I2V-A14B-4steps-lora_LOW_fp16.safetensors",
+      "lora_name": "Wan22_A14B_T2V_LOW_Lightning_4steps_lora_250928_rank64_fp16.safetensors",
       "strength_model": 0.9,
       "model": [
         "62",
