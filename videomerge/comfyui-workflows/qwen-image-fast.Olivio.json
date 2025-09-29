@@ -90,7 +90,7 @@
   },
   "70": {
     "inputs": {
-      "unet_name": "Qwen_Image_Distill-Q4_0.gguf"
+      "unet_name": "Qwen_Image_Distill-Q8_0.gguf"
     },
     "class_type": "UnetLoaderGGUF",
     "_meta": {

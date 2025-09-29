@@ -94,12 +94,12 @@ curl_download \
 
 # UNETs (GGUF)
 curl_download \
-  "https://huggingface.co/QuantStack/Wan2.2-I2V-A14B-GGUF/resolve/main/HighNoise/Wan2.2-I2V-A14B-HighNoise-Q4_K_S.gguf" \
-  "$MODELS_DIR/diffusion_models/Wan2.2-I2V-A14B-HighNoise-Q4_K_S.gguf"
+  "https://huggingface.co/QuantStack/Wan2.2-I2V-A14B-GGUF/resolve/main/HighNoise/Wan2.2-I2V-A14B-HighNoise-Q8_0.gguf" \
+  "$MODELS_DIR/diffusion_models/Wan2.2-I2V-A14B-HighNoise-Q8_0.gguf"
 
 curl_download \
-  "https://huggingface.co/QuantStack/Wan2.2-I2V-A14B-GGUF/resolve/main/LowNoise/Wan2.2-I2V-A14B-LowNoise-Q4_0.gguf" \
-  "$MODELS_DIR/diffusion_models/Wan2.2-I2V-A14B-LowNoise-Q4_0.gguf"
+  "https://huggingface.co/QuantStack/Wan2.2-I2V-A14B-GGUF/resolve/main/LowNoise/Wan2.2-I2V-A14B-LowNoise-Q8_0.gguf" \
+  "$MODELS_DIR/diffusion_models/Wan2.2-I2V-A14B-LowNoise-Q8_0.gguf"
 
 # Lightning LoRAs
 curl_download \
@@ -125,8 +125,8 @@ curl_download \
 
 # UNET (GGUF)
 curl_download \
-  "https://huggingface.co/QuantStack/Qwen-Image-Distill-GGUF/resolve/main/Qwen_Image_Distill-Q4_0.gguf" \
-  "$MODELS_DIR/unet/Qwen_Image_Distill-Q4_0.gguf"
+  "https://huggingface.co/QuantStack/Qwen-Image-Distill-GGUF/resolve/main/Qwen_Image_Distill-Q8_0.gguf" \
+  "$MODELS_DIR/unet/Qwen_Image_Distill-Q8_0.gguf"
 
 # Text encoder (FP8 safetensors)
 curl_download \

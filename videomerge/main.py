@@ -7,6 +7,7 @@ from videomerge.routers.subtitles import router as subtitles_router
 from videomerge.routers.health import router as health_router
 from videomerge.routers.audio import router as audio_router
 from videomerge.routers.orchestrate import router as orchestrate_router
+from videomerge.routers.tiktok import router as tiktok_router
 from videomerge.utils.logging import get_logger
 from videomerge.services.worker import Worker
 from videomerge.services.redis_client import close_redis
@@ -39,6 +40,7 @@ def create_app() -> FastAPI:
     app.include_router(subtitles_router)
     app.include_router(audio_router)
     app.include_router(orchestrate_router)
+    app.include_router(tiktok_router)
 
     return app
 

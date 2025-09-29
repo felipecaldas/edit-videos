@@ -7,6 +7,9 @@ TMP_BASE = Path(os.getenv("TMP_BASE", "/tmp/media"))
 # Shared data directory where orchestrations persist outputs
 DATA_SHARED_BASE = Path(os.getenv("DATA_SHARED_BASE", "/data/shared"))
 
+# TikTok videos archive folder
+TIKTOK_VIDEOS_ARCHIVE_FOLDER = Path(os.getenv("TIKTOK_VIDEOS_ARCHIVE_FOLDER", "/data/shared/archived"))
+
 # Voiceover service endpoint
 VOICEOVER_SERVICE_URL = os.getenv("VOICEOVER_SERVICE_URL", "http://192.168.68.51:8083")
 
