@@ -144,6 +144,7 @@ pip_install_req "$CUSTOM_NODES_DIR/rgthree-comfy/requirements.txt"
 # 4) Unload Models node
 clone_or_update "https://github.com/willblaschko/ComfyUI-Unload-Models" "$CUSTOM_NODES_DIR/ComfyUI-Unload-Models"
 
+
 # 5) Easy-Use nodes (requires running its own installer)
 EASY_USE_DIR="$CUSTOM_NODES_DIR/ComfyUI-Easy-Use"
 clone_or_update "https://github.com/yolain/ComfyUI-Easy-Use" "$EASY_USE_DIR"
