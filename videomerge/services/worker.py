@@ -6,10 +6,10 @@ from typing import Any, Dict
 
 from fastapi import HTTPException
 
-from videomerge.config import DATA_SHARED_BASE, ENABLE_IMAGE_GEN, COMFYUI_TIMEOUT_SECONDS, COMFYUI_POLL_INTERVAL_SECONDS, ENABLE_VOICEOVER_GEN, RUN_ENV
+from videomerge.config import DATA_SHARED_BASE, ENABLE_IMAGE_GEN, COMFYUI_TIMEOUT_SECONDS, COMFYUI_POLL_INTERVAL_SECONDS, ENABLE_VOICEOVER_GEN, RUN_ENV, VIDEO_COMPLETED_N8N_WEBHOOK_URL
 from videomerge.services.redis_client import get_redis
 from videomerge.services.queue import QUEUE_KEY, get_job, set_job, Job, push_dead_letter
-from videomerge.services.voiceover import synthesize_voice
+from videomerge.services.webhook_manager import webhook_manager
 from videomerge.services.comfyui import (
     submit_text_to_image,
     submit_image_to_video,
@@ -402,9 +402,36 @@ class Worker:
             if final_video_path_str:
                 job.final_video_path = final_video_path_str
             await set_job(redis, job)
+
+            # Send webhook notification to N8N
+            if VIDEO_COMPLETED_N8N_WEBHOOK_URL and VIDEO_COMPLETED_N8N_WEBHOOK_URL != "https://your-n8n-instance.com/webhook/job-complete":
+                job_data = {
+                    "job_id": job.job_id,
+                    "status": "completed",
+                    "output_dir": str(run_dir),
+                    "final_video_path": final_video_path_str,
+                    "video_files": video_files,
+                    "image_files": image_files,
+                    "voiceover_path": str(audio_path) if audio_path and audio_path.exists() else None,
+                    "run_id": run_id,
+                }
+                await webhook_manager.send_webhook(VIDEO_COMPLETED_N8N_WEBHOOK_URL, job_data, "job_completed")
+
             logger.info("[worker] Completed job_id=%s", job.job_id)
         except Exception as e:
             job.status = "failed"
             job.error = str(e)
             await set_job(redis, job)
+
+            # Send webhook notification for failed job
+            if VIDEO_COMPLETED_N8N_WEBHOOK_URL and VIDEO_COMPLETED_N8N_WEBHOOK_URL != "https://your-n8n-instance.com/webhook/job-complete":
+                job_data = {
+                    "job_id": job.job_id,
+                    "status": "failed",
+                    "error": str(e),
+                    "output_dir": str(run_dir) if 'run_dir' in locals() else None,
+                    "run_id": payload.get("run_id") if 'payload' in locals() else None,
+                }
+                await webhook_manager.send_webhook(VIDEO_COMPLETED_N8N_WEBHOOK_URL, job_data, "job_failed")
+
             logger.exception("[worker] Job failed job_id=%s: %s", job.job_id, e)

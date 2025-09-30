@@ -1,6 +1,7 @@
 from pathlib import Path
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+import json
 
 from videomerge.models import OrchestrateStartRequest
 from videomerge.services.redis_client import get_redis
@@ -47,5 +48,30 @@ async def orchestrate_status(job_id: str):
         "voiceover_path": job.voiceover_path,
         "image_files": job.image_files,
         "comfy_prompt_ids": job.comfy_prompt_ids,
-        "final_video_path": job.final_video_path,
     })
+
+
+@router.get("/orchestrate/video/{job_id}")
+async def get_video_file(job_id: str):
+    """Serve the final video file for a completed job"""
+    redis = await get_redis()
+    job = await get_job(redis, job_id)
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if job.status != "completed":
+        raise HTTPException(status_code=400, detail=f"Job not completed (status: {job.status})")
+
+    if not job.output_dir or not job.final_video_path:
+        raise HTTPException(status_code=404, detail="Video file not found")
+
+    video_path = Path(job.final_video_path)
+    if not video_path.exists():
+        raise HTTPException(status_code=404, detail="Video file not found on disk")
+
+    return FileResponse(
+        path=video_path,
+        media_type="video/mp4",
+        filename=f"stitched_subtitled_{job_id}.mp4"
+    )

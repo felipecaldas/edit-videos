@@ -22,6 +22,7 @@ services:
       - LOG_LEVEL=DEBUG
       - UVICORN_LOG_LEVEL=debug
       - TIKTOK_VIDEOS_ARCHIVE_FOLDER=/data/shared/archived
+      - VIDEO_COMPLETED_N8N_WEBHOOK_URL=https://birthdaypartyai.app/n8n/webhook/07ec5d3d-59ed-4605-b655-fbb3579169cb
     restart: unless-stopped
     command: ["uvicorn", "videomerge.main:app", "--host", "0.0.0.0", "--port", "8000"]
     healthcheck:

@@ -49,3 +49,7 @@ WORKFLOW_I2V_PATH = Path(os.getenv(
     "WORKFLOW_I2V_PATH",
     str(Path(__file__).resolve().parent / "comfyui-workflows" / DEFAULT_I2V_WORKFLOW),
 ))
+
+# Webhook configuration for N8N notifications
+VIDEO_COMPLETED_N8N_WEBHOOK_URL = os.getenv("VIDEO_COMPLETED_N8N_WEBHOOK_URL", "https://your-n8n-instance.com/webhook/job-complete")
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")  # Optional secret for webhook verification
