@@ -11,8 +11,6 @@ services:
       - COMFYUI_POLL_INTERVAL_SECONDS=15
       - LOG_LEVEL=DEBUG
       - UVICORN_LOG_LEVEL=debug
-      - WORKFLOW_IMAGE_PATH=/app/videomerge/comfyui-workflows/qwen-image-fast.Olivio.json
-      - WORKFLOW_I2V_PATH=/app/videomerge/comfyui-workflows/I2V-Wan 2.2 Lightning.json
       - VIDEO_COMPLETED_N8N_WEBHOOK_URL=https://birthdaypartyai.app/n8n/webhook/07ec5d3d-59ed-4605-b655-fbb3579169cb
     ports:
       - "8086:8000"

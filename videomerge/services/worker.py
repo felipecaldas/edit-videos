@@ -79,6 +79,8 @@ class Worker:
             script = payload.get("script") or ""
             caption = payload.get("caption") or ""
             prompts = payload.get("prompts") or []
+            workflow_path_str = payload.get("workflow_path")
+
             if not run_id:
                 raise HTTPException(status_code=400, detail="run_id is required")
 
@@ -159,7 +161,8 @@ class Worker:
                         continue
                     try:
                         _t0_img = time.perf_counter()
-                        pid = submit_text_to_image(img_prompt)
+                        template_path = Path(workflow_path_str) if workflow_path_str else None
+                        pid = submit_text_to_image(img_prompt, template_path=template_path)
                         comfy_ids.append(pid)
                         filenames = poll_until_complete(
                             pid,
@@ -241,61 +244,66 @@ class Worker:
                 if videos_total:
                     logger.info("[progress] Videos %s", _progress_bar(0, videos_total))
 
-                for idx, item in enumerate(prompts):
-                    v_prompt = (item.get("video_prompt") or "").strip()
-                    if not v_prompt:
-                        continue
-                    # Use uploaded input filename if available; else fallback to original hint
-                    image_name = uploaded_image_by_index.get(idx) or image_by_index.get(idx)
-                    if not image_name:
-                        logger.warning(
-                            "[worker] No image found for prompt index %d; skipping video generation for this index.",
-                            idx + 1,
-                        )
-                        continue
-                    try:
-                        _t0_vid = time.perf_counter()
-                        v_pid = submit_image_to_video(
-                            v_prompt,
-                            image_name,
-                        )
-                        # Prefer the correct VideoCombine node based on workflow/environment
-                        # - RunPod uses Wan2.2_5B_I2V_60FPS.json where node "94" saves to Hunyuan/videos/30/vid (60fps)
-                        # - Local Lightning workflow uses node "82" as VideoCombine
-                        prefer_nodes = ["94"] if RUN_ENV == "runpod" else ["82"]
-                        v_outputs = poll_until_complete(
-                            v_pid,
-                            timeout_s=COMFYUI_TIMEOUT_SECONDS,
-                            poll_interval_s=COMFYUI_POLL_INTERVAL_SECONDS,
-                            prefer_node_ids=prefer_nodes,
-                        )
-                        # Filter to common video extensions to avoid re-downloading images here
-                        video_hints = [h for h in v_outputs if h.lower().endswith((".mp4", ".webm", ".mov", ".mkv"))]
-                        if not video_hints:
-                            # If ComfyUI marks outputs differently, attempt to download all and infer by extension
-                            video_hints = v_outputs
-                        saved = download_outputs(video_hints, run_dir)
-                        for p in saved:
-                            video_files.append(str(p))
-                        # Update job state incrementally
-                        job.video_files = video_files
-                        await set_job(redis, job)
-                        _t1_vid = time.perf_counter()
-                        logger.info(
-                            "[metrics] video_generation_seconds=%.3f prompt_index=%d image=%s outputs=%s run_id=%s job_id=%s",
-                            _t1_vid - _t0_vid,
-                            idx + 1,
-                            image_name,
-                            [p.name for p in saved],
-                            run_id,
-                            job.job_id,
-                        )
-                        if (item.get("video_prompt") or "").strip():
-                            videos_done += 1
-                            logger.info("[progress] Videos %s", _progress_bar(videos_done, videos_total))
-                    except Exception as e:
-                        logger.exception("[worker] Video generation failed for prompt %d (image %s): %s", idx + 1, image_name, e)
-                        # Continue with next prompt
+            for idx, item in enumerate(prompts):
+                v_prompt = (item.get("video_prompt") or "").strip()
+                if not v_prompt:
+                    continue
+                # Use uploaded input filename if available; else fallback to original hint
+                image_name = uploaded_image_by_index.get(idx) or image_by_index.get(idx)
+                if not image_name:
+                    logger.warning(
+                        "[worker] No image found for prompt index %d; skipping video generation for this index.",
+                        idx + 1,
+                    )
+                    continue
+                try:
+                    _t0_vid = time.perf_counter()
+                    v_pid = submit_image_to_video(
+                        v_prompt,
+                        image_name,
+                    )
+                    # Prefer the correct VideoCombine node based on workflow/environment
+                    # - RunPod uses Wan2.2_5B_I2V_60FPS.json where node "94" saves to Hunyuan/videos/30/vid (60fps)
+                    # - Local Lightning workflow uses node "82" as VideoCombine
+                    prefer_nodes = ["94"] if RUN_ENV == "runpod" else ["82"]
+                    v_outputs = poll_until_complete(
+                        v_pid,
+                        timeout_s=COMFYUI_TIMEOUT_SECONDS,
+                        poll_interval_s=COMFYUI_POLL_INTERVAL_SECONDS,
+                        prefer_node_ids=prefer_nodes,
+                    )
+                    # Filter to common video extensions to avoid re-downloading images here
+                    video_hints = [h for h in v_outputs if h.lower().endswith((".mp4", ".webm", ".mov", ".mkv"))]
+                    if not video_hints:
+                        # If ComfyUI marks outputs differently, attempt to download all and infer by extension
+                        video_hints = v_outputs
+                    saved = download_outputs(video_hints, run_dir)
+                    for p in saved:
+                        video_files.append(str(p))
+                    # Update job state incrementally
+                    job.video_files = video_files
+                    await set_job(redis, job)
+                    _t1_vid = time.perf_counter()
+                    logger.info(
+                        "[metrics] video_generation_seconds=%.3f prompt_index=%d image=%s outputs=%s run_id=%s job_id=%s",
+                        _t1_vid - _t0_vid,
+                        idx + 1,
+                        image_name,
+                        [p.name for p in saved],
+                        run_id,
+                        job.job_id,
+                    )
+                    if (item.get("video_prompt") or "").strip():
+                        videos_done += 1
+                        logger.info("[progress] Videos %s", _progress_bar(videos_done, videos_total))
+                except Exception as e:
+                    # Abort entire job and push to DLQ on any video-generation failure
+                    job.status = "failed"
+                    job.error = f"video_generation_failed at index {idx+1}: {e}"
+                    await set_job(redis, job)
+                    await push_dead_letter(redis, job, reason="video_generation_failed")
+                    logger.exception("[worker] Video generation failed for prompt %d: %s. Job aborted and sent to DLQ.", idx + 1, e)
+                    return
                 _t1_videos_total = time.perf_counter()
                 logger.info(
                     "[metrics] total_videos_generation_seconds=%.3f videos_count=%d run_id=%s job_id=%s",
@@ -304,53 +312,6 @@ class Worker:
                     run_id,
                     job.job_id,
                 )
-
-            # If no videos were generated via ComfyUI, discover local MP4s in run_dir
-            if not video_files:
-                from pathlib import Path as _P
-                candidates = [p for p in run_dir.iterdir() if p.is_file() and p.suffix.lower() == ".mp4" and p.name not in ("stitched_output.mp4", "stitched_subtitled.mp4")]
-                # Sort by common naming like vid_0001.mp4 or alphabetically as fallback
-                def _key(p: _P):
-                    stem = p.stem
-                    # extract trailing integer if present
-                    import re
-                    m = re.search(r"(\d+)$", stem)
-                    return (stem, int(m.group(1)) if m else -1)
-                candidates = sorted(candidates, key=_key)
-                video_files = [str(p) for p in candidates]
-                if video_files:
-                    logger.info("[worker] Discovered %d local mp4(s) in run_dir for stitching: %s", len(video_files), [Path(v).name for v in video_files])
-
-            # If an explicit concat list exists in run_dir/inputs.txt, honor its ordering
-            try:
-                concat_list_path = run_dir / "inputs.txt"
-                if concat_list_path.exists() and concat_list_path.stat().st_size > 0:
-                    ordered: list[str] = []
-                    for raw in concat_list_path.read_text(encoding="utf-8").splitlines():
-                        line = raw.strip()
-                        if not line:
-                            continue
-                        # Accept either ffmpeg concat syntax: file '/path/to.mp4' or plain path
-                        if line.lower().startswith("file "):
-                            # Remove leading file and surrounding quotes
-                            s = line[5:].strip()
-                            if s[:1] in {'"', "'"} and s[-1:] == s[:1]:
-                                s = s[1:-1]
-                            candidate = Path(s)
-                        else:
-                            candidate = Path(line)
-                        # Resolve relative paths against run_dir
-                        if not candidate.is_absolute():
-                            candidate = (run_dir / candidate).resolve()
-                        if candidate.exists() and candidate.suffix.lower() == ".mp4":
-                            ordered.append(str(candidate))
-                        else:
-                            logger.warning("[worker] inputs.txt entry not found or not mp4: %s", candidate)
-                    if ordered:
-                        video_files = ordered
-                        logger.info("[worker] Using ordering from inputs.txt (%d entries)", len(video_files))
-            except Exception as e:
-                logger.warning("[worker] Failed to parse inputs.txt: %s", e)
 
             # Final stitching with subtitles (always run if we have at least one video)
             final_video_path_str: str | None = None
@@ -388,9 +349,16 @@ class Worker:
                         job.job_id,
                     )
                 except Exception as e:
-                    logger.exception("[worker] Stitch with subtitles failed: %s", e)
+                    # Abort entire job if stitching/subtitles fail
+                    job.status = "failed"
+                    job.error = f"stitching_failed: {e}"
+                    await set_job(redis, job)
+                    await push_dead_letter(redis, job, reason="stitching_failed")
+                    logger.exception("[worker] Stitching/subtitles failed: %s. Job aborted and sent to DLQ.", e)
+                    return
 
             job.status = "completed"
+
             job.output_dir = str(run_dir)
             if audio_path and audio_path.exists():
                 job.voiceover_path = str(audio_path)
@@ -407,7 +375,7 @@ class Worker:
             if VIDEO_COMPLETED_N8N_WEBHOOK_URL and VIDEO_COMPLETED_N8N_WEBHOOK_URL != "https://your-n8n-instance.com/webhook/job-complete":
                 job_data = {
                     "job_id": job.job_id,
-                    "status": "completed",
+                    "status": job.status,  # Use actual job status (completed/failed)
                     "output_dir": str(run_dir),
                     "final_video_path": final_video_path_str,
                     "video_files": video_files,
@@ -415,7 +383,10 @@ class Worker:
                     "voiceover_path": str(audio_path) if audio_path and audio_path.exists() else None,
                     "run_id": run_id,
                 }
-                await webhook_manager.send_webhook(VIDEO_COMPLETED_N8N_WEBHOOK_URL, job_data, "job_completed")
+
+                # Send appropriate event type based on job status
+                event_type = "job_failed" if job.status == "failed" else "job_completed"
+                await webhook_manager.send_webhook(VIDEO_COMPLETED_N8N_WEBHOOK_URL, job_data, event_type)
 
             logger.info("[worker] Completed job_id=%s", job.job_id)
         except Exception as e:

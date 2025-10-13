@@ -42,3 +42,4 @@ class OrchestrateStartRequest(BaseModel):
     run_id: str
     prompts: List[PromptItem]
     enable_image_gen: Optional[bool] = None
+    image_style: Optional[str] = None

@@ -5,15 +5,13 @@ services:
       - RUN_ENV=runpod
       - DATA_SHARED_BASE=/data/shared
       - REDIS_URL=redis://192.168.68.52:8061/2
-      - COMFYUI_URL=https://zjtgkjric2s9bv-8188.proxy.runpod.net/api
+      - COMFYUI_URL=https://j99seg7iib5yke-8188.proxy.runpod.net/api
       - ENABLE_IMAGE_GEN=true
       - ENABLE_VOICEOVER_GEN=false
       - COMFYUI_TIMEOUT_SECONDS=600
       - COMFYUI_POLL_INTERVAL_SECONDS=40
       - LOG_LEVEL=DEBUG
       - UVICORN_LOG_LEVEL=debug
-      - WORKFLOW_IMAGE_PATH=/app/videomerge/comfyui-workflows/qwen-image-fast.Olivio.json
-      - WORKFLOW_I2V_PATH=/app/videomerge/comfyui-workflows/I2V-Wan 2.2 Lightning.json
       - VIDEO_COMPLETED_N8N_WEBHOOK_URL=https://birthdaypartyai.app/n8n/webhook/07ec5d3d-59ed-4605-b655-fbb3579169cb
     ports:
       - "8086:8000"

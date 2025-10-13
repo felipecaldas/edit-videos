@@ -7,6 +7,7 @@ from videomerge.models import OrchestrateStartRequest
 from videomerge.services.redis_client import get_redis
 from videomerge.services.queue import enqueue_job, get_job
 from videomerge.utils.logging import get_logger
+from videomerge.config import IMAGE_WORKFLOWS, WORKFLOWS_BASE_PATH
 
 router = APIRouter(prefix="", tags=["orchestrate"])
 logger = get_logger(__name__)
@@ -22,12 +23,23 @@ async def orchestrate_start(req: OrchestrateStartRequest):
     if not run_id:
         raise HTTPException(status_code=400, detail="run_id is required")
 
+    image_style = req.image_style or "default"
+    if image_style not in IMAGE_WORKFLOWS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid image style: '{image_style}'. Valid options are: {list(IMAGE_WORKFLOWS.keys())}"
+        )
+
+    workflow_filename = IMAGE_WORKFLOWS[image_style]
+    workflow_path = WORKFLOWS_BASE_PATH / workflow_filename
+
     payload = {
         "script": req.script,
         "caption": req.caption,
         "run_id": run_id,
         "prompts": [p.model_dump() for p in req.prompts],
         "enable_image_gen": req.enable_image_gen,
+        "workflow_path": str(workflow_path),
     }
     redis = await get_redis()
     job = await enqueue_job(redis, payload)

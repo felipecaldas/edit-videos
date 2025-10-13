@@ -33,17 +33,18 @@ COMFYUI_POLL_INTERVAL_SECONDS = float(os.getenv("COMFYUI_POLL_INTERVAL_SECONDS",
 # Environment indicator (e.g., "local" or "runpod"). Defaults to local.
 RUN_ENV = os.getenv("RUN_ENV", "local").lower()
 
-DEFAULT_IMAGE_WORKFLOW = (
-    "Wan2.2_Text-To-Image.json" if RUN_ENV == "runpod" else "qwen-image-fast.Olivio.json"
-)
-WORKFLOW_IMAGE_PATH = Path(os.getenv(
-    "WORKFLOW_IMAGE_PATH",
-    str(Path(__file__).resolve().parent / "comfyui-workflows" / DEFAULT_IMAGE_WORKFLOW),
-))
+# Mapping of image styles to their corresponding workflow files.
+IMAGE_WORKFLOWS = {
+    "default": "qwen-image-fast.Olivio.json",
+    "crayon_drawing": "crayon-drawing.json",
+}
+
+# The base path for the ComfyUI workflow files.
+WORKFLOWS_BASE_PATH = Path(__file__).resolve().parent / "comfyui-workflows"
 
 # Image-to-Video workflow template path
 DEFAULT_I2V_WORKFLOW = (
-    "Wan2.2_5B_I2V_60FPS.json" if RUN_ENV == "runpod" else "I2V-Wan 2.2 Lightning.json"
+    "I2V-Wan-2.2-Lightning-runpod.json" if RUN_ENV == "runpod" else "I2V-Wan-2.2-Lightning-local.json"
 )
 WORKFLOW_I2V_PATH = Path(os.getenv(
     "WORKFLOW_I2V_PATH",

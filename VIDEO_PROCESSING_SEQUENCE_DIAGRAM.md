@@ -27,29 +27,26 @@ sequenceDiagram
     end
 
     W->>R: Update Job status = "running"
-    W->>FS: Create run directory /data/shared/{run_id}
 
-    Note over W,C: 🤖 AI Content Generation
+    Note over W,C: 🤖 AI Content Generation (Fail-Fast)
     opt Generate Images (if needed)
         W->>C: Generate images from prompts
         C->>W: Return image filenames
-        W->>FS: Save images to run directory
-    end
-
-    opt Generate Voiceover (if enabled)
-        W->>FS: Save voiceover.mp3
+        Note over W: If any image fails → Job fails immediately
     end
 
     opt Generate Videos (if needed)
         W->>C: Generate videos from images + prompts
         C->>W: Return video filenames
-        W->>FS: Save videos to run directory
+        Note over W: If any video fails → Job fails immediately
     end
 
     Note over W,FS: 🎥 Video Post-Processing
-    W->>FS: Stitch videos with voiceover
-    W->>FS: Generate subtitles
-    W->>FS: Save stitched_subtitled.mp4
+    opt Stitching & Subtitles (if videos exist)
+        W->>FS: Stitch videos with voiceover
+        W->>FS: Generate subtitles
+        Note over W: If stitching fails → Job fails immediately
+    end
 
     Note over W,R: ✅ Job Completion & Notification
     W->>R: Update Job status = "completed"<br/>final_video_path = "/path/to/video"
@@ -96,6 +93,13 @@ sequenceDiagram
 Job Created  Worker Picks Up     Images/Videos/Voiceover  Stitching/Subtitles  Webhook Sent
    ↓             ↓                    ↓                        ↓                   ↓
 Redis Queue  Status Update       ComfyUI Processing       FFmpeg Processing   N8N Notified
+   ↓             ↓                    ↓                        ↓                   ↓
+   |             |                    |                        |                   |
+   |             |                    |                        |                   |
+   |             |                    |                        |                   |
+   ↓             ↓                    ↓                        ↓                   ↓
+   ✗ ←────────── ✗ ←──────────────── ✗ ←──────────────────── ✗ ←────────────── ✗
+   Fail Fast: Any step fails → Entire job fails immediately (no partial results)
 ```
 
 ## 🌐 Network Architecture

@@ -11,7 +11,6 @@ from videomerge.config import (
     COMFYUI_URL,
     COMFYUI_TIMEOUT_SECONDS,
     COMFYUI_POLL_INTERVAL_SECONDS,
-    WORKFLOW_IMAGE_PATH,
     WORKFLOW_I2V_PATH,
 )
 from videomerge.utils.logging import get_logger
@@ -138,12 +137,11 @@ def _remap_positive_references(workflow: Dict[str, Any], target_node_id: str) ->
             continue
 
 
-def submit_text_to_image(prompt_text: str, *, client_id: Optional[str] = None, template_path: Optional[Path] = None,
+def submit_text_to_image(prompt_text: str, *, template_path: Path, client_id: Optional[str] = None,
                          prompt_node_id: str = "6", prompt_field: str = "text") -> str:
     """Submit a ComfyUI workflow for text->image and return the prompt_id."""
     client_id = client_id or str(uuid.uuid4())
-    tpl_path = template_path or WORKFLOW_IMAGE_PATH
-    workflow = _load_workflow_template(tpl_path)
+    workflow = _load_workflow_template(template_path)
 
     # Prefer explicit node id; if absent, fall back to meta-based lookup.
     target_nid = prompt_node_id if str(prompt_node_id) in workflow else None
@@ -329,11 +327,11 @@ def poll_until_complete(
     raise TimeoutError(f"Timed out waiting for ComfyUI results for {prompt_id}. Last error: {last_error}")
 
 
-def generate_images_for_prompt(text_prompt: str) -> List[str]:
+def generate_images_for_prompt(text_prompt: str, template_path: Path) -> List[str]:
     """High-level helper: submit text prompt, poll until complete, and return filenames.
     Does not download images; only collects filenames/subfolder hints for later steps.
     """
-    pid = submit_text_to_image(text_prompt)
+    pid = submit_text_to_image(text_prompt, template_path=template_path)
     return poll_until_complete(
         pid,
         timeout_s=COMFYUI_TIMEOUT_SECONDS,
