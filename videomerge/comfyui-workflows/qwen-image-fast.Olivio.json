@@ -31,7 +31,7 @@
   },
   "6": {
     "inputs": {
-      "text": "Cinematic wide shot, two distinct landmasses (stylized Brazil and Africa) depicted as puzzle pieces on a deep blue ocean, just about to connect. Soft, ethereal lighting, gradient from deep ocean blues to warm land tones. Photorealistic, 4K, professional photography.",
+      "text": "{{ POSITIVE_PROMPT }}",
       "clip": [
         "73",
         0

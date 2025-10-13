@@ -11,27 +11,16 @@ from videomerge.config import (
     COMFYUI_URL,
     COMFYUI_TIMEOUT_SECONDS,
     COMFYUI_POLL_INTERVAL_SECONDS,
-    WORKFLOW_I2V_PATH,
 )
 from videomerge.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
 
-def _load_workflow_template(path: Path) -> Dict[str, Any]:
-    """Load a workflow JSON.
-
-    Supports two shapes:
-    1) Flat: { "<node_id>": { ... }, ... }
-    2) Wrapped: { "client_id": "...", "prompt": { "<node_id>": { ... } } }
-
-    Always returns the nodes dictionary (shape 1).
-    """
+def _load_workflow_template(path: Path) -> str:
+    """Load a workflow JSON template as a raw string."""
     with path.open("r", encoding="utf-8") as f:
-        data = json.load(f)
-    if isinstance(data, dict) and isinstance(data.get("prompt"), dict):
-        return data["prompt"]
-    return data
+        return f.read()
 
 
 def _default_headers() -> Dict[str, str]:
@@ -88,86 +77,36 @@ def _warn_if_bad_dimensions(workflow: Dict[str, Any]) -> None:
         pass
 
 
-def _find_node_id_by_meta(nodes: Dict[str, Any], *, class_type: str, title_equals: str) -> Optional[str]:
-    """Find a node id by matching class_type and _meta.title (case-insensitive).
-
-    Returns the first matching node id, or None if not found.
-    """
-    target_title = (title_equals or "").strip().lower()
-    for nid, node in nodes.items():
-        try:
-            if node.get("class_type") != class_type:
-                continue
-            meta = node.get("_meta") or {}
-            title = (meta.get("title") or "").strip().lower()
-            if title == target_title:
-                return nid
-        except Exception:
-            continue
-    return None
-
-
-def _inject_prompt(workflow: Dict[str, Any], node_id: str, field: str, text: str) -> None:
-    node = workflow.get(node_id)
-    if not node or "inputs" not in node:
-        raise ValueError(f"Workflow missing node {node_id} or inputs")
-    node["inputs"][field] = text
-
-
-def _remap_positive_references(workflow: Dict[str, Any], target_node_id: str) -> None:
-    """Ensure any 'positive' inputs in nodes reference the given target node id.
-
-    Some templates may reference a non-existent id (e.g., '227') even though the
-    Positive Prompt node exists under a different id (e.g., '6'). This normalizes
-    those references in-memory before submitting to ComfyUI.
-    """
-    for nid, node in workflow.items():
-        try:
-            inputs = node.get("inputs")
-            if not isinstance(inputs, dict):
-                continue
-            pos = inputs.get("positive")
-            if isinstance(pos, list) and len(pos) >= 2:
-                ref_id = str(pos[0])
-                if ref_id != str(target_node_id):
-                    # If the referenced id does not exist in the workflow, remap it
-                    if ref_id not in workflow:
-                        inputs["positive"][0] = str(target_node_id)
-        except Exception:
-            continue
-
-
-def submit_text_to_image(prompt_text: str, *, template_path: Path, client_id: Optional[str] = None,
-                         prompt_node_id: str = "6", prompt_field: str = "text") -> str:
+def submit_text_to_image(prompt_text: str, *, template_path: Path, client_id: Optional[str] = None) -> str:
     """Submit a ComfyUI workflow for text->image and return the prompt_id."""
     client_id = client_id or str(uuid.uuid4())
-    workflow = _load_workflow_template(template_path)
-
-    # Prefer explicit node id; if absent, fall back to meta-based lookup.
-    target_nid = prompt_node_id if str(prompt_node_id) in workflow else None
-    if not target_nid:
-        auto_nid = _find_node_id_by_meta(
-            workflow, class_type="CLIPTextEncode", title_equals="Positive Prompt"
+    
+    # Load the template as a string and validate that the placeholder exists
+    workflow_str = _load_workflow_template(template_path)
+    if "{{ POSITIVE_PROMPT }}" not in workflow_str:
+        raise ValueError(
+            f"Workflow template '{template_path.name}' is missing the '{{ POSITIVE_PROMPT }}' placeholder."
         )
-        if not auto_nid:
-            # As a last resort, keep legacy behavior to raise helpful error with context
-            raise ValueError(
-                "Could not locate Positive Prompt node. Tried id='{}' and class_type='CLIPTextEncode' with title='Positive Prompt'"
-                .format(prompt_node_id)
-            )
-        target_nid = auto_nid
+    
+    # Escape backslashes and quotes in the prompt text before injecting it into the JSON string
+    escaped_prompt = json.dumps(prompt_text)[1:-1] # json.dumps wraps with quotes, so we strip them
+    final_workflow_str = workflow_str.replace("{{ POSITIVE_PROMPT }}", escaped_prompt)
+    
+    # Parse the final string into a JSON object
+    try:
+        workflow_json = json.loads(final_workflow_str)
+    except json.JSONDecodeError as e:
+        logger.error("[comfyui] Failed to parse workflow JSON after prompt injection: %s", e)
+        raise ValueError(f"Failed to parse workflow JSON: {e}")
 
-    _inject_prompt(workflow, target_nid, prompt_field, prompt_text)
-    before_keys = list(workflow.keys())[:5]
-    _remap_positive_references(workflow, str(target_nid))
-    logger.debug(
-        "[comfyui] T2I using prompt node id=%s; sample keys=%s",
-        target_nid,
-        before_keys,
-    )
+    # The workflow might be wrapped in a 'prompt' key, or it might be the root object
+    if isinstance(workflow_json, dict) and isinstance(workflow_json.get("prompt"), dict):
+        workflow_payload = workflow_json["prompt"]
+    else:
+        workflow_payload = workflow_json
 
     url = f"{COMFYUI_URL.rstrip('/')}/prompt"
-    payload = {"prompt": workflow, "client_id": client_id}
+    payload = {"prompt": workflow_payload, "client_id": client_id}
     logger.info("[comfyui] Submitting text->image prompt to %s", url)
     resp = requests.post(url, json=payload, timeout=30, headers=_default_headers())
     if not resp.ok:
@@ -343,8 +282,8 @@ def submit_image_to_video(
     prompt_text: str,
     image_filename: str,
     *,
+    template_path: Path,
     client_id: Optional[str] = None,
-    template_path: Optional[Path] = None,
     prompt_node_id: str = "6",
     prompt_field: str = "text",
     image_node_id: str = "52",
@@ -355,8 +294,7 @@ def submit_image_to_video(
     Injects the prompt into node 6 text, and sets the LoadImage node (52) input image filename.
     """
     client_id = client_id or str(uuid.uuid4())
-    tpl_path = template_path or WORKFLOW_I2V_PATH
-    workflow = _load_workflow_template(tpl_path)
+    workflow = _load_workflow_template(template_path)
 
     # Positive prompt node detection
     text_nid = prompt_node_id if str(prompt_node_id) in workflow else None

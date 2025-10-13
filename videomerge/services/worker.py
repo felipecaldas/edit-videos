@@ -6,7 +6,7 @@ from typing import Any, Dict
 
 from fastapi import HTTPException
 
-from videomerge.config import DATA_SHARED_BASE, ENABLE_IMAGE_GEN, COMFYUI_TIMEOUT_SECONDS, COMFYUI_POLL_INTERVAL_SECONDS, ENABLE_VOICEOVER_GEN, RUN_ENV, VIDEO_COMPLETED_N8N_WEBHOOK_URL
+from videomerge.config import DATA_SHARED_BASE, ENABLE_IMAGE_GEN, COMFYUI_TIMEOUT_SECONDS, COMFYUI_POLL_INTERVAL_SECONDS, ENABLE_VOICEOVER_GEN, RUN_ENV, VIDEO_COMPLETED_N8N_WEBHOOK_URL, WORKFLOW_I2V_PATH
 from videomerge.services.redis_client import get_redis
 from videomerge.services.queue import QUEUE_KEY, get_job, set_job, Job, push_dead_letter
 from videomerge.services.webhook_manager import webhook_manager
@@ -261,6 +261,7 @@ class Worker:
                     v_pid = submit_image_to_video(
                         v_prompt,
                         image_name,
+                        template_path=WORKFLOW_I2V_PATH,
                     )
                     # Prefer the correct VideoCombine node based on workflow/environment
                     # - RunPod uses Wan2.2_5B_I2V_60FPS.json where node "94" saves to Hunyuan/videos/30/vid (60fps)

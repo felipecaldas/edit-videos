@@ -23,7 +23,7 @@
   },
   "3": {
     "inputs": {
-      "text": "Atmospheric medium shot of empty metro car interior at night, harsh overhead fluorescent strips, rows of empty plastic seats in blue and grey, scratched windows reflecting distorted lights, Jim Lee perspective with strong vanishing point down the car, lonely desolate mood, photorealistic worn textures, cold color grading, cinematic 4K quality\n\nmasterpiece, best quality, amazing quality, very aesthetic, absurdres  ",
+      "text": "{{ POSITIVE_PROMPT }} \n masterpiece, best quality, amazing quality, very aesthetic, absurdres ",
       "clip": [
         "15",
         1
