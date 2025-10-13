@@ -284,62 +284,41 @@ def submit_image_to_video(
     *,
     template_path: Path,
     client_id: Optional[str] = None,
-    prompt_node_id: str = "6",
-    prompt_field: str = "text",
-    image_node_id: str = "52",
-    image_field: str = "image",
 ) -> str:
-    """Submit a ComfyUI image->video workflow and return the prompt_id.
-
-    Injects the prompt into node 6 text, and sets the LoadImage node (52) input image filename.
-    """
+    """Submit a ComfyUI image->video workflow and return the prompt_id."""
     client_id = client_id or str(uuid.uuid4())
-    workflow = _load_workflow_template(template_path)
+    
+    # Load the template as a string and validate placeholders
+    workflow_str = _load_workflow_template(template_path)
+    if "{{ VIDEO_PROMPT }}" not in workflow_str:
+        raise ValueError(f"Workflow template '{template_path.name}' is missing '{{ VIDEO_PROMPT }}' placeholder.")
+    if "{{ INPUT_IMAGE }}" not in workflow_str:
+        raise ValueError(f"Workflow template '{template_path.name}' is missing '{{ INPUT_IMAGE }}' placeholder.")
 
-    # Positive prompt node detection
-    text_nid = prompt_node_id if str(prompt_node_id) in workflow else None
-    if not text_nid:
-        text_nid = _find_node_id_by_meta(
-            workflow, class_type="CLIPTextEncode", title_equals="Positive Prompt"
-        )
-        if not text_nid:
-            raise ValueError(
-                "Could not locate Positive Prompt node for I2V. Tried id='{}' and meta lookup.".format(prompt_node_id)
-            )
-    _inject_prompt(workflow, text_nid, prompt_field, prompt_text)
-    before_keys = list(workflow.keys())[:5]
-    _remap_positive_references(workflow, str(text_nid))
-    logger.debug(
-        "[comfyui] I2V using prompt node id=%s; sample keys=%s",
-        text_nid,
-        before_keys,
-    )
-    # Pre-flight diagnostics for common issues (e.g., non-64-multiple dimensions)
-    _warn_if_bad_dimensions(workflow)
+    # Escape and replace placeholders
+    escaped_prompt = json.dumps(prompt_text)[1:-1]
+    escaped_image = json.dumps(image_filename)[1:-1]
+    final_workflow_str = workflow_str.replace("{{ VIDEO_PROMPT }}", escaped_prompt)
+    final_workflow_str = final_workflow_str.replace("{{ INPUT_IMAGE }}", escaped_image)
 
-    # LoadImage node detection
-    img_nid = image_node_id if str(image_node_id) in workflow else None
-    if not img_nid:
-        img_nid = _find_node_id_by_meta(
-            workflow, class_type="LoadImage", title_equals="Load Image"
-        )
-        if not img_nid:
-            raise ValueError(
-                "Could not locate Load Image node. Tried id='{}' and meta lookup.".format(image_node_id)
-            )
-    node = workflow.get(img_nid)
-    if not node or "inputs" not in node:
-        raise ValueError(f"Workflow missing node {img_nid} or inputs")
-    node["inputs"][image_field] = image_filename
-    logger.debug(
-        "[comfyui] I2V mapped image into node id=%s field=%s value=%s",
-        img_nid,
-        image_field,
-        image_filename,
-    )
+    # Parse the final string into a JSON object
+    try:
+        workflow_json = json.loads(final_workflow_str)
+    except json.JSONDecodeError as e:
+        logger.error("[comfyui] Failed to parse I2V workflow JSON after injection: %s", e)
+        raise ValueError(f"Failed to parse I2V workflow JSON: {e}")
+
+    # The workflow might be wrapped in a 'prompt' key, or it might be the root object
+    if isinstance(workflow_json, dict) and isinstance(workflow_json.get("prompt"), dict):
+        workflow_payload = workflow_json["prompt"]
+    else:
+        workflow_payload = workflow_json
+
+    # Dimension check (optional, can be done on the parsed payload)
+    _warn_if_bad_dimensions(workflow_payload)
 
     url = f"{COMFYUI_URL.rstrip('/')}/prompt"
-    payload = {"prompt": workflow, "client_id": client_id}
+    payload = {"prompt": workflow_payload, "client_id": client_id}
     logger.info("[comfyui] Submitting image->video prompt to %s (image=%s)", url, image_filename)
     resp = requests.post(url, json=payload, timeout=30, headers=_default_headers())
     # If ComfyUI rejects the workflow (400), log the response body for diagnostics

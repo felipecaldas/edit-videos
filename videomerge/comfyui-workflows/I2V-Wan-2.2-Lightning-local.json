@@ -1,7 +1,7 @@
 {
   "6": {
     "inputs": {
-      "text": "Slow, deliberate animation of the two landmasses gently moving closer and connecting, with a subtle ripple effect on the surrounding water. Camera slowly zooms out, revealing the vastness. Smooth motion, cinematic, 4K",
+      "text": "{{ VIDEO_PROMPT }}",
       "clip": [
         "84",
         0
@@ -80,7 +80,7 @@
   },
   "52": {
     "inputs": {
-      "image": "ComfyUI_00003_.png"
+      "image": "{{ INPUT_IMAGE }}"
     },
     "class_type": "LoadImage",
     "_meta": {
