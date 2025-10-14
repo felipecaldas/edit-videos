@@ -85,6 +85,21 @@ This document outlines the plan to push application metrics to a time-series bac
 - [ ] Create Grafana dashboard (JSON) with panels for key metrics.
 - [ ] Add alert rules (Prometheus alertmanager or Grafana alerts).
 
+# Service Discovery for ComfyUI URL
+
+This task outlines the plan to dynamically manage the ComfyUI URL to avoid manual updates and service restarts.
+
+## Implementation Tasks
+
+- [ ] **Prerequisite**: Expose the Redis server to be accessible by both the `video-merger` service and the ComfyUI pod.
+- [ ] **ComfyUI Startup Script**: Create a script that runs when the ComfyUI pod starts. This script will:
+  - Get the pod's unique, dynamic URL.
+  - Write this URL to a specific key in Redis (e.g., `SET current_comfyui_url "<the-dynamic-url>"`).
+- [ ] **Refactor `video-merger`**: Modify the application logic in `videomerge/config.py` or `videomerge/services/comfyui.py` to:
+  - On startup, or on a regular interval, fetch the `current_comfyui_url` value from Redis.
+  - Use this fetched URL for all API calls to ComfyUI.
+  - Implement a caching strategy (e.g., cache the URL for 60 seconds) to avoid querying Redis on every single request.
+
 ## Future Enhancements
 - OpenTelemetry traces for cross-step correlation.
 - Distinguish timeouts vs other errors in metrics labels.

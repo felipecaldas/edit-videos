@@ -151,7 +151,7 @@ This service dynamically selects ComfyUI workflow JSONs based on the `RUN_ENV` e
   - Image-to-Video default: `videomerge/comfyui-workflows/Wan2.2_5B_I2V_60FPS.json`
 
 - When `RUN_ENV` is anything else (default is `local`):
-  - Text-to-Image default: `videomerge/comfyui-workflows/qwen-image-fast.Olivio.json`
+  - Text-to-Image default: `videomerge/comfyui-workflows/qwen-image-fast-runpod.json`
   - Image-to-Video default: `videomerge/comfyui-workflows/I2V-Wan 2.2 Lightning.json`
 
 You may override these defaults via environment variables:

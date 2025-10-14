@@ -22,7 +22,7 @@ ENABLE_VOICEOVER_GEN = os.getenv("ENABLE_VOICEOVER_GEN", "false").lower() in {"1
 SUBTITLE_CONFIG_PATH = Path(os.getenv("SUBTITLE_CONFIG_PATH", "subtitle_config.json"))
 
 # Redis connection string (use database 0 by default)
-REDIS_URL = os.getenv("REDIS_URL", "redis://192.168.68.51:8061/0")
+REDIS_URL = os.getenv("REDIS_URL", "redis://192.168.68.51:8061/2")
 
 # ComfyUI configuration
 COMFYUI_URL = os.getenv("COMFYUI_URL", "http://192.168.68.51:8188")
@@ -33,11 +33,20 @@ COMFYUI_POLL_INTERVAL_SECONDS = float(os.getenv("COMFYUI_POLL_INTERVAL_SECONDS",
 # Environment indicator (e.g., "local" or "runpod"). Defaults to local.
 RUN_ENV = os.getenv("RUN_ENV", "local").lower()
 
-# Mapping of image styles to their corresponding workflow files.
-IMAGE_WORKFLOWS = {
-    "default": "qwen-image-fast.Olivio.json",
-    "crayon_drawing": "crayon-drawing.json",
-}
+# Mapping of image styles to their corresponding workflow files (environment-aware).
+def get_image_workflows():
+    base_workflows = {
+        "crayon_drawing": "crayon-drawing.json",
+    }
+    
+    if RUN_ENV == "runpod":
+        base_workflows["default"] = "qwen-image-fast-runpod.json"
+    else:
+        base_workflows["default"] = "qwen-image-fast-local.json"
+    
+    return base_workflows
+
+IMAGE_WORKFLOWS = get_image_workflows()
 
 # The base path for the ComfyUI workflow files.
 WORKFLOWS_BASE_PATH = Path(__file__).resolve().parent / "comfyui-workflows"

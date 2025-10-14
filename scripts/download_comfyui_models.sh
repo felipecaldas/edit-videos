@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Download all models required by the following ComfyUI workflows:
 # - videomerge/comfyui-workflows/I2V-Wan 2.2 Lightning.json
-# - videomerge/comfyui-workflows/qwen-image-fast.Olivio.json
+# - videomerge/comfyui-workflows/qwen-image-fast-runpod.json
 #
 # Usage:
 #   ./scripts/download_comfyui_models.sh [COMFYUI_DIR]

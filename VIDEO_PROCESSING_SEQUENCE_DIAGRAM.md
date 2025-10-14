@@ -28,34 +28,33 @@ sequenceDiagram
 
     W->>R: Update Job status = "running"
 
-    Note over W,C: 🤖 AI Content Generation (Fail-Fast)
-    opt Generate Images (if needed)
-        W->>C: Generate images from prompts
-        C->>W: Return image filenames
-        Note over W: If any image fails → Job fails immediately
+    alt Job Success
+        Note over W,C: 🤖 AI Content Generation
+        opt Generate Images (if needed)
+            W->>C: Generate images from prompts
+            C->>W: Return image filenames
+        end
+        opt Generate Videos (if needed)
+            W->>C: Generate videos from images + prompts
+            C->>W: Return video filenames
+        end
+
+        Note over W,FS: 🎞️ Final Processing
+        W->>FS: Stitch videos, add voiceover, burn subtitles
+        W->>R: Update Job status = "completed", final_video_path = "..."
+        W->>N: POST /webhook/job-completed<br/>{job_id, status: "completed", ...}
+
+    else Job Failure
+        Note over W: Any step from generation or processing can fail
+        W->>R: Update Job status = "failed", error = "..."
+        W->>R: RPUSH "video_orchestrator:dead_letter", {job_id, payload, error}
+        W->>N: POST /webhook/job-failed<br/>{job_id, status: "failed", error}
     end
 
-    opt Generate Videos (if needed)
-        W->>C: Generate videos from images + prompts
-        C->>W: Return video filenames
-        Note over W: If any video fails → Job fails immediately
-    end
+    Note over N,F: 📢 Completion/Failure Notification to Frontend
+    N->>F: POST /frontend/webhook/job-update<br/>{job_id, status}
 
-    Note over W,FS: 🎥 Video Post-Processing
-    opt Stitching & Subtitles (if videos exist)
-        W->>FS: Stitch videos with voiceover
-        W->>FS: Generate subtitles
-        Note over W: If stitching fails → Job fails immediately
-    end
-
-    Note over W,R: ✅ Job Completion & Notification
-    W->>R: Update Job status = "completed"<br/>final_video_path = "/path/to/video"
-    W->>N: POST {VIDEO_COMPLETED_N8N_WEBHOOK_URL}<br/>Payload: {event: "job_completed"|"job_failed", data: {...}}
-
-    Note over N,F: 📢 Completion Notification
-    N->>F: POST /frontend/webhook/job-complete<br/>OR Update status for polling
-
-    Note over F,B: 📥 Video Retrieval
+    Note over F,B: 📥 Video Retrieval (on success)
     F->>B: GET /orchestrate/video/abc-123
     B->>R: Check job status & path
     B->>FS: Read /data/shared/{run_id}/stitched_subtitled.mp4
