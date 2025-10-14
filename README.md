@@ -182,3 +182,44 @@ If you run the healthcheck from outside (host), use 8086.
 
 ## License
 MIT (or your preferred license)
+
+# Orchestration API Endpoint: /orchestrate/start
+
+The primary entry point for the video generation service is the `POST /orchestrate/start` endpoint. It is designed to be called by an external system (like n8n) to initiate a video generation job.
+
+### Description
+
+This endpoint accepts a JSON payload with all the necessary information to create a video. It validates the request, creates a unique run directory, and enqueues a job for a background worker to process. It returns immediately with a `job_id`.
+
+### Request Body
+
+```json
+{
+  "script": "The text for the voiceover.",
+  "prompts": [
+    {
+      "image_prompt": "A prompt for the first image.",
+      "video_prompt": "A prompt for the video generation."
+    },
+    {
+      "image_prompt": "A prompt for the second image.",
+      "video_prompt": "A prompt for the video generation."
+    }
+  ],
+  "image_style": "crayon_drawing",
+  "run_id": "unique-run-identifier"
+}
+```
+- **`script`**: The full text for the voiceover audio.
+- **`prompts`**: A list of objects, each containing prompts for generating an image and its corresponding video segment.
+- **`image_style`**: (Optional) A string specifying which ComfyUI workflow to use for text-to-image generation (e.g., `"crayon_drawing"`, `"default"`).
+- **`run_id`**: A unique identifier for this specific job run.
+
+### Workflow
+
+1.  **Enqueue Job**: The endpoint creates a job and pushes it to a Redis queue.
+2.  **Worker Processing**: A background worker picks up the job.
+3.  **Voiceover**: The worker generates the voiceover from the script (or finds an existing one).
+4.  **Image Generation**: For each item in the `prompts` array, the worker calls the ComfyUI service to generate an image using the specified `image_style` workflow.
+5.  **Video Generation**: For each generated image, the worker calls the ComfyUI service again, this time using the appropriate image-to-video workflow (`local` or `runpod` version) to create a video segment.
+6.  **Completion**: Once all video segments are created, the job is marked as complete, and a webhook is called to notify the originating system.
