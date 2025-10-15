@@ -76,12 +76,12 @@ This document outlines the plan to push application metrics to a time-series bac
   - Add Prometheus service if needed, or configure external Prometheus.
 
 ## Implementation Tasks
-- [ ] Add metrics module (`videomerge/services/metrics.py`) and initialize Prometheus client.
-- [ ] Expose `/metrics` endpoint (e.g., `prometheus_client.make_asgi_app()` or FastAPI middleware/route).
-- [ ] Define histograms/counters/gauges per the Key Metrics.
-- [ ] Instrument worker steps (voiceover, per-image, totals, job lifecycle).
-- [ ] Instrument ComfyUI HTTP client.
-- [ ] Add background task to sample Redis `LLEN` for `queue_depth`.
+- [x] Add metrics module (`videomerge/services/metrics.py`) and initialize Prometheus client.
+- [x] Expose `/metrics` endpoint (e.g., `prometheus_client.make_asgi_app()` or FastAPI middleware/route).
+- [x] Define histograms/counters/gauges per the Key Metrics.
+- [x] Instrument worker steps (voiceover, per-image, totals, job lifecycle).
+- [x] Instrument ComfyUI HTTP client.
+- [x] Add background task to sample Redis `LLEN` for `queue_depth`.
 - [ ] Create Grafana dashboard (JSON) with panels for key metrics.
 - [ ] Add alert rules (Prometheus alertmanager or Grafana alerts).
 
