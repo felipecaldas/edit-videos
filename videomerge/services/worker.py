@@ -24,6 +24,25 @@ from videomerge.services.stitcher import (
     concat_videos_with_voiceover,
     generate_and_burn_subtitles,
 )
+from videomerge.services.metrics import (
+    voiceover_generation_seconds,
+    voiceover_failures_total,
+    image_generation_seconds,
+    image_generation_failures_total,
+    total_images_generation_seconds,
+    images_generated_total,
+    video_generation_seconds,
+    total_videos_generation_seconds,
+    videos_generated_total,
+    stitch_seconds,
+    subtitles_seconds,
+    jobs_enqueued_total,
+    jobs_started_total,
+    jobs_completed_total,
+    jobs_failed_total,
+    job_total_seconds,
+    worker_active,
+)
 
 logger = get_logger(__name__)
 
@@ -69,9 +88,17 @@ class Worker:
     async def _process_job(self, job: Job):
         redis = await get_redis()
         logger.info("[worker] Processing job_id=%s", job.job_id)
+
+        # Set worker as active
+        worker_active.set(1)
+
         job.status = "running"
         job.error = None
         await set_job(redis, job)
+
+        # Track job start time for total duration metric
+        job_start_time = time.perf_counter()
+        jobs_started_total.inc()
 
         try:
             payload: Dict[str, Any] = job.payload
@@ -104,15 +131,18 @@ class Worker:
             audio_path: Path | None = None
             if ENABLE_VOICEOVER_GEN:
                 audio_path = run_dir / "voiceover.mp3"
-                _t0_vo = time.perf_counter()
-                synthesize_voice(script, audio_path)
-                _t1_vo = time.perf_counter()
-                logger.info(
-                    "[metrics] voiceover_generation_seconds=%.3f run_id=%s job_id=%s",
-                    _t1_vo - _t0_vo,
-                    run_id,
-                    job.job_id,
-                )
+                try:
+                    with voiceover_generation_seconds.time():
+                        synthesize_voice(script, audio_path)
+                    logger.info(
+                        "[worker] Voiceover generated successfully run_id=%s job_id=%s",
+                        run_id,
+                        job.job_id,
+                    )
+                except Exception as e:
+                    voiceover_failures_total.labels(reason="generation_error").inc()
+                    logger.exception("[worker] Voiceover generation failed for run_id=%s job_id=%s: %s", run_id, job.job_id, e)
+                    raise
             else:
                 # If generation is disabled, still try to pick up a pre-existing voiceover in the run folder
                 logger.info("[worker] Voiceover generation disabled by ENABLE_VOICEOVER_GEN. Looking for existing audio in run_dir.")
@@ -160,18 +190,23 @@ class Worker:
                     if not img_prompt:
                         continue
                     try:
-                        _t0_img = time.perf_counter()
-                        template_path = Path(workflow_path_str) if workflow_path_str else None
-                        pid = submit_text_to_image(img_prompt, template_path=template_path)
-                        comfy_ids.append(pid)
-                        filenames = poll_until_complete(
-                            pid,
-                            timeout_s=COMFYUI_TIMEOUT_SECONDS,
-                            poll_interval_s=COMFYUI_POLL_INTERVAL_SECONDS,
-                        )
+                        # Get workflow name for metrics
+                        workflow_name = Path(workflow_path_str).stem if workflow_path_str else "unknown"
+
+                        with image_generation_seconds.labels(step="text2image", workflow=workflow_name).time():
+                            template_path = Path(workflow_path_str) if workflow_path_str else None
+                            pid = submit_text_to_image(img_prompt, template_path=template_path)
+                            comfy_ids.append(pid)
+                            filenames = poll_until_complete(
+                                pid,
+                                timeout_s=COMFYUI_TIMEOUT_SECONDS,
+                                poll_interval_s=COMFYUI_POLL_INTERVAL_SECONDS,
+                            )
+
                         # Use the first filename for strict alignment; warn if multiple
                         if not filenames:
                             logger.warning("[worker] No image outputs for prompt index %d", idx + 1)
+                            image_generation_failures_total.labels(reason="no_output", workflow=workflow_name).inc()
                         else:
                             if len(filenames) > 1:
                                 logger.warning(
@@ -181,23 +216,18 @@ class Worker:
                                 )
                             image_by_index[idx] = filenames[0]
                             image_files.append(filenames[0])
+                            images_generated_total.labels(workflow=workflow_name).inc()
+
                         # update job state incrementally
                         job.image_files = image_files
                         job.comfy_prompt_ids = comfy_ids
                         await set_job(redis, job)
-                        _t1_img = time.perf_counter()
-                        logger.info(
-                            "[metrics] image_generation_seconds=%.3f prompt_index=%d filenames=%s run_id=%s job_id=%s",
-                            _t1_img - _t0_img,
-                            idx + 1,
-                            filenames,
-                            run_id,
-                            job.job_id,
-                        )
+
                         images_done += 1
                         logger.info("[progress] Images %s", _progress_bar(images_done, images_total))
                     except Exception as e:
                         # Abort entire job and push to DLQ on any image-generation failure
+                        image_generation_failures_total.labels(reason="exception", workflow=workflow_name if workflow_path_str else "unknown").inc()
                         job.status = "failed"
                         job.error = f"image_generation_failed at index {idx+1}: {e}"
                         await set_job(redis, job)
@@ -205,13 +235,7 @@ class Worker:
                         logger.exception("[worker] Image generation failed for prompt %d: %s. Job aborted and sent to DLQ.", idx + 1, e)
                         return
                 _t1_imgs_total = time.perf_counter()
-                logger.info(
-                    "[metrics] total_images_generation_seconds=%.3f images_count=%d run_id=%s job_id=%s",
-                    _t1_imgs_total - _t0_imgs_total,
-                    len(image_files),
-                    run_id,
-                    job.job_id,
-                )
+                total_images_generation_seconds.observe(_t1_imgs_total - _t0_imgs_total)
 
             # Before I2V: ensure images exist in ComfyUI input; fetch from output and upload
             if image_by_index:
@@ -285,15 +309,14 @@ class Worker:
                     job.video_files = video_files
                     await set_job(redis, job)
                     _t1_vid = time.perf_counter()
-                    logger.info(
-                        "[metrics] video_generation_seconds=%.3f prompt_index=%d image=%s outputs=%s run_id=%s job_id=%s",
-                        _t1_vid - _t0_vid,
-                        idx + 1,
-                        image_name,
-                        [p.name for p in saved],
-                        run_id,
-                        job.job_id,
-                    )
+
+                    # Get workflow name for metrics
+                    workflow_name = WORKFLOW_I2V_PATH.stem if WORKFLOW_I2V_PATH else "unknown"
+                    with video_generation_seconds.labels(workflow=workflow_name).time():
+                        pass  # Timer context already handled above
+
+                    videos_generated_total.labels(workflow=workflow_name).inc()
+
                     if (item.get("video_prompt") or "").strip():
                         videos_done += 1
                         logger.info("[progress] Videos %s", _progress_bar(videos_done, videos_total))
@@ -306,13 +329,7 @@ class Worker:
                     logger.exception("[worker] Video generation failed for prompt %d: %s. Job aborted and sent to DLQ.", idx + 1, e)
                     return
                 _t1_videos_total = time.perf_counter()
-                logger.info(
-                    "[metrics] total_videos_generation_seconds=%.3f videos_count=%d run_id=%s job_id=%s",
-                    _t1_videos_total - _t0_videos_total,
-                    len(video_files),
-                    run_id,
-                    job.job_id,
-                )
+                total_videos_generation_seconds.observe(_t1_videos_total - _t0_videos_total)
 
             # Final stitching with subtitles (always run if we have at least one video)
             final_video_path_str: str | None = None
@@ -342,13 +359,10 @@ class Worker:
                     _t1_subs = time.perf_counter()
 
                     final_video_path_str = str(final_path)
-                    logger.info(
-                        "[metrics] stitch_seconds=%.3f subtitles_seconds=%.3f run_id=%s job_id=%s",
-                        _t1_stitch - _t0_stitch,
-                        _t1_subs - _t0_subs,
-                        run_id,
-                        job.job_id,
-                    )
+
+                    # Record stitching and subtitles metrics
+                    stitch_seconds.observe(_t1_stitch - _t0_stitch)
+                    subtitles_seconds.observe(_t1_subs - _t0_subs)
                 except Exception as e:
                     # Abort entire job if stitching/subtitles fail
                     job.status = "failed"
@@ -371,6 +385,11 @@ class Worker:
             if final_video_path_str:
                 job.final_video_path = final_video_path_str
             await set_job(redis, job)
+
+            # Record job completion metrics
+            job_end_time = time.perf_counter()
+            job_total_seconds.observe(job_end_time - job_start_time)
+            jobs_completed_total.inc()
 
             # Send webhook notification to N8N
             if VIDEO_COMPLETED_N8N_WEBHOOK_URL and VIDEO_COMPLETED_N8N_WEBHOOK_URL != "https://your-n8n-instance.com/webhook/job-complete":
@@ -395,6 +414,11 @@ class Worker:
             job.error = str(e)
             await set_job(redis, job)
 
+            # Record job failure metrics
+            job_end_time = time.perf_counter()
+            job_total_seconds.observe(job_end_time - job_start_time)
+            jobs_failed_total.labels(reason="exception").inc()
+
             # Send webhook notification for failed job
             if VIDEO_COMPLETED_N8N_WEBHOOK_URL and VIDEO_COMPLETED_N8N_WEBHOOK_URL != "https://your-n8n-instance.com/webhook/job-complete":
                 job_data = {
@@ -407,3 +431,7 @@ class Worker:
                 await webhook_manager.send_webhook(VIDEO_COMPLETED_N8N_WEBHOOK_URL, job_data, "job_failed")
 
             logger.exception("[worker] Job failed job_id=%s: %s", job.job_id, e)
+
+        finally:
+            # Reset worker active status when job finishes
+            worker_active.set(0)

@@ -8,6 +8,7 @@ from videomerge.services.redis_client import get_redis
 from videomerge.services.queue import enqueue_job, get_job
 from videomerge.utils.logging import get_logger
 from videomerge.config import IMAGE_WORKFLOWS, WORKFLOWS_BASE_PATH
+from videomerge.services.metrics import jobs_enqueued_total
 
 router = APIRouter(prefix="", tags=["orchestrate"])
 logger = get_logger(__name__)
@@ -43,6 +44,7 @@ async def orchestrate_start(req: OrchestrateStartRequest):
     }
     redis = await get_redis()
     job = await enqueue_job(redis, payload)
+    jobs_enqueued_total.inc()  # Record that a job was enqueued
     return JSONResponse(content={"job_id": job.job_id, "status": job.status})
 
 

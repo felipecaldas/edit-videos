@@ -13,8 +13,28 @@ from videomerge.config import (
     COMFYUI_POLL_INTERVAL_SECONDS,
 )
 from videomerge.utils.logging import get_logger
+from videomerge.services.metrics import (
+    comfyui_requests_total,
+    comfyui_request_seconds,
+)
 
 logger = get_logger(__name__)
+
+
+def _make_comfyui_request(method: str, url: str, **kwargs) -> requests.Response:
+    """Make HTTP request to ComfyUI with metrics collection."""
+    endpoint = url.replace(COMFYUI_URL.rstrip('/'), '').lstrip('/')
+
+    with comfyui_request_seconds.labels(endpoint=endpoint).time():
+        try:
+            resp = requests.request(method, url, **kwargs)
+            status_code = str(resp.status_code)[0] + 'xx'  # Convert to 2xx, 4xx, 5xx format
+            comfyui_requests_total.labels(endpoint=endpoint, status=status_code).inc()
+            return resp
+        except Exception as e:
+            # Count network errors as 5xx
+            comfyui_requests_total.labels(endpoint=endpoint, status='5xx').inc()
+            raise
 
 
 def _load_workflow_template(path: Path) -> str:
@@ -108,7 +128,7 @@ def submit_text_to_image(prompt_text: str, *, template_path: Path, client_id: Op
     url = f"{COMFYUI_URL.rstrip('/')}/prompt"
     payload = {"prompt": workflow_payload, "client_id": client_id}
     logger.info("[comfyui] Submitting text->image prompt to %s", url)
-    resp = requests.post(url, json=payload, timeout=30, headers=_default_headers())
+    resp = _make_comfyui_request("POST", url, json=payload, timeout=30, headers=_default_headers())
     if not resp.ok:
         # Log response body to help diagnose node_errors
         try:
@@ -163,7 +183,7 @@ def _parse_history_outputs(
 def _queue_says_check_history(prompt_id: str) -> Optional[bool]:
     q_url = f"{COMFYUI_URL.rstrip('/')}/queue"
     try:
-        r = requests.get(q_url, timeout=10, headers=_default_headers())
+        r = _make_comfyui_request("GET", q_url, timeout=10, headers=_default_headers())
         r.raise_for_status()
         data = r.json()
         # If the root is a list, try to match by common shapes
@@ -231,7 +251,7 @@ def poll_until_complete(
                 continue
 
             # Query history (full), then select our prompt_id entry
-            resp = requests.get(hist_url, timeout=15, headers=_default_headers())
+            resp = _make_comfyui_request("GET", hist_url, timeout=15, headers=_default_headers())
             resp.raise_for_status()
             data = resp.json()
             hist = data.get("history") or data
@@ -320,7 +340,7 @@ def submit_image_to_video(
     url = f"{COMFYUI_URL.rstrip('/')}/prompt"
     payload = {"prompt": workflow_payload, "client_id": client_id}
     logger.info("[comfyui] Submitting image->video prompt to %s (image=%s)", url, image_filename)
-    resp = requests.post(url, json=payload, timeout=30, headers=_default_headers())
+    resp = _make_comfyui_request("POST", url, json=payload, timeout=30, headers=_default_headers())
     # If ComfyUI rejects the workflow (400), log the response body for diagnostics
     if not resp.ok:
         try:
@@ -355,7 +375,7 @@ def download_outputs(file_hints: List[str], dest_dir: Path) -> List[Path]:
             params["subfolder"] = subfolder
         url = f"{COMFYUI_URL.rstrip('/')}/view"
         logger.info("[comfyui] Downloading output %s from %s", hint, url)
-        r = requests.get(url, params=params, stream=True, timeout=60, headers=_default_headers())
+        r = _make_comfyui_request("GET", url, params=params, stream=True, timeout=60, headers=_default_headers())
         r.raise_for_status()
         dest_dir.mkdir(parents=True, exist_ok=True)
         out_path = dest_dir / filename
@@ -378,7 +398,7 @@ def fetch_output_bytes(hint: str) -> Tuple[str, bytes]:
     if subfolder:
         params["subfolder"] = subfolder
     url = f"{COMFYUI_URL.rstrip('/')}/view"
-    r = requests.get(url, params=params, timeout=60, headers=_default_headers())
+    r = _make_comfyui_request("GET", url, params=params, timeout=60, headers=_default_headers())
     r.raise_for_status()
     return filename, r.content
 
@@ -392,7 +412,7 @@ def upload_image_to_input(filename: str, content: bytes, overwrite: bool = True)
     files = {"image": (filename, content, "application/octet-stream")}
     data = {"overwrite": "true" if overwrite else "false"}
     logger.info("[comfyui] Uploading image to input: %s", filename)
-    resp = requests.post(url, files=files, data=data, timeout=60, headers=_default_headers())
+    resp = _make_comfyui_request("POST", url, files=files, data=data, timeout=60, headers=_default_headers())
     if not resp.ok:
         try:
             logger.error("[comfyui] /upload/image error: status=%s body=%s", resp.status_code, resp.text)
