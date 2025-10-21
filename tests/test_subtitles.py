@@ -44,10 +44,10 @@ class TestLanguageMapping:
         assert map_language_to_whisper_code("english") == "en"
 
     def test_unknown_language_fallback(self):
-        """Test that unknown languages are returned as-is."""
-        assert map_language_to_whisper_code("UnknownLang") == "UnknownLang"
-        assert map_language_to_whisper_code("fr") == "fr"
-        assert map_language_to_whisper_code("") == ""
+        """Test that unknown languages default to en-US."""
+        assert map_language_to_whisper_code("UnknownLang") == "en-US"
+        assert map_language_to_whisper_code("fr") == "en-US"
+        assert map_language_to_whisper_code("") == "en-US"
 
     def test_whitespace_handling(self):
         """Test that whitespace is properly stripped."""
@@ -166,7 +166,7 @@ class TestWhisperIntegration:
 
     @patch('videomerge.services.subtitles.WhisperModel')
     def test_run_whisper_segments_with_unknown_language(self, mock_whisper_model):
-        """Test that run_whisper_segments handles unknown languages."""
+        """Test that run_whisper_segments defaults unknown languages to en-US."""
         # Setup mock
         mock_model = Mock()
         mock_whisper_model.return_value = mock_model
@@ -178,10 +178,10 @@ class TestWhisperIntegration:
         audio_path = Path("/test/audio.mp3")
         segments = run_whisper_segments(audio_path, language="UnknownLang")
 
-        # Verify WhisperModel was called with the unknown language as-is
+        # Verify WhisperModel was called with en-US as default
         mock_model.transcribe.assert_called_once_with(
             str(audio_path),
-            language="UnknownLang",
+            language="en-US",  # Should default to en-US for unknown languages
             task="transcribe",
             vad_filter=True,
             word_timestamps=True,

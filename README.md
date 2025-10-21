@@ -219,6 +219,7 @@ This endpoint accepts a JSON payload with all the necessary information to creat
   - Portuguese names: `"Portuguese"` → `"pt"`
   - English variants: `"English (US)"` → `"en-US"`, `"English (AU)"` → `"en-AU"`, `"English (CA)"` → `"en-CA"`, `"English (UK)"` → `"en-GB"`
   - Standard codes: `"en"`, `"pt"`, `"en-US"`, etc.
+  - **Unknown/invalid languages default to `"en-US"` for safety**
   Defaults to `"pt"`.
 - **`image_style`**: (Optional) A string specifying which ComfyUI workflow to use for text-to-image generation (e.g., `"crayon_drawing"`, `"default"`).
 - **`run_id`**: A unique identifier for this specific job run.

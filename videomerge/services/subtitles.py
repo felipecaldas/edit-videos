@@ -61,9 +61,11 @@ def map_language_to_whisper_code(language: str) -> str:
     - en-AU: Australian English
     - en-CA: Canadian English
     - en-GB: UK English
+
+    Unknown languages default to 'en-US' for safety.
     """
     if not language:
-        return language
+        return "en-US"
 
     language_lower = language.lower().strip()
 
@@ -86,8 +88,8 @@ def map_language_to_whisper_code(language: str) -> str:
         "pt": "pt",
     }
 
-    # Return the mapped code or the original if not found
-    return language_mapping.get(language_lower, language)
+    # Return the mapped code or default to en-US for unknown languages
+    return language_mapping.get(language_lower, "en-US")
 
 
 def run_whisper_segments(input_path: Path, language: str = "pt", model_size: str = "small"):
