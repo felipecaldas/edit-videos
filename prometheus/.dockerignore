@@ -1,0 +1,24 @@
+# Prometheus & Grafana Setup Files
+*.md
+README*
+*.yml
+*.yaml
+*.json
+
+# Git
+.git
+.gitignore
+
+# Documentation
+docs/
+*.txt
+
+# Temporary files
+*.tmp
+*.log
+
+# Development files
+.vscode/
+.idea/
+__pycache__/
+*.pyc

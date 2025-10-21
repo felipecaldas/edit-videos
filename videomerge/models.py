@@ -41,5 +41,6 @@ class OrchestrateStartRequest(BaseModel):
     caption: str
     run_id: str
     prompts: List[PromptItem]
+    language: Optional[str] = "pt"  # Language for subtitle generation: "en" for English, "pt" for Brazilian Portuguese
     enable_image_gen: Optional[bool] = None
     image_style: Optional[str] = None

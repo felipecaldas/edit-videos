@@ -196,6 +196,7 @@ This endpoint accepts a JSON payload with all the necessary information to creat
 ```json
 {
   "script": "The text for the voiceover.",
+  "caption": "A caption for the video.",
   "prompts": [
     {
       "image_prompt": "A prompt for the first image.",
@@ -206,12 +207,19 @@ This endpoint accepts a JSON payload with all the necessary information to creat
       "video_prompt": "A prompt for the video generation."
     }
   ],
+  "language": "English (US)",
   "image_style": "crayon_drawing",
   "run_id": "unique-run-identifier"
 }
 ```
 - **`script`**: The full text for the voiceover audio.
+- **`caption`**: A caption for the video.
 - **`prompts`**: A list of objects, each containing prompts for generating an image and its corresponding video segment.
+- **`language`**: (Optional) Language for subtitle generation. Supports both user-friendly names and standard language codes:
+  - Portuguese names: `"Portuguese"` → `"pt"`
+  - English variants: `"English (US)"` → `"en-US"`, `"English (AU)"` → `"en-AU"`, `"English (CA)"` → `"en-CA"`, `"English (UK)"` → `"en-GB"`
+  - Standard codes: `"en"`, `"pt"`, `"en-US"`, etc.
+  Defaults to `"pt"`.
 - **`image_style`**: (Optional) A string specifying which ComfyUI workflow to use for text-to-image generation (e.g., `"crayon_drawing"`, `"default"`).
 - **`run_id`**: A unique identifier for this specific job run.
 

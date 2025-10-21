@@ -348,10 +348,12 @@ class Worker:
                     _t1_stitch = time.perf_counter()
 
                     _t0_subs = time.perf_counter()
+                    # Get language from payload, defaulting to 'pt' for backward compatibility
+                    language = payload.get("language", "pt")
                     final_path = generate_and_burn_subtitles(
                         stitched_path,
                         run_dir / "stitched_subtitled.mp4",
-                        language='pt',
+                        language=language,
                         model_size='small',
                         position='bottom',
                         audio_hint=audio_path,

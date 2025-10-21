@@ -1,0 +1,42 @@
+global:
+  scrape_interval: 60s
+  evaluation_interval: 60s
+
+# Alertmanager configuration (optional - for when you add alerting)
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets:
+#           - alertmanager:9093
+
+# Load rules once and periodically evaluate them according to the global 'evaluation_interval'.
+rule_files:
+  # - "first_rules.yml"
+  # - "second_rules.yml"
+
+# A scrape configuration containing exactly one endpoint to scrape:
+# Here it's Prometheus itself.
+scrape_configs:
+  # The job name is added as a label `job=<job_name>` to any timeseries scraped from this config.
+  - job_name: 'prometheus'
+    # metrics_path defaults to '/metrics'
+    # scheme defaults to 'http'.
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Scrape the video-merger application
+  - job_name: 'video-merger'
+    scrape_interval: 30s
+    static_configs:
+      - targets: ['172.27.0.2:8000']
+    # Optional: Add labels to all metrics from this job
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'video-merger:8000'
+
+  # Optional: Add more scrape targets as needed
+  # - job_name: 'comfyui'
+  #   scrape_interval: 30s
+  #   static_configs:
+  #     - targets: ['comfyui:8188']

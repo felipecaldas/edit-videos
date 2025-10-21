@@ -39,6 +39,7 @@ async def orchestrate_start(req: OrchestrateStartRequest):
         "caption": req.caption,
         "run_id": run_id,
         "prompts": [p.model_dump() for p in req.prompts],
+        "language": req.language,
         "enable_image_gen": req.enable_image_gen,
         "workflow_path": str(workflow_path),
     }

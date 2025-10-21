@@ -30,3 +30,9 @@ services:
       interval: 200s
       timeout: 10s
       retries: 3
+    networks:
+      - tabario
+
+networks:
+  tabario:
+    driver: bridge

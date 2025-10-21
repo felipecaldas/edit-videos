@@ -51,11 +51,50 @@ def write_srt_from_chunks(chunks, out_path: Path) -> None:
             f.write(f"{i}\n{start} --> {end}\n{text}\n\n")
 
 
+def map_language_to_whisper_code(language: str) -> str:
+    """Map frontend language names to Whisper language codes.
+
+    Whisper supports standard language codes like:
+    - pt: Portuguese
+    - en: English (general)
+    - en-US: US English
+    - en-AU: Australian English
+    - en-CA: Canadian English
+    - en-GB: UK English
+    """
+    language = language.lower().strip()
+
+    # Mapping from frontend names to Whisper codes
+    language_mapping = {
+        # Portuguese
+        "portuguese": "pt",
+
+        # English variants
+        "english": "en",
+        "english (us)": "en-US",
+        "english (au)": "en-AU",
+        "english (ca)": "en-CA",
+        "english (uk)": "en-GB",
+        "en": "en",
+        "en-us": "en-US",
+        "en-au": "en-AU",
+        "en-ca": "en-CA",
+        "en-gb": "en-GB",
+        "pt": "pt",
+    }
+
+    # Return the mapped code or the original if not found
+    return language_mapping.get(language, language)
+
+
 def run_whisper_segments(input_path: Path, language: str = "pt", model_size: str = "small"):
+    # Map the language name to Whisper's expected code
+    whisper_language = map_language_to_whisper_code(language)
+
     model = WhisperModel(model_size, device="cpu", compute_type="int8")
     segments, _info = model.transcribe(
         str(input_path),
-        language=language,
+        language=whisper_language,
         task="transcribe",
         vad_filter=True,
         word_timestamps=True,
