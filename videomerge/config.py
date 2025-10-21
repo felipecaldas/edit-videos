@@ -37,6 +37,7 @@ RUN_ENV = os.getenv("RUN_ENV", "local").lower()
 def get_image_workflows():
     base_workflows = {
         "crayon_drawing": "crayon-drawing.json",
+        "anime": "T2I_ChromaAnimaAIO.json",
     }
     
     if RUN_ENV == "runpod":
