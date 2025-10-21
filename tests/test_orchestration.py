@@ -66,23 +66,10 @@ class TestOrchestrateStartRequest:
 class TestWorkerLanguageIntegration:
     """Test worker integration with language field."""
 
-    @pytest.mark.asyncio
-    @patch('videomerge.services.worker.get_redis')
-    @patch('videomerge.services.worker.set_job')
-    @patch('videomerge.services.worker.push_dead_letter')
-    @patch('videomerge.services.worker.concat_videos')
-    @patch('videomerge.services.worker.generate_and_burn_subtitles')
-    async def test_worker_processes_language_from_payload(self, mock_generate_subtitles, mock_concat_videos,
-                                                         mock_push_dlq, mock_set_job, mock_get_redis):
+    def test_worker_processes_language_from_payload(self):
         """Test that worker extracts language from payload and passes it to subtitle generation."""
-        # Setup mocks
-        mock_redis = Mock()
-        mock_get_redis.return_value = mock_redis
-
-        mock_job = Mock()
-        mock_job.job_id = "test-job-123"
-        mock_job.status = "pending"
-        mock_job.payload = {
+        # Mock payload with frontend language name
+        payload = {
             "script": "Test script",
             "caption": "Test caption",
             "run_id": "test-run-123",
@@ -91,29 +78,14 @@ class TestWorkerLanguageIntegration:
             "enable_image_gen": False,
             "workflow_path": "/test/workflow.json"
         }
-        mock_job.video_files = ["/test/video.mp4"]
 
-        mock_concat_videos.return_value = "/test/stitched.mp4"
-        mock_generate_subtitles.return_value = "/test/final.mp4"
-
-        # Create worker and mock its dependencies
-        worker = Worker()
-
-        # Call the job processing (we'll test the relevant part)
-        payload = mock_job.payload
+        # Test language extraction (same logic as in worker)
         language = payload.get("language", "pt")
 
         # Verify language is extracted correctly
         assert language == "English (US)"
 
-        # Verify generate_and_burn_subtitles would be called with the language
-        # (This tests the logic without running the full worker process)
-        expected_call_args = {
-            'language': language,
-            'model_size': 'small',
-            'position': 'bottom'
-        }
-
-        # The actual call would be:
-        # generate_and_burn_subtitles(stitched_path, output_path, **expected_call_args)
-        # But we verify the language is correctly extracted from payload
+        # Verify the language mapping would work
+        from videomerge.services.subtitles import map_language_to_whisper_code
+        whisper_code = map_language_to_whisper_code(language)
+        assert whisper_code == "en-US"

@@ -38,7 +38,7 @@ def _format_timestamp_srt(seconds: float) -> str:
     h = int(seconds // 3600)
     m = int((seconds % 3600) // 60)
     s = int(seconds % 60)
-    ms = int((seconds - int(seconds)) * 1000)
+    ms = int(round((seconds - int(seconds)) * 1000))  # Use round instead of truncation
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
@@ -62,7 +62,10 @@ def map_language_to_whisper_code(language: str) -> str:
     - en-CA: Canadian English
     - en-GB: UK English
     """
-    language = language.lower().strip()
+    if not language:
+        return language
+
+    language_lower = language.lower().strip()
 
     # Mapping from frontend names to Whisper codes
     language_mapping = {
@@ -84,7 +87,7 @@ def map_language_to_whisper_code(language: str) -> str:
     }
 
     # Return the mapped code or the original if not found
-    return language_mapping.get(language, language)
+    return language_mapping.get(language_lower, language)
 
 
 def run_whisper_segments(input_path: Path, language: str = "pt", model_size: str = "small"):
@@ -103,12 +106,23 @@ def run_whisper_segments(input_path: Path, language: str = "pt", model_size: str
 
 
 def _clean_chunk_text(tokens: List[str], is_last_in_segment: bool) -> str:
+    if not tokens:
+        return ""
+
+    # Clean and join tokens
     cleaned = [t.strip().strip('\"\'\u201c\u201d\u2018\u2019') for t in tokens]
     text = " ".join(cleaned)
     text = " ".join(text.split())
+
+    # Handle punctuation: if not last segment, remove trailing punctuation
+    # if last segment, keep punctuation but ensure it's attached properly
     if not is_last_in_segment:
         while len(text) > 0 and text[-1] in ",.;:!?…":
             text = text[:-1].rstrip()
+    else:
+        # For last segment, fix punctuation spacing
+        text = text.replace(" !", "!").replace(" ?", "?").replace(" .", ".").replace(" ,", ",")
+
     return text
 
 
