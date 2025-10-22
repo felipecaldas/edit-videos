@@ -24,6 +24,9 @@ SUBTITLE_CONFIG_PATH = Path(os.getenv("SUBTITLE_CONFIG_PATH", "subtitle_config.j
 # Redis connection string (use database 0 by default)
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/2")
 
+# Temporal server URL
+TEMPORAL_SERVER_URL = os.getenv("TEMPORAL_SERVER_URL", "localhost:7233")
+
 # ComfyUI configuration
 COMFYUI_URL = os.getenv("COMFYUI_URL", "http://192.168.68.51:8188")
 ENABLE_IMAGE_GEN = os.getenv("ENABLE_IMAGE_GEN", "true").lower() in {"1", "true", "yes", "on"}
@@ -50,7 +53,7 @@ def get_image_workflows():
 IMAGE_WORKFLOWS = get_image_workflows()
 
 # The base path for the ComfyUI workflow files.
-WORKFLOWS_BASE_PATH = Path(__file__).resolve().parent / "comfyui-workflows"
+WORKFLOWS_BASE_PATH = "videomerge/comfyui-workflows"
 
 # Image-to-Video workflow template path
 DEFAULT_I2V_WORKFLOW = (
@@ -58,7 +61,7 @@ DEFAULT_I2V_WORKFLOW = (
 )
 WORKFLOW_I2V_PATH = Path(os.getenv(
     "WORKFLOW_I2V_PATH",
-    str(Path(__file__).resolve().parent / "comfyui-workflows" / DEFAULT_I2V_WORKFLOW),
+    f"videomerge/comfyui-workflows/{DEFAULT_I2V_WORKFLOW}",
 ))
 
 # Webhook configuration for N8N notifications

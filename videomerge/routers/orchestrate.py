@@ -1,14 +1,12 @@
-from pathlib import Path
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import JSONResponse, FileResponse
-import json
+from fastapi.responses import JSONResponse
+from temporalio.client import Client
+from temporalio.common import WorkflowIDReusePolicy
 
+from videomerge.config import TEMPORAL_SERVER_URL
 from videomerge.models import OrchestrateStartRequest
-from videomerge.services.redis_client import get_redis
-from videomerge.services.queue import enqueue_job, get_job
+from videomerge.temporal.workflows import VideoGenerationWorkflow
 from videomerge.utils.logging import get_logger
-from videomerge.config import IMAGE_WORKFLOWS, WORKFLOWS_BASE_PATH
-from videomerge.services.metrics import jobs_enqueued_total
 
 router = APIRouter(prefix="", tags=["orchestrate"])
 logger = get_logger(__name__)
@@ -16,77 +14,30 @@ logger = get_logger(__name__)
 
 @router.post("/orchestrate/start")
 async def orchestrate_start(req: OrchestrateStartRequest):
-    """Enqueue a new orchestration job (steps 1–3 performed by the worker).
-
-    Returns a job_id that can be polled for status.
-    """
+    """Starts a new video generation workflow."""
     run_id = (req.run_id or "").strip()
     if not run_id:
         raise HTTPException(status_code=400, detail="run_id is required")
 
-    image_style = req.image_style or "default"
-    if image_style not in IMAGE_WORKFLOWS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid image style: '{image_style}'. Valid options are: {list(IMAGE_WORKFLOWS.keys())}"
+    client = await Client.connect(TEMPORAL_SERVER_URL)
+
+    try:
+        # Start the workflow
+        await client.start_workflow(
+            VideoGenerationWorkflow.run,
+            req,
+            id=run_id,
+            task_queue="video-generation-task-queue",
+            id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY,
         )
-
-    workflow_filename = IMAGE_WORKFLOWS[image_style]
-    workflow_path = WORKFLOWS_BASE_PATH / workflow_filename
-
-    payload = {
-        "script": req.script,
-        "caption": req.caption,
-        "run_id": run_id,
-        "prompts": [p.model_dump() for p in req.prompts],
-        "language": req.language,
-        "enable_image_gen": req.enable_image_gen,
-        "workflow_path": str(workflow_path),
-    }
-    redis = await get_redis()
-    job = await enqueue_job(redis, payload)
-    jobs_enqueued_total.inc()  # Record that a job was enqueued
-    return JSONResponse(content={"job_id": job.job_id, "status": job.status})
-
-
-@router.get("/orchestrate/status/{job_id}")
-async def orchestrate_status(job_id: str):
-    redis = await get_redis()
-    job = await get_job(redis, job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="job not found")
-    return JSONResponse(content={
-        "job_id": job.job_id,
-        "status": job.status,
-        "error": job.error,
-        "output_dir": job.output_dir,
-        "voiceover_path": job.voiceover_path,
-        "image_files": job.image_files,
-        "comfy_prompt_ids": job.comfy_prompt_ids,
-    })
-
-
-@router.get("/orchestrate/video/{job_id}")
-async def get_video_file(job_id: str):
-    """Serve the final video file for a completed job"""
-    redis = await get_redis()
-    job = await get_job(redis, job_id)
-
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-
-    if job.status != "completed":
-        raise HTTPException(status_code=400, detail=f"Job not completed (status: {job.status})")
-
-    if not job.output_dir or not job.final_video_path:
-        raise HTTPException(status_code=404, detail="Video file not found")
-
-    video_path = Path(job.final_video_path)
-    if not video_path.exists():
-        raise HTTPException(status_code=404, detail="Video file not found on disk")
-
-    return FileResponse(
-        path=video_path,
-        media_type="video/mp4",
-        filename=f"stitched_subtitled_{job_id}.mp4"
-    )
+        logger.info(f"Successfully started workflow for run_id={run_id}")
+        return JSONResponse(
+            content={
+                "message": "Workflow started successfully.",
+                "run_id": run_id,
+            },
+            status_code=202,
+        )
+    except Exception as e:
+        logger.exception(f"Failed to start workflow for run_id={run_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to start workflow: {e}")

@@ -10,39 +10,24 @@ from videomerge.routers.audio import router as audio_router
 from videomerge.routers.orchestrate import router as orchestrate_router
 from videomerge.routers.tiktok import router as tiktok_router
 from videomerge.utils.logging import get_logger
-from videomerge.services.worker import Worker
 from videomerge.services.redis_client import close_redis, get_redis
-from videomerge.services.metrics import get_metrics_response, update_queue_depth
+from videomerge.services.metrics import get_metrics_response
 
 logger = get_logger(__name__)
 
 
 def create_app() -> FastAPI:
-    worker = Worker()
-
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         # Startup
-        await worker.start()
-        logger.info("Application startup complete. Routers registered and worker started.")
-
-        # Start queue depth monitoring task
-        redis = await get_redis()
-        queue_monitor_task = asyncio.create_task(update_queue_depth(redis, interval_seconds=10))
-        logger.info("Queue depth monitoring task started")
+        logger.info("Application startup complete.")
 
         try:
             yield
         finally:
             # Shutdown
-            queue_monitor_task.cancel()
-            try:
-                await queue_monitor_task
-            except asyncio.CancelledError:
-                pass
-            await worker.stop()
             await close_redis()
-            logger.info("Application shutdown complete. Worker stopped and Redis closed.")
+            logger.info("Application shutdown complete. Redis closed.")
 
     app = FastAPI(title="AI Video Generator", lifespan=lifespan)
 

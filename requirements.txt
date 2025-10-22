@@ -6,6 +6,7 @@ faster-whisper==1.0.3
 redis==5.0.1
 httpx==0.25.2
 prometheus-client==0.19.0
+temporalio==1.18.1
 
 # Testing dependencies
 pytest==7.4.3

@@ -13,7 +13,86 @@ services:
       - LOG_LEVEL=DEBUG
       - UVICORN_LOG_LEVEL=debug
       - VIDEO_COMPLETED_N8N_WEBHOOK_URL=https://birthdaypartyai.app/n8n/webhook/07ec5d3d-59ed-4605-b655-fbb3579169cb
+      - TEMPORAL_SERVER_URL=temporal:7233
     ports:
       - "8086:8000"
     volumes:
       - "/mnt/tp-share/n8n-shared:/data/shared"
+    depends_on:
+      - temporal
+
+  temporal-worker:
+    build: .
+    working_dir: /app
+    volumes:
+      - "/mnt/tp-share/n8n-shared:/data/shared"
+      - .:/app
+    environment:
+      - RUN_ENV=runpod
+      - DATA_SHARED_BASE=/data/shared
+      - REDIS_URL=redis://redis:6379/2
+      - COMFYUI_URL=https://j99seg7iib5yke-8188.proxy.runpod.net/api
+      - ENABLE_IMAGE_GEN=true
+      - ENABLE_VOICEOVER_GEN=false
+      - COMFYUI_TIMEOUT_SECONDS=600
+      - COMFYUI_POLL_INTERVAL_SECONDS=40
+      - LOG_LEVEL=DEBUG
+      - TEMPORAL_SERVER_URL=temporal:7233
+    restart: unless-stopped
+    depends_on:
+      - temporal
+      - redis
+    command: ["python", "-m", "videomerge.temporal.worker"]
+    networks:
+      - tabario
+
+  temporal:
+    image: temporalio/auto-setup:1.21.0
+    ports:
+      - "7233:7233"
+    environment:
+      - DB=postgres12
+      - DB_PORT=5432
+      - POSTGRES_USER=temporal
+      - POSTGRES_PWD=temporal
+      - POSTGRES_DB=temporal
+      - POSTGRES_SEEDS=postgres
+      - TEMPORAL_WEBSERVER_PORT=8080
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - tabario
+
+  temporal-ui:
+    image: temporalio/ui:latest
+    ports:
+      - "8087:8080"
+    environment:
+      - TEMPORAL_GRPC_ENDPOINT=temporal:7233
+      - TEMPORAL_ADDRESS=temporal:7233
+    depends_on:
+      - temporal
+    networks:
+      - tabario
+
+  postgres:
+    image: postgres:15-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=temporal
+      - POSTGRES_PASSWORD=temporal
+      - POSTGRES_DB=temporal
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal -d temporal"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - tabario
+
+volumes:
+  postgres_data:
