@@ -51,7 +51,7 @@
   },
   "6": {
     "inputs": {
-      "text": "anime, masterpiece, 2k resolution, ultra-detailed, depth of field, best quality, (anime coloring, anime screencap:1.5), official art style, ull-body shot of Swedish viking warrior woman standing in battle stance, gripping blood-covered battle axe, fierce determined expression, long braided blonde hair, piercing blue eyes, traditional Norse armor with leather and fur details, weathered metal shoulder guards, tribal war paint on face, muscular athletic build, torn battle-worn clothing, dramatic lighting from above, misty forest background, cinematic soft focus, warm natural lighting, subtle magical aura, inspired by Studio Ghibli, Zelda: Tears of the Kingdom, and Makoto Shinkai lighting, add microdetails, masterpiece illustration. Soft gold color, balanced composition, clean aesthetic, anime cinematic poster style.",
+      "text": "anime, masterpiece, 2k resolution, ultra-detailed, depth of field, best quality, (anime coloring, anime screencap:1.5), official art style, {{ POSITIVE_PROMPT }} , cinematic soft focus, warm natural lighting, subtle magical aura, inspired by Studio Ghibli, Zelda: Tears of the Kingdom, and Makoto Shinkai lighting, add microdetails, masterpiece illustration. Soft gold color, balanced composition, clean aesthetic, anime cinematic poster style.",
       "clip": [
         "4",
         1
