@@ -37,10 +37,11 @@ class PromptItem(BaseModel):
 
 
 class OrchestrateStartRequest(BaseModel):
+    user_id: str
     script: str
     caption: str
-    run_id: str
     prompts: List[PromptItem]
-    language: Optional[str] = "pt"  # Language for subtitle generation: "en" for English, "pt" for Brazilian Portuguese
-    enable_image_gen: Optional[bool] = None
+    language: str = "en"
     image_style: Optional[str] = None
+    run_id: str
+    enable_image_gen: Optional[bool] = None

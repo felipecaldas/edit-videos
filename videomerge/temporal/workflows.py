@@ -5,7 +5,7 @@ from typing import List
 from temporalio import workflow
 from temporalio.common import RetryPolicy
 
-from videomerge.config import IMAGE_WORKFLOWS, WORKFLOWS_BASE_PATH
+from videomerge.config import IMAGE_WORKFLOWS, WORKFLOWS_BASE_PATH, ENABLE_VOICEOVER_GEN
 from videomerge.models import OrchestrateStartRequest, PromptItem
 
 # Import all activities from the activities module
@@ -20,6 +20,42 @@ with workflow.unsafe.imports_passed_through():
         burn_subtitles_into_video,
         send_completion_webhook,
     )
+
+
+@workflow.defn
+class ProcessSceneWorkflow:
+    @workflow.run
+    async def run(self, run_id: str, prompt: PromptItem, workflow_path: str, index: int) -> List[str]:
+        """Workflow to process a single scene (image -> video)."""
+        activity_defaults = {
+            "start_to_close_timeout": timedelta(minutes=15),
+            "retry_policy": RetryPolicy(maximum_attempts=3),
+        }
+
+        # 1. Generate image
+        image_hint = ""
+        if prompt.image_prompt:
+            image_hint = await workflow.execute_activity(
+                generate_image, args=[prompt.image_prompt, workflow_path, index], **activity_defaults
+            )
+
+        if not image_hint:
+            workflow.logger.warning(f"Skipping scene {index} as no image was generated.")
+            return []
+
+        # 2. Upload image for video generation
+        uploaded_image_name = await workflow.execute_activity(
+            upload_image_for_video_generation, args=[image_hint], **activity_defaults
+        )
+
+        # 3. Generate video from image
+        video_paths = []
+        if prompt.video_prompt:
+            video_paths = await workflow.execute_activity(
+                generate_video_from_image, args=[run_id, prompt.video_prompt, uploaded_image_name, index], **activity_defaults
+            )
+
+        return video_paths
 
 
 @workflow.defn
@@ -46,50 +82,35 @@ class VideoGenerationWorkflow:
                 setup_run_directory, args=[req.run_id, req.model_dump()], **activity_defaults
             )
 
-            # 2. Generate voiceover
-            voiceover_path = await workflow.execute_activity(
-                generate_voiceover, args=[req.run_id, req.script], **activity_defaults
-            )
+            # 2. Generate voiceover (if enabled)
+            voiceover_path = ""
+            if ENABLE_VOICEOVER_GEN:
+                voiceover_path = await workflow.execute_activity(
+                    generate_voiceover, args=[req.run_id, req.script], **activity_defaults
+                )
+            else:
+                workflow.logger.info("Skipping voiceover generation as ENABLE_VOICEOVER_GEN is false.")
 
-            # 3. Generate images in parallel
-            image_gen_tasks = []
+            # 3. Process each scene as a child workflow
+            scene_processing_tasks = []
             image_style = req.image_style or "default"
             workflow_filename = IMAGE_WORKFLOWS.get(image_style, IMAGE_WORKFLOWS["default"])
             workflow_path = f"{WORKFLOWS_BASE_PATH}/{workflow_filename}"
 
             for i, prompt in enumerate(req.prompts):
-                if prompt.image_prompt:
-                    task = workflow.start_activity(
-                        generate_image, args=[prompt.image_prompt, workflow_path, i], **activity_defaults
-                    )
-                    image_gen_tasks.append((i, task))
-
-            # Wait for all image generation tasks to complete
-            image_results = {i: await task for i, task in image_gen_tasks}
-
-            # 4. Upload images for video generation
-            upload_tasks = []
-            for i, image_hint in image_results.items():
-                task = workflow.start_activity(
-                    upload_image_for_video_generation, args=[image_hint], **activity_defaults
+                # Each scene gets its own child workflow for better isolation and resumability
+                child_id = f"{req.run_id}-scene-{i}"
+                task = workflow.start_child_workflow(
+                    ProcessSceneWorkflow.run, 
+                    args=[req.run_id, prompt, workflow_path, i], 
+                    id=child_id
                 )
-                upload_tasks.append((i, task))
+                scene_processing_tasks.append(task)
 
-            uploaded_images = {i: await task for i, task in upload_tasks}
-
-            # 5. Generate video clips in parallel
-            video_gen_tasks = []
-            for i, prompt in enumerate(req.prompts):
-                if prompt.video_prompt and i in uploaded_images:
-                    task = workflow.start_activity(
-                        generate_video_from_image, args=[req.run_id, prompt.video_prompt, uploaded_images[i], i], **activity_defaults
-                    )
-                    video_gen_tasks.append(task)
-
-            # Collect all video file paths from the parallel generation tasks
+            # Collect all video file paths from the child workflows
             video_paths = []
-            video_results = await asyncio.gather(*video_gen_tasks)
-            for result_list in video_results:
+            all_results = await asyncio.gather(*scene_processing_tasks)
+            for result_list in all_results:
                 video_paths.extend(result_list)
 
             if not video_paths:

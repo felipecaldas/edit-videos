@@ -111,12 +111,6 @@ subtitles_seconds = Histogram(
     registry=registry
 )
 
-# Queue/Worker metrics (Redis)
-queue_depth = Gauge(
-    'queue_depth',
-    'Current number of jobs in the processing queue',
-    registry=registry
-)
 
 jobs_enqueued_total = Counter(
     'jobs_enqueued_total',
@@ -172,12 +166,6 @@ comfyui_request_seconds = Histogram(
     registry=registry
 )
 
-redis_errors_total = Counter(
-    'redis_errors_total',
-    'Total number of Redis operation errors',
-    labelnames=['operation'],
-    registry=registry
-)
 
 # Environment label for all metrics
 def add_environment_labels(func):
@@ -189,23 +177,6 @@ def add_environment_labels(func):
         return func(*args, **kwargs)
     return wrapper
 
-# Background task for queue depth monitoring
-async def update_queue_depth(redis_client, interval_seconds: int = 10):
-    """Background task to periodically update queue depth gauge"""
-    import asyncio
-
-    while True:
-        try:
-            from videomerge.services.queue import QUEUE_KEY
-            depth = await redis_client.llen(QUEUE_KEY)
-            queue_depth.set(depth)
-        except Exception as e:
-            # Log error but don't crash the monitoring task
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.warning(f"Failed to update queue depth: {e}")
-
-        await asyncio.sleep(interval_seconds)
 
 def get_metrics_response() -> Response:
     """Generate Prometheus metrics response"""

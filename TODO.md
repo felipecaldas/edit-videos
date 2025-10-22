@@ -85,22 +85,33 @@ This document outlines the plan to push application metrics to a time-series bac
 - [ ] Create Grafana dashboard (JSON) with panels for key metrics.
 - [ ] Add alert rules (Prometheus alertmanager or Grafana alerts).
 
-# Service Discovery for ComfyUI URL
-
-This task outlines the plan to dynamically manage the ComfyUI URL to avoid manual updates and service restarts.
-
-## Implementation Tasks
-
-- [ ] **Prerequisite**: Expose the Redis server to be accessible by both the `video-merger` service and the ComfyUI pod.
-- [ ] **ComfyUI Startup Script**: Create a script that runs when the ComfyUI pod starts. This script will:
-  - Get the pod's unique, dynamic URL.
-  - Write this URL to a specific key in Redis (e.g., `SET current_comfyui_url "<the-dynamic-url>"`).
-- [ ] **Refactor `video-merger`**: Modify the application logic in `videomerge/config.py` or `videomerge/services/comfyui.py` to:
-  - On startup, or on a regular interval, fetch the `current_comfyui_url` value from Redis.
-  - Use this fetched URL for all API calls to ComfyUI.
-  - Implement a caching strategy (e.g., cache the URL for 60 seconds) to avoid querying Redis on every single request.
-
 ## Future Enhancements
 - OpenTelemetry traces for cross-step correlation.
 - Distinguish timeouts vs other errors in metrics labels.
 - Separate queues for priority traffic with additional metrics.
+
+# Tiered Concurrency for Premium Users
+
+This task outlines the plan to allow users on a higher subscription tier to run multiple concurrent video generation jobs, while standard users are limited to one at a time.
+
+## Core Concept
+
+Leverage Temporal's `WorkflowIDReusePolicy.REJECT` policy combined with a "slot"-based Workflow ID naming convention.
+
+- **Standard User**: Can run 1 job. Workflow ID will be `tabario-user-{user_id}`.
+- **Premium User**: Can run 3 jobs. Workflow IDs will be `tabario-user-{user_id}-slot-0`, `tabario-user-{user_id}-slot-1`, and `tabario-user-{user_id}-slot-2`.
+
+## Implementation Tasks
+
+- [ ] **User Tier Information**: Implement a mechanism for the backend to determine a user's concurrency limit. This could be:
+  - A call to the Supabase database to fetch the user's subscription tier.
+  - Information embedded in the user's JWT.
+
+- [ ] **Update Orchestration Endpoint (`/orchestrate/start`)**:
+  - Fetch the user's concurrency limit (e.g., 1 for standard, 3 for premium).
+  - Create a loop that iterates from `0` to `limit - 1`.
+  - Inside the loop, construct the slot-based Workflow ID (e.g., `tabario-user-{user_id}-slot-{i}`).
+  - Attempt to start the workflow using this ID and the `REJECT` policy.
+  - If it succeeds, break the loop and return a success response.
+  - If it fails with `WorkflowExecutionAlreadyStartedError`, continue to the next slot.
+  - If the loop finishes without successfully starting a workflow, it means all slots are full. Return a `409 Conflict` error to the user.

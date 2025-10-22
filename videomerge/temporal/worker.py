@@ -4,7 +4,7 @@ from temporalio.client import Client
 from temporalio.worker import Worker
 
 from videomerge.config import TEMPORAL_SERVER_URL
-from videomerge.temporal.workflows import VideoGenerationWorkflow
+from videomerge.temporal.workflows import VideoGenerationWorkflow, ProcessSceneWorkflow
 from videomerge.temporal import activities
 from videomerge.utils.logging import get_logger
 
@@ -20,7 +20,7 @@ async def main():
     worker = Worker(
         client,
         task_queue="video-generation-task-queue",
-        workflows=[VideoGenerationWorkflow],
+        workflows=[VideoGenerationWorkflow, ProcessSceneWorkflow],
         activities=[
             activities.setup_run_directory,
             activities.generate_voiceover,

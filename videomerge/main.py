@@ -10,7 +10,6 @@ from videomerge.routers.audio import router as audio_router
 from videomerge.routers.orchestrate import router as orchestrate_router
 from videomerge.routers.tiktok import router as tiktok_router
 from videomerge.utils.logging import get_logger
-from videomerge.services.redis_client import close_redis, get_redis
 from videomerge.services.metrics import get_metrics_response
 
 logger = get_logger(__name__)
@@ -21,13 +20,9 @@ def create_app() -> FastAPI:
     async def lifespan(app: FastAPI):
         # Startup
         logger.info("Application startup complete.")
-
-        try:
-            yield
-        finally:
-            # Shutdown
-            await close_redis()
-            logger.info("Application shutdown complete. Redis closed.")
+        yield
+        # Shutdown
+        logger.info("Application shutdown complete.")
 
     app = FastAPI(title="AI Video Generator", lifespan=lifespan)
 

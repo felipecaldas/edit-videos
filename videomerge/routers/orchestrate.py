@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 from temporalio.client import Client
+from temporalio.exceptions import WorkflowExecutionAlreadyStartedError
 from temporalio.common import WorkflowIDReusePolicy
 
 from videomerge.config import TEMPORAL_SERVER_URL
@@ -15,29 +16,33 @@ logger = get_logger(__name__)
 @router.post("/orchestrate/start")
 async def orchestrate_start(req: OrchestrateStartRequest):
     """Starts a new video generation workflow."""
-    run_id = (req.run_id or "").strip()
-    if not run_id:
-        raise HTTPException(status_code=400, detail="run_id is required")
+    workflow_id = f"tabario-user-{req.user_id}"
+    logger.info(f"Received request to start video generation with workflow_id={workflow_id}")
+
 
     client = await Client.connect(TEMPORAL_SERVER_URL)
-
     try:
-        # Start the workflow
         await client.start_workflow(
             VideoGenerationWorkflow.run,
             req,
-            id=run_id,
+            id=workflow_id,
             task_queue="video-generation-task-queue",
-            id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY,
+            id_reuse_policy=WorkflowIDReusePolicy.REJECT,
         )
-        logger.info(f"Successfully started workflow for run_id={run_id}")
+        logger.info(f"Successfully started workflow with workflow_id={workflow_id}")
         return JSONResponse(
             content={
                 "message": "Workflow started successfully.",
-                "run_id": run_id,
+                "workflow_id": workflow_id,
             },
             status_code=202,
         )
+    except WorkflowExecutionAlreadyStartedError:
+        logger.warning(f"Workflow with workflow_id={workflow_id} is already running.")
+        raise HTTPException(
+            status_code=409,
+            detail=f"A video generation job is already in progress for this user.",
+        )
     except Exception as e:
-        logger.exception(f"Failed to start workflow for run_id={run_id}: {e}")
+        logger.error(f"Failed to start workflow with workflow_id={workflow_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to start workflow: {e}")

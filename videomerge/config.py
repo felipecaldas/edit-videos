@@ -21,9 +21,6 @@ ENABLE_VOICEOVER_GEN = os.getenv("ENABLE_VOICEOVER_GEN", "false").lower() in {"1
 # Subtitle configuration path
 SUBTITLE_CONFIG_PATH = Path(os.getenv("SUBTITLE_CONFIG_PATH", "subtitle_config.json"))
 
-# Redis connection string (use database 0 by default)
-REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/2")
-
 # Temporal server URL
 TEMPORAL_SERVER_URL = os.getenv("TEMPORAL_SERVER_URL", "localhost:7233")
 
