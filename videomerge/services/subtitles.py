@@ -56,40 +56,32 @@ def map_language_to_whisper_code(language: str) -> str:
 
     Whisper supports standard language codes like:
     - pt: Portuguese
-    - en: English (general)
-    - en-US: US English
-    - en-AU: Australian English
-    - en-CA: Canadian English
-    - en-GB: UK English
+    - en: English (all variants)
 
-    Unknown languages default to 'en-US' for safety.
+    All English variants (US, UK, AU, CA, etc.) are normalized to 'en' since Whisper
+    only accepts 'en' for English, not regional variants like 'en-US'.
+
+    Unknown languages default to 'en' for safety.
     """
     if not language:
-        return "en-US"
+        return "en"
 
     language_lower = language.lower().strip()
+
+    # Check if it's any form of English
+    english_patterns = ["english", "en"]
+    if any(pattern in language_lower for pattern in english_patterns):
+        return "en"
 
     # Mapping from frontend names to Whisper codes
     language_mapping = {
         # Portuguese
         "portuguese": "pt",
-
-        # English variants
-        "english": "en",
-        "english (us)": "en-US",
-        "english (au)": "en-AU",
-        "english (ca)": "en-CA",
-        "english (uk)": "en-GB",
-        "en": "en",
-        "en-us": "en-US",
-        "en-au": "en-AU",
-        "en-ca": "en-CA",
-        "en-gb": "en-GB",
         "pt": "pt",
     }
 
-    # Return the mapped code or default to en-US for unknown languages
-    return language_mapping.get(language_lower, "en-US")
+    # Return the mapped code or default to 'en' for unknown languages
+    return language_mapping.get(language_lower, "en")
 
 
 def run_whisper_segments(input_path: Path, language: str = "pt", model_size: str = "small"):
