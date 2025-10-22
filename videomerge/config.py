@@ -22,7 +22,7 @@ ENABLE_VOICEOVER_GEN = os.getenv("ENABLE_VOICEOVER_GEN", "false").lower() in {"1
 SUBTITLE_CONFIG_PATH = Path(os.getenv("SUBTITLE_CONFIG_PATH", "subtitle_config.json"))
 
 # Redis connection string (use database 0 by default)
-REDIS_URL = os.getenv("REDIS_URL", "redis://192.168.68.51:8061/2")
+REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/2")
 
 # ComfyUI configuration
 COMFYUI_URL = os.getenv("COMFYUI_URL", "http://192.168.68.51:8188")

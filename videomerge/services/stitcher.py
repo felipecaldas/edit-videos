@@ -99,7 +99,7 @@ def concat_videos(video_paths: Iterable[Path], output_path: Path) -> Path:
         return result
 
     # Always write to a local temp file first, then move to final location
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4", dir=output_path.parent) as tmp:
         tmp_path = Path(tmp.name)
     try:
         # First attempt with +faststart
@@ -238,7 +238,7 @@ def concat_videos_with_voiceover(video_paths: Iterable[Path], voiceover_path: Pa
         return result
 
     # Always write to a local temp file first, then move to final location
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4", dir=output_path.parent) as tmp:
         tmp_path = Path(tmp.name)
     try:
         # First attempt with +faststart

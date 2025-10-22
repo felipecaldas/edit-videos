@@ -3,7 +3,7 @@ services:
   video-merger:
     environment:
       - DATA_SHARED_BASE=/data/shared
-      - REDIS_URL=redis://192.168.68.52:8061/2
+      - REDIS_URL=redis://redis:6379/2
       - COMFYUI_URL=http://192.168.68.51:8188
       - ENABLE_IMAGE_GEN=true
       - ENABLE_VOICEOVER_GEN=false

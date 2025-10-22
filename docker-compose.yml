@@ -13,7 +13,7 @@ services:
       - TZ=Australia/Melbourne
       - VOICEOVER_SERVICE_URL=http://192.168.68.51:8083
       - DATA_SHARED_BASE=/data/shared
-      - REDIS_URL=redis://192.168.68.52:8061/2
+      - REDIS_URL=redis://redis:6379/2
       - COMFYUI_URL=http://192.168.68.51:8188
       - ENABLE_IMAGE_GEN=true
       - ENABLE_VOICEOVER_GEN=false
@@ -24,12 +24,22 @@ services:
       - TIKTOK_VIDEOS_ARCHIVE_FOLDER=/data/shared/archived
       - VIDEO_COMPLETED_N8N_WEBHOOK_URL=https://birthdaypartyai.app/n8n/webhook/07ec5d3d-59ed-4605-b655-fbb3579169cb
     restart: unless-stopped
+    depends_on:
+      - redis
     command: ["uvicorn", "videomerge.main:app", "--host", "0.0.0.0", "--port", "8000"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 200s
       timeout: 10s
       retries: 3
+    networks:
+      - tabario
+
+  redis:
+    image: "redis:alpine"
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
     networks:
       - tabario
 

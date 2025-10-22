@@ -4,7 +4,7 @@ services:
     environment:
       - RUN_ENV=runpod
       - DATA_SHARED_BASE=/data/shared
-      - REDIS_URL=redis://192.168.68.52:8061/2
+      - REDIS_URL=redis://redis:6379/2
       - COMFYUI_URL=https://j99seg7iib5yke-8188.proxy.runpod.net/api
       - ENABLE_IMAGE_GEN=true
       - ENABLE_VOICEOVER_GEN=false
