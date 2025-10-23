@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 from temporalio.client import Client
-from temporalio.exceptions import WorkflowExecutionAlreadyStartedError
+from temporalio.exceptions import WorkflowAlreadyStartedError
 from temporalio.common import WorkflowIDReusePolicy
 
 from videomerge.config import TEMPORAL_SERVER_URL
@@ -27,7 +27,7 @@ async def orchestrate_start(req: OrchestrateStartRequest):
             req,
             id=workflow_id,
             task_queue="video-generation-task-queue",
-            id_reuse_policy=WorkflowIDReusePolicy.REJECT,
+            id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
         )
         logger.info(f"Successfully started workflow with workflow_id={workflow_id}")
         return JSONResponse(
@@ -37,7 +37,7 @@ async def orchestrate_start(req: OrchestrateStartRequest):
             },
             status_code=202,
         )
-    except WorkflowExecutionAlreadyStartedError:
+    except WorkflowAlreadyStartedError:
         logger.warning(f"Workflow with workflow_id={workflow_id} is already running.")
         raise HTTPException(
             status_code=409,
