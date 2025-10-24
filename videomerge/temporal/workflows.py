@@ -27,6 +27,14 @@ class ProcessSceneWorkflow:
     @workflow.run
     async def run(self, run_id: str, prompt: PromptItem, workflow_path: str, index: int) -> List[str]:
         """Workflow to process a single scene (image -> video)."""
+        # Log parent workflow info for correlation
+        parent_info = workflow.info().parent
+        if parent_info:
+            workflow.logger.info(
+                f"Child workflow scene-{index} started by parent: "
+                f"workflow_id={parent_info.workflow_id}, run_id={parent_info.run_id}"
+            )
+        
         activity_defaults = {
             "start_to_close_timeout": timedelta(minutes=15),
             "retry_policy": RetryPolicy(maximum_attempts=3),
@@ -97,20 +105,41 @@ class VideoGenerationWorkflow:
             workflow_filename = IMAGE_WORKFLOWS.get(image_style, IMAGE_WORKFLOWS["default"])
             workflow_path = f"{WORKFLOWS_BASE_PATH}/{workflow_filename}"
 
+            # Get parent workflow info for child correlation
+            parent_workflow_id = workflow.info().workflow_id
+            parent_run_id = workflow.info().run_id
+            
             for i, prompt in enumerate(req.prompts):
                 # Each scene gets its own child workflow for better isolation and resumability
                 child_id = f"{req.run_id}-scene-{i}"
-                task = workflow.start_child_workflow(
-                    ProcessSceneWorkflow.run, 
-                    args=[req.run_id, prompt, workflow_path, i], 
-                    id=child_id
+                
+                # Add memo and search attributes for parent-child correlation
+                # Note: Parent workflow also has TabarioRunId set (in orchestrate.py)
+                task = workflow.execute_child_workflow(
+                    ProcessSceneWorkflow.run,
+                    args=[req.run_id, prompt, workflow_path, i],
+                    id=child_id,
+                    memo={
+                        "parent_workflow_id": parent_workflow_id,
+                        "parent_run_id": parent_run_id,
+                        "scene_index": str(i),
+                        "run_id": req.run_id,
+                    },
+                    search_attributes={
+                        "TabarioRunId": [req.run_id],  # Allows searching all workflows by run_id
+                    }
                 )
                 scene_processing_tasks.append(task)
+                
+                workflow.logger.info(
+                    f"Started child workflow {child_id} for scene {i} "
+                    f"(parent: {parent_workflow_id})"
+                )
 
             # Collect all video file paths from the child workflows
             video_paths = []
-            all_results = await asyncio.gather(*scene_processing_tasks)
-            for result_list in all_results:
+            results = await asyncio.gather(*scene_processing_tasks)
+            for result_list in results:
                 video_paths.extend(result_list)
 
             if not video_paths:

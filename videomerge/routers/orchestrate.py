@@ -22,12 +22,17 @@ async def orchestrate_start(req: OrchestrateStartRequest):
 
     client = await Client.connect(TEMPORAL_SERVER_URL)
     try:
+        # Start parent workflow with TabarioRunId search attribute
+        # Child workflows will also have the same TabarioRunId for easy correlation
         await client.start_workflow(
             VideoGenerationWorkflow.run,
             req,
             id=workflow_id,
             task_queue="video-generation-task-queue",
-            id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
+            id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY,
+            search_attributes={
+                "TabarioRunId": [req.run_id],  # Allows searching parent + all children by run_id
+            },
         )
         logger.info(f"Successfully started workflow with workflow_id={workflow_id}")
         return JSONResponse(
