@@ -290,8 +290,10 @@ def generate_images_for_prompt(text_prompt: str, template_path: Path) -> List[st
     """High-level helper: submit text prompt, poll until complete, and return filenames.
     Does not download images; only collects filenames/subfolder hints for later steps.
     """
-    pid = submit_text_to_image(text_prompt, template_path=template_path)
-    return poll_until_complete(
+    from videomerge.services.comfyui_client import get_comfyui_client
+    client = get_comfyui_client()
+    pid = client.submit_text_to_image(text_prompt, template_path=template_path)
+    return client.poll_until_complete(
         pid,
         timeout_s=COMFYUI_TIMEOUT_SECONDS,
         poll_interval_s=COMFYUI_POLL_INTERVAL_SECONDS,

@@ -6,6 +6,7 @@ from typing import List, Dict, Any
 from temporalio import activity
 
 from videomerge.config import DATA_SHARED_BASE, WORKFLOW_I2V_PATH, VIDEO_COMPLETED_N8N_WEBHOOK_URL
+from videomerge.services.comfyui_client import get_image_client, get_video_client, refresh_comfyui_client, ClientType
 from videomerge.services.comfyui import (
     submit_text_to_image,
     poll_until_complete,
@@ -55,9 +56,14 @@ async def generate_image(prompt_text: str, workflow_path_str: str, index: int) -
     """Generates a single image from a text prompt."""
     activity.heartbeat()
     logger.info(f"Generating image for prompt index {index}")
+    
+    # Check if ComfyUI configuration has changed
+    refresh_comfyui_client(ClientType.IMAGE)
+    
     workflow_path = Path(workflow_path_str)
-    prompt_id = await asyncio.to_thread(submit_text_to_image, prompt_text, template_path=workflow_path)
-    filenames = await asyncio.to_thread(poll_until_complete, prompt_id, timeout_s=600, poll_interval_s=15)
+    client = get_image_client()
+    prompt_id = await asyncio.to_thread(client.submit_text_to_image, prompt_text, template_path=workflow_path)
+    filenames = await asyncio.to_thread(client.poll_until_complete, prompt_id, timeout_s=600, poll_interval_s=15)
     if not filenames:
         raise RuntimeError(f"Image generation failed for prompt index {index}: No output files.")
     logger.info(f"Image generated for prompt index {index}: {filenames[0]}")
@@ -69,9 +75,14 @@ async def upload_image_for_video_generation(image_hint: str) -> str:
     """Fetches a generated image and uploads it to the ComfyUI input directory."""
     activity.heartbeat()
     logger.info(f"Uploading image {image_hint} for video generation.")
-    filename, content = await asyncio.to_thread(fetch_output_bytes, image_hint)
+    
+    # Check if ComfyUI configuration has changed
+    refresh_comfyui_client(ClientType.VIDEO)
+    
+    client = get_video_client()
+    filename, content = await asyncio.to_thread(client.fetch_output_bytes, image_hint)
     uploaded_filename = await asyncio.to_thread(
-        upload_image_to_input, filename, content, overwrite=True
+        client.upload_image_to_input, filename, content, overwrite=True
     )
     logger.info(f"Uploaded image {image_hint} as {uploaded_filename}")
     return uploaded_filename
@@ -83,14 +94,19 @@ async def generate_video_from_image(run_id: str, video_prompt: str, uploaded_ima
     activity.heartbeat()
     run_dir = DATA_SHARED_BASE / run_id
     logger.info(f"Generating video for prompt index {index}")
+    
+    # Check if ComfyUI configuration has changed
+    refresh_comfyui_client(ClientType.VIDEO)
+    
+    client = get_video_client()
     prompt_id = await asyncio.to_thread(
-        submit_image_to_video,
+        client.submit_image_to_video,
         video_prompt,
         uploaded_image_name,
         template_path=WORKFLOW_I2V_PATH,
     )
-    video_hints = await asyncio.to_thread(poll_until_complete, prompt_id, timeout_s=600, poll_interval_s=15)
-    saved_files = await asyncio.to_thread(download_outputs, video_hints, run_dir)
+    video_hints = await asyncio.to_thread(client.poll_until_complete, prompt_id, timeout_s=600, poll_interval_s=15)
+    saved_files = await asyncio.to_thread(client.download_outputs, video_hints, run_dir)
     logger.info(f"Video generated for prompt index {index}: {saved_files}")
     return [str(p) for p in saved_files]
 

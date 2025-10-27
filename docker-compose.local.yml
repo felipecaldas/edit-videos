@@ -2,6 +2,7 @@
 services:
   video-merger:
     environment:
+      - RUN_ENV=local
       - DATA_SHARED_BASE=/data/shared
       - COMFYUI_URL=http://192.168.68.51:8188
       - ENABLE_IMAGE_GEN=true
@@ -26,6 +27,7 @@ services:
       - "/mnt/tp-share/n8n-shared:/data/shared"
       - .:/app
     environment:
+      - RUN_ENV=local
       - TZ=Australia/Melbourne
       - VOICEOVER_SERVICE_URL=http://192.168.68.51:8083
       - DATA_SHARED_BASE=/data/shared

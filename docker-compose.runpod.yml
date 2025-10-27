@@ -2,24 +2,28 @@
 services:
   video-merger:
     environment:
-      - RUN_ENV=runpod
-      - DATA_SHARED_BASE=/data/shared
-      - REDIS_URL=redis://redis:6379/2
-      - COMFYUI_URL=https://j99seg7iib5yke-8188.proxy.runpod.net/api
-      - ENABLE_IMAGE_GEN=true
-      - ENABLE_VOICEOVER_GEN=false
-      - COMFYUI_TIMEOUT_SECONDS=600
-      - COMFYUI_POLL_INTERVAL_SECONDS=40
-      - LOG_LEVEL=DEBUG
-      - UVICORN_LOG_LEVEL=debug
-      - VIDEO_COMPLETED_N8N_WEBHOOK_URL=https://birthdaypartyai.app/n8n/webhook/07ec5d3d-59ed-4605-b655-fbb3579169cb
-      - TEMPORAL_SERVER_URL=temporal:7233
+      - RUN_ENV=${RUN_ENV}
+      - DATA_SHARED_BASE=${DATA_SHARED_BASE}
+      - COMFYUI_URL=${COMFYUI_URL}
+      - RUNPOD_IMAGE_INSTANCE_ID=${RUNPOD_IMAGE_INSTANCE_ID}
+      - RUNPOD_VIDEO_INSTANCE_ID=${RUNPOD_VIDEO_INSTANCE_ID}
+      - RUNPOD_API_KEY=${RUNPOD_API_KEY}
+      - ENABLE_IMAGE_GEN=${ENABLE_IMAGE_GEN}
+      - ENABLE_VOICEOVER_GEN=${ENABLE_VOICEOVER_GEN}
+      - COMFYUI_TIMEOUT_SECONDS=${COMFYUI_TIMEOUT_SECONDS}
+      - COMFYUI_POLL_INTERVAL_SECONDS=${COMFYUI_POLL_INTERVAL_SECONDS}
+      - LOG_LEVEL=${LOG_LEVEL}
+      - UVICORN_LOG_LEVEL=${UVICORN_LOG_LEVEL}
+      - VIDEO_COMPLETED_N8N_WEBHOOK_URL=${VIDEO_COMPLETED_N8N_WEBHOOK_URL}
+      - TEMPORAL_SERVER_URL=${TEMPORAL_SERVER_URL}
     ports:
       - "8086:8000"
     volumes:
       - "/mnt/tp-share/n8n-shared:/data/shared"
     depends_on:
       - temporal
+    networks:
+      - tabario
 
   temporal-worker:
     build: .
@@ -28,20 +32,16 @@ services:
       - "/mnt/tp-share/n8n-shared:/data/shared"
       - .:/app
     environment:
-      - RUN_ENV=runpod
-      - DATA_SHARED_BASE=/data/shared
-      - REDIS_URL=redis://redis:6379/2
-      - COMFYUI_URL=https://j99seg7iib5yke-8188.proxy.runpod.net/api
-      - ENABLE_IMAGE_GEN=true
-      - ENABLE_VOICEOVER_GEN=false
-      - COMFYUI_TIMEOUT_SECONDS=600
-      - COMFYUI_POLL_INTERVAL_SECONDS=40
-      - LOG_LEVEL=DEBUG
-      - TEMPORAL_SERVER_URL=temporal:7233
+      - RUN_ENV=${RUN_ENV}
+      - RUNPOD_IMAGE_INSTANCE_ID=${RUNPOD_IMAGE_INSTANCE_ID}
+      - RUNPOD_VIDEO_INSTANCE_ID=${RUNPOD_VIDEO_INSTANCE_ID}
+      - RUNPOD_API_KEY=${RUNPOD_API_KEY}
+      - COMFYUI_URL=${COMFYUI_URL}
+      - LOG_LEVEL=${LOG_LEVEL}
+      - TEMPORAL_SERVER_URL=${TEMPORAL_SERVER_URL}
     restart: unless-stopped
     depends_on:
       - temporal
-      - redis
     command: ["python", "-m", "videomerge.temporal.worker"]
     networks:
       - tabario
@@ -65,7 +65,7 @@ services:
       - tabario
 
   temporal-ui:
-    image: temporalio/ui:latest
+    image: temporalio/ui:2.42.1
     ports:
       - "8087:8080"
     environment:
@@ -95,6 +95,10 @@ services:
       retries: 5
     networks:
       - tabario
+
+networks:
+  tabario:
+    driver: bridge
 
 volumes:
   postgres_data:

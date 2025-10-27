@@ -147,23 +147,206 @@ The `concat` demuxer used by `/stitch` works best when input videos share the sa
 This service dynamically selects ComfyUI workflow JSONs based on the `RUN_ENV` environment variable. You can still override the paths explicitly if needed.
 
 - When `RUN_ENV=runpod` (as set in `docker-compose.runpod.yml`):
-  - Text-to-Image default: `videomerge/comfyui-workflows/Wan2.2_Text-To-Image.json`
-  - Image-to-Video default: `videomerge/comfyui-workflows/Wan2.2_5B_I2V_60FPS.json`
+  - Text-to-Image default: `videomerge/comfyui-workflows/qwen-image-fast-runpod.json`
+  - Image-to-Video default: `videomerge/comfyui-workflows/I2V-Wan-2.2-Lightning-runpod.json`
 
 - When `RUN_ENV` is anything else (default is `local`):
-  - Text-to-Image default: `videomerge/comfyui-workflows/qwen-image-fast-runpod.json`
-  - Image-to-Video default: `videomerge/comfyui-workflows/I2V-Wan 2.2 Lightning.json`
+  - Text-to-Image default: `videomerge/comfyui-workflows/qwen-image-fast-local.json`
+  - Image-to-Video default: `videomerge/comfyui-workflows/I2V-Wan-2.2-Lightning-local.json`
 
 You may override these defaults via environment variables:
 
 ```bash
-WORKFLOW_IMAGE_PATH=/app/videomerge/comfyui-workflows/Wan2.2_Text-To-Image.json
-WORKFLOW_I2V_PATH=/app/videomerge/comfyui-workflows/Wan2.2_5B_I2V_60FPS.json
+WORKFLOW_IMAGE_PATH=/app/videomerge/comfyui-workflows/custom-image.json
+WORKFLOW_I2V_PATH=/app/videomerge/comfyui-workflows/custom-video.json
 ```
+
+## ComfyUI Client Configuration
+
+The service uses a flexible ComfyUI client abstraction that supports both local development and RunPod serverless environments with **separate instances for image and video generation**.
+
+### Environment Variables
+
+- **`COMFYUI_URL`**: Base URL for ComfyUI API
+  - Local: `http://192.168.68.51:8188` (default)
+  - RunPod: `https://api.runpod.ai` (or your specific endpoint)
+- **`RUN_ENV`**: Environment type (`local` or `runpod`)
+- **`RUNPOD_IMAGE_INSTANCE_ID`**: Required when `RUN_ENV=runpod` for image generation
+- **`RUNPOD_VIDEO_INSTANCE_ID`**: Required when `RUN_ENV=runpod` for video generation
+
+### Example Configurations
+
+**Local Development:**
+```bash
+export RUN_ENV=local
+export COMFYUI_URL=http://192.168.68.51:8188
+# No instance IDs needed for local
+```
+
+**RunPod Production (Separate Instances):**
+```bash
+export RUN_ENV=runpod
+export COMFYUI_URL=https://api.runpod.ai
+export RUNPOD_IMAGE_INSTANCE_ID=image-gen-instance-123
+export RUNPOD_VIDEO_INSTANCE_ID=video-gen-instance-456
+```
+
+**RunPod Production (Single Instance):**
+```bash
+export RUN_ENV=runpod
+export COMFYUI_URL=https://api.runpod.ai
+export RUNPOD_IMAGE_INSTANCE_ID=shared-instance-123
+export RUNPOD_VIDEO_INSTANCE_ID=shared-instance-123
+```
+
+### Dynamic Configuration Refresh
+
+The service supports **zero-downtime configuration updates** - you can change ComfyUI settings without restarting the container.
+
+#### Automatic Refresh
+Configuration changes are automatically detected and applied on the next ComfyUI operation:
+```bash
+# Change the image instance ID
+export RUNPOD_IMAGE_INSTANCE_ID=new-image-instance-id
+
+# Next image generation will automatically use the new configuration
+```
+
+#### Enhanced Manual Refresh via API
+
+The refresh endpoint now supports **independent updates for image and video instances**:
+
+**Option 1: Just refresh current configuration**
+```bash
+curl -X POST http://localhost:8086/refresh-comfyui-client
+```
+
+**Option 2: Update both instance IDs**
+```bash
+curl -X POST http://localhost:8086/refresh-comfyui-client \
+  -H "Content-Type: application/json" \
+  -d '{
+    "image_instance_id": "new-image-instance-id",
+    "video_instance_id": "new-video-instance-id"
+  }'
+```
+
+**Option 3: Update only image instance ID**
+```bash
+curl -X POST http://localhost:8086/refresh-comfyui-client \
+  -H "Content-Type: application/json" \
+  -d '{"image_instance_id": "new-image-instance-id"}'
+```
+
+**Option 4: Update only video instance ID**
+```bash
+curl -X POST http://localhost:8086/refresh-comfyui-client \
+  -H "Content-Type: application/json" \
+  -d '{"video_instance_id": "new-video-instance-id"}'
+```
+
+**Option 5: Check current configuration**
+```bash
+curl http://localhost:8086/comfyui-client-info
+```
+
+#### API Response Examples
+
+**When updating both instance IDs:**
+```json
+{
+  "status": "updated_and_refreshed",
+  "message": "Updated instance IDs and refreshed clients",
+  "updated_variables": {
+    "image_instance_id": {
+      "old": "old-image-instance-id",
+      "new": "new-image-instance-id"
+    },
+    "video_instance_id": {
+      "old": "old-video-instance-id", 
+      "new": "new-video-instance-id"
+    }
+  },
+  "refresh_results": {
+    "image": true,
+    "video": true
+  },
+  "client_info": {
+    "image_client": {
+      "type": "RunPodComfyUIClient",
+      "base_url": "https://api.runpod.ai",
+      "instance_id": "new-image-instance-id"
+    },
+    "video_client": {
+      "type": "RunPodComfyUIClient", 
+      "base_url": "https://api.runpod.ai",
+      "instance_id": "new-video-instance-id"
+    }
+  }
+}
+```
+
+**When just refreshing (no changes):**
+```json
+{
+  "status": "unchanged",
+  "message": "No configuration changes detected",
+  "refresh_results": {
+    "image": false,
+    "video": false
+  },
+  "client_info": {
+    "image_client": {
+      "type": "RunPodComfyUIClient",
+      "base_url": "https://api.runpod.ai",
+      "instance_id": "current-image-instance-id"
+    },
+    "video_client": {
+      "type": "RunPodComfyUIClient",
+      "base_url": "https://api.runpod.ai", 
+      "instance_id": "current-video-instance-id"
+    }
+  }
+}
+```
+
+#### API Endpoints
+- **`POST /refresh-comfyui-client`**: Refresh ComfyUI client configuration
+  - **Request Body (Optional)**: 
+    ```json
+    {
+      "image_instance_id": "new-image-instance-id",
+      "video_instance_id": "new-video-instance-id"
+    }
+    ```
+  - **Functionality**: Updates `RUNPOD_IMAGE_INSTANCE_ID` and/or `RUNPOD_VIDEO_INSTANCE_ID` environment variables and refreshes clients in one step
+  - **Backward Compatible**: Works without request body (just refreshes existing config)
+- **`GET /comfyui-client-info`**: View current ComfyUI client configuration
+  - **Response**: Shows current client types, base URLs, and instance IDs for both image and video clients
+
+#### Benefits
+- **Independent Scaling**: Use separate optimized RunPod instances for image and video workloads
+- **Single-Step Updates**: Change instance IDs with one API call
+- **No SSH Required**: Update configuration without accessing the container
+- **Immediate Effect**: Changes take effect instantly
+- **Audit Trail**: Response shows old and new values for tracking
+- **Error Isolation**: Issues with one instance don't affect the other
+- **Zero Downtime**: No container restarts needed
+
+### RunPod API Integration
+
+When using RunPod serverless, the service automatically:
+- **Image Generation**: Uses `RUNPOD_IMAGE_INSTANCE_ID` with correct endpoint format `POST /v2/{instance_id}/run`
+- **Video Generation**: Uses `RUNPOD_VIDEO_INSTANCE_ID` with correct endpoint format `POST /v2/{instance_id}/run`
+- **Status Checking**: Uses `GET /v2/{instance_id}/status/{job_id}` for both client types
+- **Response Handling**: Processes RunPod-specific response format with base64 encoded image data
+- **Job Management**: Manages polling and status checking independently for each client type
 
 Notes:
 - In containers, the app path is `/app`, so the workflow files live under `/app/videomerge/comfyui-workflows/`.
 - `docker-compose.runpod.yml` already sets `RUN_ENV=runpod` to activate the RunPod defaults.
+- The ComfyUI client automatically detects environment changes and refreshes without requiring container restarts.
+- For local development, both image and video operations use the same local ComfyUI instance.
 
 ## Troubleshooting
 - 400 errors for local paths: Verify the path exists inside the container and that your volume mounts are correct.

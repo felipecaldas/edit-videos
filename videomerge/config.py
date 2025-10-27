@@ -32,6 +32,12 @@ COMFYUI_TIMEOUT_SECONDS = int(os.getenv("COMFYUI_TIMEOUT_SECONDS", str(20 * 60))
 COMFYUI_POLL_INTERVAL_SECONDS = float(os.getenv("COMFYUI_POLL_INTERVAL_SECONDS", "2"))
 # Environment indicator (e.g., "local" or "runpod"). Defaults to local.
 RUN_ENV = os.getenv("RUN_ENV", "local").lower()
+# RunPod instance IDs for serverless API (required when RUN_ENV=runpod)
+RUNPOD_IMAGE_INSTANCE_ID = os.getenv("RUNPOD_IMAGE_INSTANCE_ID")
+RUNPOD_VIDEO_INSTANCE_ID = os.getenv("RUNPOD_VIDEO_INSTANCE_ID")
+
+# RunPod API key for serverless authentication (required when RUN_ENV=runpod)
+RUNPOD_API_KEY = os.getenv("RUNPOD_API_KEY")
 
 # Mapping of image styles to their corresponding workflow files (environment-aware).
 def get_image_workflows():
@@ -54,7 +60,7 @@ WORKFLOWS_BASE_PATH = "videomerge/comfyui-workflows"
 
 # Image-to-Video workflow template path
 DEFAULT_I2V_WORKFLOW = (
-    "I2V-Wan-2.2-Lightning-runpod.json" if RUN_ENV == "runpod" else "I2V-Wan-2.2-Lightning-local.json"
+    "runpod-i2v-wan22-engui-studio.json" if RUN_ENV == "runpod" else "I2V-Wan-2.2-Lightning-local.json"
 )
 WORKFLOW_I2V_PATH = Path(os.getenv(
     "WORKFLOW_I2V_PATH",
