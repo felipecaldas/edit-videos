@@ -16,7 +16,7 @@ You should see `SERVING`. If you get "connection refused", wait longer.
 Run this **once**:
 
 ```bash
-docker exec video-editor-temporal-1 tctl --address temporal:7233 admin cluster add-search-attributes --name TabarioRunId --type Keyword
+echo "Y" | sudo docker exec -i video-editor-temporal-1 tctl --address temporal:7233 admin cluster add-search-attributes --name TabarioRunId --type Keyword
 ```
 
 That's it! Now you can search workflows by `TabarioRunId` in the Temporal UI to find all workflows (parent + children) for a specific run.
