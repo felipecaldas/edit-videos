@@ -47,7 +47,7 @@ def get_image_workflows():
     }
     
     if RUN_ENV == "runpod":
-        base_workflows["default"] = "qwen-image-fast-runpod.json"
+        base_workflows["default"] = "runpod-t2i-fluxdev.json"
     else:
         base_workflows["default"] = "qwen-image-fast-local.json"
     

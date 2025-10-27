@@ -478,6 +478,7 @@ class RunPodComfyUIClient(ComfyUIClient):
         
         headers = {
             "Accept": "*/*",
+            "Content-Type": "application/json",
             "User-Agent": (
                 "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
                 "Chrome/121.0.0.0 Safari/537.36"
@@ -511,17 +512,35 @@ class RunPodComfyUIClient(ComfyUIClient):
             escaped_prompt = json.dumps(prompt_text)[1:-1]
             final_workflow_str = workflow_str.replace("{{ POSITIVE_PROMPT }}", escaped_prompt)
             
-            # Parse JSON - for RunPod, this should be the complete payload structure
+            # Parse JSON - for RunPod, check if it's already wrapped or needs wrapping
             try:
-                payload = json.loads(final_workflow_str)
+                workflow_data = json.loads(final_workflow_str)
+                
+                # Check if the workflow is already wrapped in input.workflow
+                if "input" in workflow_data and "workflow" in workflow_data["input"]:
+                    # Already wrapped (like runpod-t2i-fluxdev.json)
+                    payload = workflow_data
+                    logger.debug("[comfyui] Using pre-wrapped workflow structure")
+                else:
+                    # Needs wrapping (like qwen-image-fast-runpod.json)
+                    payload = {
+                        "input": {
+                            "workflow": workflow_data
+                        }
+                    }
+                    logger.debug("[comfyui] Wrapped workflow in input.workflow structure")
+                    
             except json.JSONDecodeError as e:
                 logger.error("[comfyui] Failed to parse RunPod workflow JSON after prompt injection: %s", e)
                 raise ValueError(f"Failed to parse RunPod workflow JSON: {e}")
 
             # Submit to RunPod using the exact structure from the file
             url = f"{self.base_url}/v2/{self.instance_id}/run"
+            headers = self._default_headers()
             logger.info("[comfyui] Submitting text->image prompt to RunPod at %s", url)
-            resp = self._make_request("POST", url, json=payload, timeout=30, headers=self._default_headers())
+            logger.info("[comfyui] RunPod request headers: %s", json.dumps(headers, indent=2))
+            logger.info("[comfyui] RunPod request payload: %s", json.dumps(payload, indent=2))
+            resp = self._make_request("POST", url, json=payload, timeout=30, headers=headers)
             if not resp.ok:
                 try:
                     logger.error("[comfyui] RunPod /run error: status=%s body=%s", resp.status_code, resp.text)
@@ -602,8 +621,11 @@ class RunPodComfyUIClient(ComfyUIClient):
 
             # Submit to RunPod using the exact structure from the file
             url = f"{self.base_url}/v2/{self.instance_id}/run"
+            headers = self._default_headers()
             logger.info("[comfyui] Submitting image->video prompt to RunPod at %s", url)
-            resp = self._make_request("POST", url, json=payload, timeout=30, headers=self._default_headers())
+            logger.info("[comfyui] RunPod video request headers: %s", json.dumps(headers, indent=2))
+            logger.info("[comfyui] RunPod video request payload: %s", json.dumps(payload, indent=2))
+            resp = self._make_request("POST", url, json=payload, timeout=30, headers=headers)
             if not resp.ok:
                 try:
                     logger.error("[comfyui] RunPod /run error: status=%s body=%s", resp.status_code, resp.text)
@@ -630,28 +652,30 @@ class RunPodComfyUIClient(ComfyUIClient):
             video_generation_seconds.labels(workflow=workflow_name).observe(duration)
 
     def poll_until_complete(
-        self,
-        prompt_id: str,
-        *,
-        timeout_s: int,
-        poll_interval_s: float,
-        prefer_node_ids: Optional[List[str]] = None,
+        self, prompt_id: str, poll_interval_s: float = COMFYUI_POLL_INTERVAL_SECONDS, timeout_s: int = COMFYUI_TIMEOUT_SECONDS
     ) -> List[str]:
-        """Poll RunPod until job is complete."""
-        # RunPod uses /v2/{instance_id}/status/{job_id} endpoint
-        status_url = f"{self.base_url}/v2/{self.instance_id}/status/{prompt_id}"
-        logger.info("[comfyui] Polling RunPod status for job_id=%s", prompt_id)
-        deadline = time.time() + timeout_s
-        last_error = None
+        """Poll RunPod until job completion and return list of output filenames or base64 data URLs."""
+        start_time = time.time()
         attempts = 0
-        while time.time() < deadline:
+        last_error = None
+        
+        while time.time() - start_time < timeout_s:
             try:
+                status_url = f"{self.base_url}/v2/{self.instance_id}/status/{prompt_id}"
+                logger.debug("[comfyui] Polling RunPod status at %s", status_url)
+                
                 resp = self._make_request("GET", status_url, timeout=15, headers=self._default_headers())
                 resp.raise_for_status()
                 data = resp.json()
                 
+                # Log the actual response for debugging
+                logger.debug("[comfyui] RunPod status response: %s", json.dumps(data, indent=2))
+                
                 # Check job status
-                status = data.get("status", "").upper()
+                raw_status = data.get("status", "")
+                status = raw_status.upper()
+                logger.debug("[comfyui] RunPod job status='%s' (raw='%s') for prompt_id=%s", status, raw_status, prompt_id)
+                
                 if status == "COMPLETED":
                     # Extract outputs from RunPod response structure
                     outputs = data.get("output", {})
@@ -675,9 +699,27 @@ class RunPodComfyUIClient(ComfyUIClient):
                                 else:
                                     # Fallback: treat as filename
                                     result_files.append(image)
-                            elif isinstance(image, dict) and "filename" in image:
-                                filename = image["filename"]
-                                result_files.append(filename)
+                            elif isinstance(image, dict):
+                                # Handle new RunPod format: {"data": "iVBORw...", "filename": "...", "type": "base64"}
+                                if "data" in image and "filename" in image:
+                                    # Construct full base64 data URL
+                                    base64_data = image["data"]
+                                    filename = image["filename"]
+                                    
+                                    # Determine image type from filename or default to PNG
+                                    if filename.lower().endswith('.jpg') or filename.lower().endswith('.jpeg'):
+                                        data_url = f"data:image/jpeg;base64,{base64_data}"
+                                    elif filename.lower().endswith('.webp'):
+                                        data_url = f"data:image/webp;base64,{base64_data}"
+                                    else:
+                                        data_url = f"data:image/png;base64,{base64_data}"
+                                    
+                                    logger.debug("[comfyui] Constructed base64 data URL for %s", filename)
+                                    result_files.append(data_url)
+                                elif "filename" in image:
+                                    # Fallback: just use filename
+                                    filename = image["filename"]
+                                    result_files.append(filename)
                         
                         # Handle videos
                         videos = outputs.get("videos", [])
@@ -698,12 +740,16 @@ class RunPodComfyUIClient(ComfyUIClient):
                                 result_files.append(filename)
                         
                         if result_files:
+                            logger.info("[comfyui] RunPod job completed with %d outputs", len(result_files))
                             return result_files
                     
                     # If we can't parse outputs, return empty list to indicate completion
+                    logger.info("[comfyui] RunPod job completed but no outputs found")
                     return []
                 elif status in ("FAILED", "ERROR"):
                     error_msg = data.get("error", "Unknown RunPod error")
+                    logger.error("[comfyui] RunPod job FAILED for prompt_id=%s: %s", prompt_id, error_msg)
+                    logger.error("[comfyui] About to raise RuntimeError to stop temporal workflow")
                     raise RuntimeError(f"RunPod job failed: {error_msg}")
                 elif status in ("IN_QUEUE", "RUNNING", "IN_PROGRESS"):
                     # Job still running, continue polling
@@ -714,14 +760,24 @@ class RunPodComfyUIClient(ComfyUIClient):
                 else:
                     # Unknown status, continue polling
                     attempts += 1
-                    logger.debug("[comfyui] RunPod unknown status=%s. attempt=%d, sleep %.1fs", status, attempts, poll_interval_s)
+                    logger.warning("[comfyui] RunPod UNKNOWN status='%s'. attempt=%d, sleep %.1fs", status, attempts, poll_interval_s)
                     time.sleep(poll_interval_s)
                     continue
                     
+            except requests.exceptions.Timeout as e:
+                last_error = e
+                attempts += 1
+                logger.warning("[comfyui] RunPod polling timeout: %s. attempt=%d, sleep %.1fs", e, attempts, poll_interval_s)
+                time.sleep(poll_interval_s)
+            except requests.exceptions.HTTPError as e:
+                last_error = e
+                attempts += 1
+                logger.warning("[comfyui] RunPod polling HTTP error: %s. attempt=%d, sleep %.1fs", e, attempts, poll_interval_s)
+                time.sleep(poll_interval_s)
             except Exception as e:
                 last_error = e
                 attempts += 1
-                logger.debug("[comfyui] RunPod polling error: %s. attempt=%d, sleep %.1fs", e, attempts, poll_interval_s)
+                logger.warning("[comfyui] RunPod polling error: %s. attempt=%d, sleep %.1fs", e, attempts, poll_interval_s)
                 time.sleep(poll_interval_s)
                 
         raise TimeoutError(f"Timed out waiting for RunPod results for {prompt_id}. Last error: {last_error}")

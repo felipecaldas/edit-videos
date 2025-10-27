@@ -72,20 +72,31 @@ async def generate_image(prompt_text: str, workflow_path_str: str, index: int) -
 
 @activity.defn
 async def upload_image_for_video_generation(image_hint: str) -> str:
-    """Fetches a generated image and uploads it to the ComfyUI input directory."""
+    """Fetches a generated image and uploads it to the ComfyUI input directory.
+    For RunPod, this just returns the base64 string directly.
+    """
     activity.heartbeat()
-    logger.info(f"Uploading image {image_hint} for video generation.")
+    logger.info(f"Processing image {image_hint} for video generation.")
     
-    # Check if ComfyUI configuration has changed
-    refresh_comfyui_client(ClientType.VIDEO)
-    
-    client = get_video_client()
-    filename, content = await asyncio.to_thread(client.fetch_output_bytes, image_hint)
-    uploaded_filename = await asyncio.to_thread(
-        client.upload_image_to_input, filename, content, overwrite=True
-    )
-    logger.info(f"Uploaded image {image_hint} as {uploaded_filename}")
-    return uploaded_filename
+    # Check if this is a RunPod base64 image
+    if image_hint.startswith("data:image/"):
+        logger.info(f"Using RunPod base64 image directly: {image_hint[:50]}...")
+        # For RunPod, return the base64 string directly
+        return image_hint
+    else:
+        # For local development, upload the image to ComfyUI
+        logger.info(f"Uploading local image {image_hint} to ComfyUI.")
+        
+        # Check if ComfyUI configuration has changed
+        refresh_comfyui_client(ClientType.VIDEO)
+        
+        client = get_video_client()
+        filename, content = await asyncio.to_thread(client.fetch_output_bytes, image_hint)
+        uploaded_filename = await asyncio.to_thread(
+            client.upload_image_to_input, filename, content, overwrite=True
+        )
+        logger.info(f"Uploaded image {image_hint} as {uploaded_filename}")
+        return uploaded_filename
 
 
 @activity.defn
