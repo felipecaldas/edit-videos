@@ -6,13 +6,48 @@ set -euo pipefail
 # - videomerge/comfyui-workflows/qwen-image-fast-runpod.json
 #
 # Usage:
-#   ./scripts/download_comfyui_models.sh [COMFYUI_DIR]
+#   ./scripts/download_comfyui_models.sh [COMFYUI_DIR] [--mode=models-only|nodes-only|all] [--workspace=/workspace]
 #
-# If COMFYUI_DIR is not provided, defaults to ./ComfyUI
-# Models will be placed under: "$COMFYUI_DIR/models/..."
+# Defaults:
+#   COMFYUI_DIR = ./ComfyUI
+#   MODE        = models-only
+#   WORKSPACE   = (empty)
+#
+# Behavior:
+#   - Models are written to "$WORKSPACE/models" when WORKSPACE is provided; otherwise "$COMFYUI_DIR/models".
+#   - RIFE model is ensured under the Frame Interpolation node path:
+#       "$COMFYUI_DIR/custom_nodes/ComfyUI-Frame-Interpolation/models/rife/rife47.pth"
 
-COMFYUI_DIR=${1:-"./ComfyUI"}
-MODELS_DIR="$COMFYUI_DIR/models"
+COMFYUI_DIR="./ComfyUI"
+MODE="models-only"
+WORKSPACE=""
+
+# Parse arguments (positional COMFYUI_DIR + optional flags)
+for arg in "$@"; do
+  case "$arg" in
+    --mode=*) MODE="${arg#*=}" ;;
+    --workspace=*) WORKSPACE="${arg#*=}" ;;
+    --mode|--workspace)
+      echo "ERROR: Use --mode=value or --workspace=path" >&2; exit 64 ;;
+    --*)
+      echo "WARNING: Unknown flag '$arg' (ignored)" >&2 ;;
+    *)
+      # first non-flag positional sets COMFYUI_DIR
+      if [ "$COMFYUI_DIR" = "./ComfyUI" ]; then
+        COMFYUI_DIR="$arg"
+      else
+        echo "WARNING: Extra positional argument '$arg' ignored" >&2
+      fi
+      ;;
+  esac
+done
+
+# Decide models base dir based on WORKSPACE
+if [ -n "$WORKSPACE" ]; then
+  MODELS_DIR="$WORKSPACE/models"
+else
+  MODELS_DIR="$COMFYUI_DIR/models"
+fi
 
 
 # ------------------------------
@@ -83,89 +118,111 @@ download_file() {
 
 
 # ------------------------------
-# Download models from list
+# Download models from list (unless MODE=nodes-only)
 # ------------------------------
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-MODELS_LIST_FILE="$SCRIPT_DIR/models_to_download.txt"
+if [ "$MODE" != "nodes-only" ]; then
+  SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
+  MODELS_LIST_FILE="$SCRIPT_DIR/models_to_download.txt"
 
-if [ ! -f "$MODELS_LIST_FILE" ]; then
-  echo "ERROR: Models list not found: $MODELS_LIST_FILE" >&2
-  exit 1
+  if [ ! -f "$MODELS_LIST_FILE" ]; then
+    echo "ERROR: Models list not found: $MODELS_LIST_FILE" >&2
+    exit 1
+  fi
+
+  # Read the file line by line, skipping comments and empty lines
+  # and download files.
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    # Trim leading/trailing whitespace
+    line=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+
+    # Skip empty lines and comments
+    if [ -z "$line" ] || [[ "$line" == '#'* ]]; then
+      continue
+    fi
+
+    # Parse URL and destination subdir
+    url=$(echo "$line" | cut -d' ' -f1)
+    dest_subdir=$(echo "$line" | cut -d' ' -f2-)
+
+    if [ -z "$url" ] || [ -z "$dest_subdir" ]; then
+      echo "WARNING: Skipping invalid line: '$line'" >&2
+      continue
+    fi
+
+    filename=$(basename "$url")
+    output_path="$MODELS_DIR/$dest_subdir/$filename"
+
+    download_file "$url" "$output_path"
+  done < "$MODELS_LIST_FILE"
 fi
 
-# Read the file line by line, skipping comments and empty lines
-# and download files.
-while IFS= read -r line || [[ -n "$line" ]]; do
-  # Trim leading/trailing whitespace
-  line=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+# ------------------------------
+# Custom nodes required by workflows (unless MODE=models-only)
+# ------------------------------
+if [ "$MODE" != "models-only" ]; then
+  CUSTOM_NODES_DIR="$COMFYUI_DIR/custom_nodes"
+  mkdir -p "$CUSTOM_NODES_DIR"
 
-  # Skip empty lines and comments
-  if [ -z "$line" ] || [[ "$line" == '#'* ]]; then
-    continue
+  # 1) GGUF support (UnetLoaderGGUF, CLIPLoaderGGUF, OverrideCLIPDevice, etc.)
+  clone_or_update "https://github.com/city96/ComfyUI-GGUF" "$CUSTOM_NODES_DIR/ComfyUI-GGUF"
+  pip_install_req "$CUSTOM_NODES_DIR/ComfyUI-GGUF/requirements.txt"
+
+  # 2) Extra models utilities used by GGUF/Qwen setups
+  clone_or_update "https://github.com/city96/ComfyUI_ExtraModels" "$CUSTOM_NODES_DIR/ComfyUI_ExtraModels"
+  pip_install_req "$CUSTOM_NODES_DIR/ComfyUI_ExtraModels/requirements.txt"
+
+  # 3) Cleanup helpers providing VRAMCleanup/RAMCleanup nodes
+  # These names are common providers; install both to cover variants used in community workflows
+  clone_or_update "https://github.com/pythongosssss/ComfyUI-Custom-Scripts" "$CUSTOM_NODES_DIR/ComfyUI-Custom-Scripts"
+  pip_install_req "$CUSTOM_NODES_DIR/ComfyUI-Custom-Scripts/requirements.txt"
+
+  clone_or_update "https://github.com/rgthree/rgthree-comfy" "$CUSTOM_NODES_DIR/rgthree-comfy"
+  pip_install_req "$CUSTOM_NODES_DIR/rgthree-comfy/requirements.txt"
+
+  # 4) Unload Models node
+  if [ ! -d "$CUSTOM_NODES_DIR/ComfyUI-Unload-Models/.git" ]; then
+    git clone https://github.com/SeanScripts/ComfyUI-Unload-Model.git "$CUSTOM_NODES_DIR/ComfyUI-Unload-Models"
   fi
 
-  # Parse URL and destination subdir
-  url=$(echo "$line" | cut -d' ' -f1)
-  dest_subdir=$(echo "$line" | cut -d' ' -f2-)
-
-  if [ -z "$url" ] || [ -z "$dest_subdir" ]; then
-    echo "WARNING: Skipping invalid line: '$line'" >&2
-    continue
+  # 5) Easy-Use nodes (requires running its own installer)
+  EASY_USE_DIR="$CUSTOM_NODES_DIR/ComfyUI-Easy-Use"
+  clone_or_update "https://github.com/yolain/ComfyUI-Easy-Use" "$EASY_USE_DIR"
+  if [ -f "$EASY_USE_DIR/install.sh" ]; then
+    echo "==> Running installer for ComfyUI-Easy-Use"
+    (cd "$EASY_USE_DIR" && bash install.sh)
   fi
-
-  filename=$(basename "$url")
-  output_path="$MODELS_DIR/$dest_subdir/$filename"
-
-  download_file "$url" "$output_path"
-done < "$MODELS_LIST_FILE"
+fi
 
 # ------------------------------
-# Custom nodes required by workflows
+# Ensure RIFE is present in Frame-Interpolation node path
 # ------------------------------
-CUSTOM_NODES_DIR="$COMFYUI_DIR/custom_nodes"
-mkdir -p "$CUSTOM_NODES_DIR"
+NODE_RIFE_DIR="$COMFYUI_DIR/custom_nodes/ComfyUI-Frame-Interpolation/models/rife"
+mkdir -p "$NODE_RIFE_DIR"
 
-# 1) GGUF support (UnetLoaderGGUF, CLIPLoaderGGUF, OverrideCLIPDevice, etc.)
-clone_or_update "https://github.com/city96/ComfyUI-GGUF" "$CUSTOM_NODES_DIR/ComfyUI-GGUF"
-pip_install_req "$CUSTOM_NODES_DIR/ComfyUI-GGUF/requirements.txt"
-
-# 2) Extra models utilities used by GGUF/Qwen setups
-clone_or_update "https://github.com/city96/ComfyUI_ExtraModels" "$CUSTOM_NODES_DIR/ComfyUI_ExtraModels"
-pip_install_req "$CUSTOM_NODES_DIR/ComfyUI_ExtraModels/requirements.txt"
-
-# 3) Cleanup helpers providing VRAMCleanup/RAMCleanup nodes
-# These names are common providers; install both to cover variants used in community workflows
-clone_or_update "https://github.com/pythongosssss/ComfyUI-Custom-Scripts" "$CUSTOM_NODES_DIR/ComfyUI-Custom-Scripts"
-pip_install_req "$CUSTOM_NODES_DIR/ComfyUI-Custom-Scripts/requirements.txt"
-
-clone_or_update "https://github.com/rgthree/rgthree-comfy" "$CUSTOM_NODES_DIR/rgthree-comfy"
-pip_install_req "$CUSTOM_NODES_DIR/rgthree-comfy/requirements.txt"
-
-# 4) Unload Models node
-git clone https://github.com/SeanScripts/ComfyUI-Unload-Model.git "$CUSTOM_NODES_DIR/ComfyUI-Unload-Models"
-
-
-# 5) Easy-Use nodes (requires running its own installer)
-EASY_USE_DIR="$CUSTOM_NODES_DIR/ComfyUI-Easy-Use"
-clone_or_update "https://github.com/yolain/ComfyUI-Easy-Use" "$EASY_USE_DIR"
-if [ -f "$EASY_USE_DIR/install.sh" ]; then
-  echo "==> Running installer for ComfyUI-Easy-Use"
-  (cd "$EASY_USE_DIR" && bash install.sh)
+RIFE_SRC_PATH="$MODELS_DIR/rife/rife47.pth"
+if [ -f "$RIFE_SRC_PATH" ]; then
+  cp -f "$RIFE_SRC_PATH" "$NODE_RIFE_DIR/rife47.pth"
+else
+  # As a fallback, download directly to the node path
+  download_file "https://huggingface.co/wavespeed/misc/resolve/main/rife/rife47.pth" "$NODE_RIFE_DIR/rife47.pth"
 fi
 
 cat <<EOF
 
-All requested model downloads finished.
+Completed with MODE=$MODE, COMFYUI_DIR=$COMFYUI_DIR, WORKSPACE=${WORKSPACE:-none}
 
-Placed into:
-  - VAE             -> $MODELS_DIR/vae
-  - UNET (GGUF)     -> $MODELS_DIR/diffusion_models
-  - LoRA            -> $MODELS_DIR/loras
-  - GGUF encoder    -> $MODELS_DIR/clip
-  - Text encoders   -> $MODELS_DIR/text_encoders
+Models base: $MODELS_DIR
+Node RIFE  : $NODE_RIFE_DIR/rife47.pth
 
 If you run this on Windows, execute inside Git Bash or WSL.
-To use another ComfyUI folder, pass it as the first argument:
-  ./scripts/download_comfyui_models.sh /path/to/ComfyUI
+Examples:
+  # models only to local ComfyUI
+  ./scripts/download_comfyui_models.sh ./ComfyUI --mode=models-only
+
+  # models only to RunPod volume mounted at /workspace
+  ./scripts/download_comfyui_models.sh /comfyui --mode=models-only --workspace=/workspace
+
+  # nodes only into local ComfyUI
+  ./scripts/download_comfyui_models.sh ./ComfyUI --mode=nodes-only
 
 EOF

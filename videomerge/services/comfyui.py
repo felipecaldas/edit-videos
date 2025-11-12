@@ -1,3 +1,4 @@
+import base64
 import json
 import time
 import uuid
@@ -302,12 +303,21 @@ def generate_images_for_prompt(text_prompt: str, template_path: Path) -> List[st
 
 def submit_image_to_video(
     prompt_text: str,
-    image_filename: str,
+    image_input: str,
     *,
     template_path: Path,
     client_id: Optional[str] = None,
+    run_id: Optional[str] = None,
 ) -> str:
-    """Submit a ComfyUI image->video workflow and return the prompt_id."""
+    """Submit a ComfyUI image->video workflow and return the prompt_id.
+    
+    Args:
+        prompt_text: The video generation prompt
+        image_input: For local deployment, a filename; for RunPod, base64 image data URL
+        template_path: Path to the workflow template
+        client_id: Optional client ID
+        run_id: Optional run ID for debugging purposes
+    """
     client_id = client_id or str(uuid.uuid4())
     
     # Load the template as a string and validate placeholders
@@ -319,7 +329,7 @@ def submit_image_to_video(
 
     # Escape and replace placeholders
     escaped_prompt = json.dumps(prompt_text)[1:-1]
-    escaped_image = json.dumps(image_filename)[1:-1]
+    escaped_image = json.dumps(image_input)[1:-1]
     final_workflow_str = workflow_str.replace("{{ VIDEO_PROMPT }}", escaped_prompt)
     final_workflow_str = final_workflow_str.replace("{{ INPUT_IMAGE }}", escaped_image)
 
@@ -341,7 +351,7 @@ def submit_image_to_video(
 
     url = f"{COMFYUI_URL.rstrip('/')}/prompt"
     payload = {"prompt": workflow_payload, "client_id": client_id}
-    logger.info("[comfyui] Submitting image->video prompt to %s (image=%s)", url, image_filename)
+    logger.info("[comfyui] Submitting image->video prompt to %s (image=%s)", url, image_input)
     resp = _make_comfyui_request("POST", url, json=payload, timeout=30, headers=_default_headers())
     # If ComfyUI rejects the workflow (400), log the response body for diagnostics
     if not resp.ok:
@@ -428,3 +438,51 @@ def upload_image_to_input(filename: str, content: bytes, overwrite: bool = True)
     except Exception:
         uploaded_name = filename
     return uploaded_name
+
+
+def save_base64_image_to_disk(base64_data_url: str, output_dir: Path, filename: Optional[str] = None) -> Path:
+    """Save a base64 image data URL to disk as a PNG file.
+    
+    Args:
+        base64_data_url: Base64 data URL (e.g., "data:image/png;base64,iVBORw0KGgo...")
+        output_dir: Directory where the image should be saved
+        filename: Optional filename (without extension). If None, generates a timestamp-based name.
+    
+    Returns:
+        Path to the saved PNG file.
+    """
+    if not base64_data_url.startswith("data:image/"):
+        raise ValueError("Invalid base64 data URL format")
+    
+    # Extract the base64 data (remove data:image/...;base64, prefix)
+    if "," in base64_data_url:
+        base64_data = base64_data_url.split(",", 1)[1]
+    else:
+        raise ValueError("Invalid base64 data URL format - missing comma separator")
+    
+    # Generate filename if not provided
+    if not filename:
+        timestamp = int(time.time())
+        filename = f"generated_image_{timestamp}"
+    
+    # Ensure PNG extension
+    if not filename.lower().endswith('.png'):
+        filename = f"{filename}.png"
+    
+    # Create output directory if it doesn't exist
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Decode base64 data and save to file
+    try:
+        image_bytes = base64.b64decode(base64_data)
+        output_path = output_dir / filename
+        
+        with output_path.open("wb") as f:
+            f.write(image_bytes)
+        
+        logger.info(f"[comfyui] Saved base64 image to disk: {output_path}")
+        return output_path
+        
+    except Exception as e:
+        logger.error(f"[comfyui] Failed to save base64 image to disk: {e}")
+        raise ValueError(f"Failed to save base64 image: {e}")

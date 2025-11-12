@@ -40,30 +40,49 @@ class ProcessSceneWorkflow:
             "retry_policy": RetryPolicy(maximum_attempts=3),
         }
 
-        # 1. Generate image
-        image_hint = ""
-        if prompt.image_prompt:
-            image_hint = await workflow.execute_activity(
-                generate_image, args=[prompt.image_prompt, workflow_path, index], **activity_defaults
-            )
+        try:
+            # 1. Generate image
+            image_hint = ""
+            if prompt.image_prompt:
+                try:
+                    image_hint = await workflow.execute_activity(
+                        generate_image, args=[prompt.image_prompt, workflow_path, index], **activity_defaults
+                    )
+                except Exception as e:
+                    workflow.logger.error(f"Image generation failed for scene {index}: {e}")
+                    raise RuntimeError(f"Scene {index} image generation failed: {e}")
 
-        if not image_hint:
-            workflow.logger.warning(f"Skipping scene {index} as no image was generated.")
-            return []
+            if not image_hint:
+                workflow.logger.warning(f"Skipping scene {index} as no image was generated.")
+                return []
 
-        # 2. Upload image for video generation
-        uploaded_image_name = await workflow.execute_activity(
-            upload_image_for_video_generation, args=[image_hint], **activity_defaults
-        )
+            # 2. Upload image for video generation
+            try:
+                image_input = await workflow.execute_activity(
+                    upload_image_for_video_generation, args=[image_hint], **activity_defaults
+                )
+            except Exception as e:
+                workflow.logger.error(f"Image upload failed for scene {index}: {e}")
+                raise RuntimeError(f"Scene {index} image upload failed: {e}")
 
-        # 3. Generate video from image
-        video_paths = []
-        if prompt.video_prompt:
-            video_paths = await workflow.execute_activity(
-                generate_video_from_image, args=[run_id, prompt.video_prompt, uploaded_image_name, index], **activity_defaults
-            )
+            # 3. Generate video from image
+            video_paths = []
+            if prompt.video_prompt:
+                try:
+                    video_paths = await workflow.execute_activity(
+                        generate_video_from_image, args=[run_id, prompt.video_prompt, image_input, index], **activity_defaults
+                    )
+                except Exception as e:
+                    workflow.logger.error(f"Video generation failed for scene {index}: {e}")
+                    raise RuntimeError(f"Scene {index} video generation failed: {e}")
 
-        return video_paths
+            workflow.logger.info(f"Scene {index} completed successfully, generated {len(video_paths)} video files")
+            return video_paths
+            
+        except Exception as e:
+            workflow.logger.error(f"Scene {index} workflow failed: {e}")
+            # Re-raise the exception to ensure the workflow is marked as FAILED
+            raise
 
 
 @workflow.defn

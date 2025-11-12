@@ -10,3 +10,10 @@ https://huggingface.co/city96/umt5-xxl-encoder-gguf/resolve/main/umt5-xxl-encode
 https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/vae/qwen_image_vae.safetensors vae
 https://huggingface.co/QuantStack/Qwen-Image-Distill-GGUF/resolve/main/Qwen_Image_Distill-Q8_0.gguf unet
 https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors text_encoders
+
+# IllustriousXL + RealESRGAN
+https://huggingface.co/frankjoshua/illustriousXL_v01/resolve/main/illustriousXL_v01.safetensors checkpoints
+https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.1/RealESRGAN_x2plus.pth upscale_models
+https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.1/RealESRGAN_x4plus.pth upscale_models
+
+https://huggingface.co/Comfy-Org/stable-diffusion-v1-5-archive/resolve/main/v1-5-pruned-emaonly-fp16.safetensors checkpoints

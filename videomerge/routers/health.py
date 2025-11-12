@@ -1,11 +1,13 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from typing import Optional
+from pathlib import Path
 from videomerge.services.comfyui_client import (
-    refresh_comfyui_client, 
-    get_image_client, 
-    get_video_client, 
+    refresh_comfyui_client,
+    get_image_client,
+    get_video_client,
     reset_comfyui_client,
-    ClientType
+    ClientType,
 )
 from videomerge.utils.logging import get_logger
 import os
@@ -15,8 +17,38 @@ router = APIRouter(prefix="", tags=["health"])
 
 
 class RefreshRequest(BaseModel):
-    image_instance_id: str = None
-    video_instance_id: str = None
+    image_instance_id: Optional[str] = None
+    video_instance_id: Optional[str] = None
+
+
+def update_env_file(var_name: str, value: str) -> None:
+    """Update a variable in the .env file.
+    
+    Args:
+        var_name: Name of the environment variable
+        value: New value to set
+    """
+    repo_root = Path(__file__).resolve().parents[2]
+    env_path = repo_root / ".env"
+    
+    # Read existing .env file if it exists
+    lines = []
+    if env_path.exists():
+        lines = env_path.read_text(encoding="utf-8").splitlines(keepends=True)
+    
+    # Update or add the variable
+    updated = False
+    for i, line in enumerate(lines):
+        if line.startswith(f"{var_name}="):
+            lines[i] = f"{var_name}={value}\n"
+            updated = True
+            break
+    
+    if not updated:
+        lines.append(f"{var_name}={value}\n")
+    
+    # Write back to .env file
+    env_path.write_text("".join(lines), encoding="utf-8")
 
 
 @router.get("/health")
@@ -29,7 +61,7 @@ async def refresh_comfyui_config(request: RefreshRequest = None):
     """Refresh the ComfyUI client configuration.
     
     Can optionally update the RUNPOD_IMAGE_INSTANCE_ID and/or RUNPOD_VIDEO_INSTANCE_ID 
-    environment variables before refreshing.
+    environment variables before refreshing. Changes will be persisted to the .env file.
     
     Args:
         request: Optional request body with new instance_id values
@@ -37,11 +69,17 @@ async def refresh_comfyui_config(request: RefreshRequest = None):
     try:
         refresh_results = {}
         updated_vars = {}
+        env_updated = False
         
         # Update image instance ID if provided
         if request and request.image_instance_id:
             old_instance_id = os.getenv("RUNPOD_IMAGE_INSTANCE_ID")
             os.environ["RUNPOD_IMAGE_INSTANCE_ID"] = request.image_instance_id
+            
+            # Update .env file
+            update_env_file("RUNPOD_IMAGE_INSTANCE_ID", request.image_instance_id)
+            env_updated = True
+            
             logger.info(
                 "Updated RUNPOD_IMAGE_INSTANCE_ID from %s to %s", 
                 old_instance_id, 
@@ -51,13 +89,23 @@ async def refresh_comfyui_config(request: RefreshRequest = None):
                 "old": old_instance_id,
                 "new": request.image_instance_id
             }
-            # Force reset the image client to ensure it picks up the new environment
-            reset_comfyui_client(ClientType.IMAGE)
+            
+            # Update existing client if it exists
+            image_client = get_image_client()
+            if hasattr(image_client, 'update_instance_id'):
+                image_client.update_instance_id(request.image_instance_id)
+            else:
+                reset_comfyui_client(ClientType.IMAGE)
         
         # Update video instance ID if provided
         if request and request.video_instance_id:
             old_instance_id = os.getenv("RUNPOD_VIDEO_INSTANCE_ID")
             os.environ["RUNPOD_VIDEO_INSTANCE_ID"] = request.video_instance_id
+            
+            # Update .env file
+            update_env_file("RUNPOD_VIDEO_INSTANCE_ID", request.video_instance_id)
+            env_updated = True
+            
             logger.info(
                 "Updated RUNPOD_VIDEO_INSTANCE_ID from %s to %s", 
                 old_instance_id, 
@@ -67,7 +115,21 @@ async def refresh_comfyui_config(request: RefreshRequest = None):
                 "old": old_instance_id,
                 "new": request.video_instance_id
             }
-            # Force reset the video client to ensure it picks up the new environment
+            
+            # Update existing client if it exists
+            video_client = get_video_client()
+            if hasattr(video_client, 'update_instance_id'):
+                video_client.update_instance_id(request.video_instance_id)
+            else:
+                reset_comfyui_client(ClientType.VIDEO)
+        
+        # Reload config if .env was updated
+        if env_updated:
+            from videomerge.config import reload_config
+            reload_config()
+            
+            # Force refresh all clients
+            reset_comfyui_client(ClientType.IMAGE)
             reset_comfyui_client(ClientType.VIDEO)
         
         # Check if configuration has changed and refresh if needed

@@ -6,7 +6,7 @@ from typing import List, Dict, Any
 from temporalio import activity
 
 from videomerge.config import DATA_SHARED_BASE, WORKFLOW_I2V_PATH, VIDEO_COMPLETED_N8N_WEBHOOK_URL
-from videomerge.services.comfyui_client import get_image_client, get_video_client, refresh_comfyui_client, ClientType
+from videomerge.services.comfyui_client import get_image_client, get_video_client, refresh_comfyui_client, ClientType, get_comfyui_client
 from videomerge.services.comfyui import (
     submit_text_to_image,
     poll_until_complete,
@@ -52,16 +52,17 @@ async def generate_voiceover(run_id: str, script: str) -> str:
 
 
 @activity.defn
-async def generate_image(prompt_text: str, workflow_path_str: str, index: int) -> str:
+async def generate_image(prompt_text: str, workflow_path: str, index: int) -> str:
     """Generates a single image from a text prompt."""
     activity.heartbeat()
     logger.info(f"Generating image for prompt index {index}")
     
-    # Check if ComfyUI configuration has changed
-    refresh_comfyui_client(ClientType.IMAGE)
+    # Convert string path to Path object
+    workflow_path = Path(workflow_path)
     
-    workflow_path = Path(workflow_path_str)
-    client = get_image_client()
+    # Force refresh the client to get latest configuration
+    client = get_comfyui_client(ClientType.IMAGE, force_refresh=True)
+    
     prompt_id = await asyncio.to_thread(client.submit_text_to_image, prompt_text, template_path=workflow_path)
     filenames = await asyncio.to_thread(client.poll_until_complete, prompt_id, timeout_s=600, poll_interval_s=15)
     if not filenames:
@@ -72,49 +73,58 @@ async def generate_image(prompt_text: str, workflow_path_str: str, index: int) -
 
 @activity.defn
 async def upload_image_for_video_generation(image_hint: str) -> str:
-    """Fetches a generated image and uploads it to the ComfyUI input directory.
-    For RunPod, this just returns the base64 string directly.
+    """Process image for video generation.
+    
+    For RunPod: Passes through base64 image data URL (no upload needed).
+    For Local: Uploads the image to ComfyUI input directory.
+    
+    Args:
+        image_hint: Either base64 image data (RunPod) or filename hint (local)
+    
+    Returns:
+        For RunPod: Base64 image data URL (unchanged)
+        For Local: Uploaded filename in ComfyUI
     """
     activity.heartbeat()
-    logger.info(f"Processing image {image_hint} for video generation.")
     
     # Check if this is a RunPod base64 image
     if image_hint.startswith("data:image/"):
-        logger.info(f"Using RunPod base64 image directly: {image_hint[:50]}...")
-        # For RunPod, return the base64 string directly
+        logger.info(f"[RunPod] Passing through base64 image data for video generation: {image_hint[:50]}...")
+        
+        # For RunPod, we don't need to upload - just return the base64 data
+        # The video generation will handle it directly
         return image_hint
     else:
         # For local development, upload the image to ComfyUI
-        logger.info(f"Uploading local image {image_hint} to ComfyUI.")
+        logger.info(f"[Local] Uploading image {image_hint} to ComfyUI input directory.")
         
         # Check if ComfyUI configuration has changed
-        refresh_comfyui_client(ClientType.VIDEO)
+        client = get_comfyui_client(ClientType.VIDEO, force_refresh=True)
         
-        client = get_video_client()
         filename, content = await asyncio.to_thread(client.fetch_output_bytes, image_hint)
         uploaded_filename = await asyncio.to_thread(
             client.upload_image_to_input, filename, content, overwrite=True
         )
-        logger.info(f"Uploaded image {image_hint} as {uploaded_filename}")
+        logger.info(f"[Local] Uploaded image {image_hint} as {uploaded_filename}")
         return uploaded_filename
 
 
 @activity.defn
-async def generate_video_from_image(run_id: str, video_prompt: str, uploaded_image_name: str, index: int) -> List[str]:
+async def generate_video_from_image(run_id: str, video_prompt: str, image_input: str, index: int) -> List[str]:
     """Generates a video clip from an image and a video prompt."""
     activity.heartbeat()
     run_dir = DATA_SHARED_BASE / run_id
     logger.info(f"Generating video for prompt index {index}")
     
-    # Check if ComfyUI configuration has changed
-    refresh_comfyui_client(ClientType.VIDEO)
+    # Force refresh the client to get latest configuration
+    client = get_comfyui_client(ClientType.VIDEO, force_refresh=True)
     
-    client = get_video_client()
     prompt_id = await asyncio.to_thread(
         client.submit_image_to_video,
         video_prompt,
-        uploaded_image_name,
+        image_input,
         template_path=WORKFLOW_I2V_PATH,
+        run_id=run_id,
     )
     video_hints = await asyncio.to_thread(client.poll_until_complete, prompt_id, timeout_s=600, poll_interval_s=15)
     saved_files = await asyncio.to_thread(client.download_outputs, video_hints, run_dir)

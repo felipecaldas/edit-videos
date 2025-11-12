@@ -12,8 +12,8 @@ services:
       - ENABLE_VOICEOVER_GEN=${ENABLE_VOICEOVER_GEN}
       - COMFYUI_TIMEOUT_SECONDS=${COMFYUI_TIMEOUT_SECONDS}
       - COMFYUI_POLL_INTERVAL_SECONDS=${COMFYUI_POLL_INTERVAL_SECONDS}
-      - LOG_LEVEL=${LOG_LEVEL}
-      - UVICORN_LOG_LEVEL=${UVICORN_LOG_LEVEL}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - UVICORN_LOG_LEVEL=${UVICORN_LOG_LEVEL:-info}
       - VIDEO_COMPLETED_N8N_WEBHOOK_URL=${VIDEO_COMPLETED_N8N_WEBHOOK_URL}
       - TEMPORAL_SERVER_URL=${TEMPORAL_SERVER_URL}
     ports:
@@ -37,7 +37,7 @@ services:
       - RUNPOD_VIDEO_INSTANCE_ID=${RUNPOD_VIDEO_INSTANCE_ID}
       - RUNPOD_API_KEY=${RUNPOD_API_KEY}
       - COMFYUI_URL=${COMFYUI_URL}
-      - LOG_LEVEL=${LOG_LEVEL}
+      - LOG_LEVEL=warn
       - TEMPORAL_SERVER_URL=${TEMPORAL_SERVER_URL}
     restart: unless-stopped
     depends_on:
@@ -58,6 +58,7 @@ services:
       - POSTGRES_DB=temporal
       - POSTGRES_SEEDS=postgres
       - TEMPORAL_WEBSERVER_PORT=8080
+      - LOG_LEVEL=warn
     depends_on:
       postgres:
         condition: service_healthy
@@ -73,6 +74,7 @@ services:
       - TEMPORAL_ADDRESS=temporal:7233
       - TEMPORAL_CORS_ORIGINS=http://192.168.68.52:8087
       - TEMPORAL_CSRF_COOKIE_INSECURE=true
+      - LOG_LEVEL=warn
     depends_on:
       - temporal
     networks:

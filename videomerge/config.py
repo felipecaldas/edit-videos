@@ -1,72 +1,182 @@
 from pathlib import Path
 import os
+from typing import Optional
+from dotenv import load_dotenv
 
-# Base temp directory for transient work
-TMP_BASE = Path(os.getenv("TMP_BASE", "/tmp/media"))
 
-# Shared data directory where orchestrations persist outputs
-DATA_SHARED_BASE = Path(os.getenv("DATA_SHARED_BASE", "/data/shared"))
+def _str_to_bool(value: str | None, default: str) -> bool:
+    """Convert an environment variable string to a boolean value."""
+    normalized = (value or default).lower()
+    return normalized in {"1", "true", "yes", "on"}
 
-# TikTok videos archive folder
-TIKTOK_VIDEOS_ARCHIVE_FOLDER = Path(os.getenv("TIKTOK_VIDEOS_ARCHIVE_FOLDER", "/data/shared/archived"))
 
-# Voiceover service endpoint
-VOICEOVER_SERVICE_URL = os.getenv("VOICEOVER_SERVICE_URL", "http://192.168.68.51:8083")
+_BASE_DIR = Path(__file__).parent.parent
+_ENV_PATH = _BASE_DIR / ".env"
+_LAST_ENV_MTIME: Optional[float] = None
 
-# Optional API key for voiceover service
-VOICEOVER_API_KEY = os.getenv("VOICEOVER_API_KEY")
-# Toggle voiceover generation inside this service. Default: disabled (handled externally via n8n)
-ENABLE_VOICEOVER_GEN = os.getenv("ENABLE_VOICEOVER_GEN", "false").lower() in {"1", "true", "yes", "on"}
 
-# Subtitle configuration path
-SUBTITLE_CONFIG_PATH = Path(os.getenv("SUBTITLE_CONFIG_PATH", "subtitle_config.json"))
+def _load_paths() -> tuple[Path, Path, Path]:
+    """Load path-based configuration values from the environment."""
+    tmp_base = Path(os.getenv("TMP_BASE", "/tmp/media"))
+    data_shared_base = Path(os.getenv("DATA_SHARED_BASE", "/data/shared"))
+    archive_folder = Path(os.getenv("TIKTOK_VIDEOS_ARCHIVE_FOLDER", "/data/shared/archived"))
+    return tmp_base, data_shared_base, archive_folder
 
-# Temporal server URL
-TEMPORAL_SERVER_URL = os.getenv("TEMPORAL_SERVER_URL", "localhost:7233")
 
-# ComfyUI configuration
-COMFYUI_URL = os.getenv("COMFYUI_URL", "http://192.168.68.51:8188")
-ENABLE_IMAGE_GEN = os.getenv("ENABLE_IMAGE_GEN", "true").lower() in {"1", "true", "yes", "on"}
-# Allow long-running generations (e.g., 10+ minutes)
-COMFYUI_TIMEOUT_SECONDS = int(os.getenv("COMFYUI_TIMEOUT_SECONDS", str(20 * 60)))
-COMFYUI_POLL_INTERVAL_SECONDS = float(os.getenv("COMFYUI_POLL_INTERVAL_SECONDS", "2"))
-# Environment indicator (e.g., "local" or "runpod"). Defaults to local.
-RUN_ENV = os.getenv("RUN_ENV", "local").lower()
-# RunPod instance IDs for serverless API (required when RUN_ENV=runpod)
-RUNPOD_IMAGE_INSTANCE_ID = os.getenv("RUNPOD_IMAGE_INSTANCE_ID")
-RUNPOD_VIDEO_INSTANCE_ID = os.getenv("RUNPOD_VIDEO_INSTANCE_ID")
+def _load_comfyui_defaults() -> tuple[str, bool, int, float, str, str | None, str | None]:
+    """Load ComfyUI-related configuration values from the environment."""
+    comfyui_url = os.getenv("COMFYUI_URL", "http://192.168.68.51:8188")
+    enable_image_gen = _str_to_bool(os.getenv("ENABLE_IMAGE_GEN"), "true")
+    timeout_seconds = int(os.getenv("COMFYUI_TIMEOUT_SECONDS", str(20 * 60)))
+    poll_interval = float(os.getenv("COMFYUI_POLL_INTERVAL_SECONDS", "2"))
+    run_env = os.getenv("RUN_ENV", "local").lower()
+    image_instance_id = os.getenv("RUNPOD_IMAGE_INSTANCE_ID")
+    video_instance_id = os.getenv("RUNPOD_VIDEO_INSTANCE_ID")
+    return (
+        comfyui_url,
+        enable_image_gen,
+        timeout_seconds,
+        poll_interval,
+        run_env,
+        image_instance_id,
+        video_instance_id,
+    )
 
-# RunPod API key for serverless authentication (required when RUN_ENV=runpod)
-RUNPOD_API_KEY = os.getenv("RUNPOD_API_KEY")
 
-# Mapping of image styles to their corresponding workflow files (environment-aware).
-def get_image_workflows():
-    base_workflows = {
-        "crayon_drawing": "crayon-drawing.json",
-        "anime": "T2I_ChromaAnimaAIO.json",
-    }
-    
-    if RUN_ENV == "runpod":
-        base_workflows["default"] = "runpod-t2i-fluxdev.json"
-    else:
-        base_workflows["default"] = "qwen-image-fast-local.json"
-    
-    return base_workflows
+def _load_misc_defaults() -> tuple[str, str | None, Path, str]:
+    """Load miscellaneous configuration values from the environment."""
+    voiceover_url = os.getenv("VOICEOVER_SERVICE_URL", "http://192.168.68.51:8083")
+    voiceover_api_key = os.getenv("VOICEOVER_API_KEY")
+    subtitle_path = Path(os.getenv("SUBTITLE_CONFIG_PATH", "subtitle_config.json"))
+    temporal_url = os.getenv("TEMPORAL_SERVER_URL", "localhost:7233")
+    return voiceover_url, voiceover_api_key, subtitle_path, temporal_url
 
-IMAGE_WORKFLOWS = get_image_workflows()
 
-# The base path for the ComfyUI workflow files.
-WORKFLOWS_BASE_PATH = "videomerge/comfyui-workflows"
+def _load_workflow_config(run_env: str) -> tuple[dict[str, str], Path, str, Path]:
+    """Load workflow-related configuration values from the environment."""
 
-# Image-to-Video workflow template path
-DEFAULT_I2V_WORKFLOW = (
-    "runpod-i2v-wan22-engui-studio.json" if RUN_ENV == "runpod" else "I2V-Wan-2.2-Lightning-local.json"
-)
-WORKFLOW_I2V_PATH = Path(os.getenv(
-    "WORKFLOW_I2V_PATH",
-    f"videomerge/comfyui-workflows/{DEFAULT_I2V_WORKFLOW}",
-))
+    def _base_workflows() -> dict[str, str]:
+        defaults = {
+            "crayon_drawing": "crayon-drawing.json",
+            "anime": "T2I_ChromaAnimaAIO.json",
+        }
 
-# Webhook configuration for N8N notifications
-VIDEO_COMPLETED_N8N_WEBHOOK_URL = os.getenv("VIDEO_COMPLETED_N8N_WEBHOOK_URL", "https://your-n8n-instance.com/webhook/job-complete")
-WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")  # Optional secret for webhook verification
+        defaults["default"] = (
+            "runpod-t2i-fluxdev.json" if run_env == "runpod" else "qwen-image-fast-local.json"
+        )
+        return defaults
+
+    workflows = _base_workflows()
+    workflows_base_path = Path("videomerge/comfyui-workflows")
+    default_i2v_workflow = (
+        "I2V-Wan-2.2-Lightning-runpod.json" if run_env == "runpod" else "I2V-Wan-2.2-Lightning-local.json"
+    )
+    workflow_i2v_path = Path(
+        os.getenv(
+            "WORKFLOW_I2V_PATH",
+            f"videomerge/comfyui-workflows/{default_i2v_workflow}",
+        )
+    )
+
+    return workflows, workflows_base_path, default_i2v_workflow, workflow_i2v_path
+
+
+def _load_notifications_defaults() -> tuple[str, str | None]:
+    """Load webhook configuration values from the environment."""
+    n8n_webhook = os.getenv(
+        "VIDEO_COMPLETED_N8N_WEBHOOK_URL",
+        "https://your-n8n-instance.com/webhook/job-complete",
+    )
+    webhook_secret = os.getenv("WEBHOOK_SECRET")
+    return n8n_webhook, webhook_secret
+
+
+def _apply_config() -> None:
+    """Populate module-level constants from current environment variables."""
+    global TMP_BASE, DATA_SHARED_BASE, TIKTOK_VIDEOS_ARCHIVE_FOLDER
+    TMP_BASE, DATA_SHARED_BASE, TIKTOK_VIDEOS_ARCHIVE_FOLDER = _load_paths()
+
+    global VOICEOVER_SERVICE_URL, VOICEOVER_API_KEY, SUBTITLE_CONFIG_PATH, TEMPORAL_SERVER_URL
+    (
+        VOICEOVER_SERVICE_URL,
+        VOICEOVER_API_KEY,
+        SUBTITLE_CONFIG_PATH,
+        TEMPORAL_SERVER_URL,
+    ) = _load_misc_defaults()
+
+    global ENABLE_VOICEOVER_GEN
+    ENABLE_VOICEOVER_GEN = _str_to_bool(os.getenv("ENABLE_VOICEOVER_GEN"), "false")
+
+    global COMFYUI_URL, ENABLE_IMAGE_GEN, COMFYUI_TIMEOUT_SECONDS, COMFYUI_POLL_INTERVAL_SECONDS
+    global RUN_ENV, RUNPOD_IMAGE_INSTANCE_ID, RUNPOD_VIDEO_INSTANCE_ID
+    (
+        COMFYUI_URL,
+        ENABLE_IMAGE_GEN,
+        COMFYUI_TIMEOUT_SECONDS,
+        COMFYUI_POLL_INTERVAL_SECONDS,
+        RUN_ENV,
+        RUNPOD_IMAGE_INSTANCE_ID,
+        RUNPOD_VIDEO_INSTANCE_ID,
+    ) = _load_comfyui_defaults()
+
+    global RUNPOD_API_KEY, COMFY_ORG_API_KEY
+    RUNPOD_API_KEY = os.getenv("RUNPOD_API_KEY")
+    COMFY_ORG_API_KEY = os.getenv(
+        "COMFY_ORG_API_KEY",
+        "comfyui-67e0362fbb7d9989c297e9d6d0b7e3ea0a08214897b4a0be25146e16ec22ea4f",
+    )
+
+    global IMAGE_WORKFLOWS, WORKFLOWS_BASE_PATH, DEFAULT_I2V_WORKFLOW, WORKFLOW_I2V_PATH
+    (
+        IMAGE_WORKFLOWS,
+        WORKFLOWS_BASE_PATH,
+        DEFAULT_I2V_WORKFLOW,
+        WORKFLOW_I2V_PATH,
+    ) = _load_workflow_config(RUN_ENV)
+
+    global VIDEO_COMPLETED_N8N_WEBHOOK_URL, WEBHOOK_SECRET
+    (
+        VIDEO_COMPLETED_N8N_WEBHOOK_URL,
+        WEBHOOK_SECRET,
+    ) = _load_notifications_defaults()
+
+
+def _load_env() -> None:
+    """Load environment variables from the .env file if present."""
+    global _LAST_ENV_MTIME
+
+    try:
+        if _ENV_PATH.exists():
+            load_dotenv(dotenv_path=_ENV_PATH, override=True)
+            _LAST_ENV_MTIME = _ENV_PATH.stat().st_mtime
+            return
+    except OSError:
+        # If the workflow sandbox restricts filesystem access we fall back to defaults
+        pass
+
+    load_dotenv(override=True)
+    _LAST_ENV_MTIME = None
+
+
+def reload_config() -> None:
+    """Reload environment variables and refresh module-level configuration constants."""
+    _load_env()
+    _apply_config()
+
+
+def ensure_config_current() -> None:
+    """Ensure in-memory configuration matches the .env file on disk."""
+    try:
+        if not _ENV_PATH.exists():
+            return
+
+        current_mtime = _ENV_PATH.stat().st_mtime
+    except OSError:
+        return
+
+    if _LAST_ENV_MTIME is None or current_mtime > _LAST_ENV_MTIME:
+        reload_config()
+
+
+_load_env()
+_apply_config()

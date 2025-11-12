@@ -56,12 +56,21 @@ class ComfyUIClient(ABC):
     def submit_image_to_video(
         self,
         prompt_text: str,
-        image_filename: str,
+        image_input: str,
         *,
         template_path: Path,
         client_id: Optional[str] = None,
+        run_id: Optional[str] = None,
     ) -> str:
-        """Submit an image-to-video workflow and return the prompt_id."""
+        """Submit an image-to-video workflow and return the prompt_id.
+        
+        Args:
+            prompt_text: The video generation prompt
+            image_input: For local deployment, a filename; for RunPod, base64 image data URL
+            template_path: Path to the workflow template
+            client_id: Optional client ID
+            run_id: Optional run ID for debugging purposes
+        """
         pass
 
     @abstractmethod
@@ -239,10 +248,11 @@ class LocalComfyUIClient(ComfyUIClient):
     def submit_image_to_video(
         self,
         prompt_text: str,
-        image_filename: str,
+        image_input: str,
         *,
         template_path: Path,
         client_id: Optional[str] = None,
+        run_id: Optional[str] = None,
     ) -> str:
         """Submit an image-to-video workflow to local ComfyUI."""
         client_id = client_id or str(uuid.uuid4())
@@ -254,9 +264,14 @@ class LocalComfyUIClient(ComfyUIClient):
         if "{{ INPUT_IMAGE }}" not in workflow_str:
             raise ValueError(f"Workflow template '{template_path.name}' is missing '{{ INPUT_IMAGE }}' placeholder.")
 
+        # For local deployment, image_input should be a filename
+        if image_input.startswith("data:image/"):
+            logger.error("[comfyui] Received base64 image data instead of filename - this indicates a workflow error for local deployment")
+            raise ValueError("Expected filename, but received base64 image data")
+
         # Inject parameters
         escaped_prompt = json.dumps(prompt_text)[1:-1]
-        escaped_image = json.dumps(image_filename)[1:-1]
+        escaped_image = json.dumps(image_input)[1:-1]
         final_workflow_str = workflow_str.replace("{{ VIDEO_PROMPT }}", escaped_prompt)
         final_workflow_str = final_workflow_str.replace("{{ INPUT_IMAGE }}", escaped_image)
 
@@ -279,7 +294,7 @@ class LocalComfyUIClient(ComfyUIClient):
         # Submit to ComfyUI
         url = f"{self.base_url}/prompt"
         payload = {"prompt": workflow_payload, "client_id": client_id}
-        logger.info("[comfyui] Submitting image->video prompt to %s (image=%s)", url, image_filename)
+        logger.info("[comfyui] Submitting image->video prompt to %s (image=%s)", url, image_input)
         resp = self._make_request("POST", url, json=payload, timeout=30, headers=self._default_headers())
         if not resp.ok:
             try:
@@ -465,6 +480,10 @@ class RunPodComfyUIClient(ComfyUIClient):
         self.client_type = client_type
         self.api_key = RUNPOD_API_KEY
         
+        # Import ComfyOrg API key from config
+        from videomerge.config import COMFY_ORG_API_KEY
+        self.comfy_org_api_key = COMFY_ORG_API_KEY
+        
         if not self.api_key:
             raise ValueError("RUNPOD_API_KEY is required for RunPod serverless API. Please set the environment variable.")
 
@@ -538,8 +557,8 @@ class RunPodComfyUIClient(ComfyUIClient):
             url = f"{self.base_url}/v2/{self.instance_id}/run"
             headers = self._default_headers()
             logger.info("[comfyui] Submitting text->image prompt to RunPod at %s", url)
-            logger.info("[comfyui] RunPod request headers: %s", json.dumps(headers, indent=2))
-            logger.info("[comfyui] RunPod request payload: %s", json.dumps(payload, indent=2))
+            logger.debug("[comfyui] RunPod request headers: %s", json.dumps(headers, indent=2))
+            logger.debug("[comfyui] RunPod request payload: %s", json.dumps(payload, indent=2))
             resp = self._make_request("POST", url, json=payload, timeout=30, headers=headers)
             if not resp.ok:
                 try:
@@ -570,61 +589,84 @@ class RunPodComfyUIClient(ComfyUIClient):
     def submit_image_to_video(
         self,
         prompt_text: str,
-        image_filename: str,
+        image_data: str,
         *,
         template_path: Path,
         client_id: Optional[str] = None,
+        run_id: Optional[str] = None,
     ) -> str:
-        """Submit an image-to-video workflow to RunPod serverless ComfyUI."""
+        """Submit an image-to-video workflow to RunPod serverless ComfyUI.
+        
+        Args:
+            prompt_text: The video generation prompt
+            image_data: Base64 image data URL (e.g., "data:image/png;base64,iVBORw0KGgo...")
+            template_path: Path to the workflow template
+            client_id: Optional client ID
+            run_id: Optional run ID for debugging purposes
+        """
         workflow_name = template_path.stem
         start_time = time.time()
         
         try:
             client_id = client_id or str(uuid.uuid4())
             
-            # Check if image_filename is actually a base64 data URL from image generation
-            image_base64 = None
-            if image_filename.startswith("data:image/"):
-                # This is base64 data from image generation
-                image_base64 = image_filename
-                logger.info("[comfyui] Using base64 image data for video generation")
-            else:
-                # This is a traditional filename - we'd need to upload it first
-                # For now, we'll assume it's base64 data as per the new workflow
-                logger.warning("[comfyui] Expected base64 image data, got filename: %s", image_filename)
+            # For RunPod, image_data should be base64 data URL from image generation
+            # If it's a filename (from local deployment), that indicates an error
+            if not image_data.startswith("data:image/"):
+                logger.error("[comfyui] Received filename instead of base64 image data - this indicates a workflow error for RunPod")
+                raise ValueError("Expected base64 image data URL, but received filename")
             
-            # Load and validate template
-            workflow_str = self._load_workflow_template(template_path)
-            if "{{ POSITIVE_PROMPT }}" not in workflow_str:
-                raise ValueError(f"Workflow template '{template_path.name}' is missing '{{ POSITIVE_PROMPT }}' placeholder.")
+            logger.info("[comfyui] Using base64 image data for video generation: %s...", image_data[:50])
             
-            # For RunPod I2V, we need to construct the input payload with image_base64
-            if image_base64:
-                # Extract the actual base64 data (remove data:image/...;base64, prefix)
-                if "," in image_base64:
-                    base64_data = image_base64.split(",", 1)[1]
-                else:
-                    base64_data = image_base64
-                
-                # Load the template and inject the prompt and image_base64
-                final_workflow_str = workflow_str.replace("{{ POSITIVE_PROMPT }}", prompt_text)
-                final_workflow_str = final_workflow_str.replace("data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD...", f"data:image/jpeg;base64,{base64_data}")
-                
-                # Parse JSON - for RunPod I2V, this should be the complete payload structure
-                try:
-                    payload = json.loads(final_workflow_str)
-                except json.JSONDecodeError as e:
-                    logger.error("[comfyui] Failed to parse I2V workflow JSON after injection: %s", e)
-                    raise ValueError(f"Failed to parse I2V workflow JSON: {e}")
+            # Extract filename from base64 data URL if available, but RunPod payload only needs the data URL
+            if "#filename=" in image_data:
+                clean_image_data = image_data.split("#filename=")[0]
+                logger.info("[comfyui] Stripped filename metadata from data URL for RunPod payload")
             else:
-                raise ValueError("Base64 image data is required for RunPod video generation")
+                clean_image_data = image_data
+                logger.debug("[comfyui] Base64 image data has no filename metadata")
+
+            if not self.comfy_org_api_key:
+                logger.warning("[comfyui] COMFY_ORG_API_KEY is not configured; RunPod may reject the request")
+
+            payload = {
+                "input": {
+                    "prompt": prompt_text,
+                    "image": clean_image_data,
+                    "width": 480,
+                    "height": 640,
+                    "length": 81,
+                    "comfy_org_api_key": self.comfy_org_api_key,
+                }
+            }
+            logger.debug("[comfyui] Constructed RunPod I2V payload with hardcoded dimensions")
 
             # Submit to RunPod using the exact structure from the file
             url = f"{self.base_url}/v2/{self.instance_id}/run"
             headers = self._default_headers()
             logger.info("[comfyui] Submitting image->video prompt to RunPod at %s", url)
-            logger.info("[comfyui] RunPod video request headers: %s", json.dumps(headers, indent=2))
-            logger.info("[comfyui] RunPod video request payload: %s", json.dumps(payload, indent=2))
+            logger.debug("[comfyui] RunPod video request headers: %s", json.dumps(headers, indent=2))
+            
+            # Write payload to file for debugging
+            try:
+                import datetime
+                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                
+                if run_id:
+                    debug_dir = Path(f"/data/shared/{run_id}")
+                    payload_file = debug_dir / f"runpod_payload_{timestamp}.json"
+                else:
+                    debug_dir = Path("/data/shared")
+                    payload_file = debug_dir / f"runpod_payload_{timestamp}.json"
+                
+                debug_dir.mkdir(parents=True, exist_ok=True)
+                
+                with open(payload_file, 'w') as f:
+                    json.dump(payload, f, indent=2)
+                logger.info(f"[comfyui] RunPod payload written to: {payload_file}")
+            except Exception as e:
+                logger.warning(f"[comfyui] Failed to write payload to file: {e}")
+            
             resp = self._make_request("POST", url, json=payload, timeout=30, headers=headers)
             if not resp.ok:
                 try:
@@ -702,17 +744,17 @@ class RunPodComfyUIClient(ComfyUIClient):
                             elif isinstance(image, dict):
                                 # Handle new RunPod format: {"data": "iVBORw...", "filename": "...", "type": "base64"}
                                 if "data" in image and "filename" in image:
-                                    # Construct full base64 data URL
+                                    # Construct full base64 data URL with filename as parameter
                                     base64_data = image["data"]
                                     filename = image["filename"]
                                     
                                     # Determine image type from filename or default to PNG
                                     if filename.lower().endswith('.jpg') or filename.lower().endswith('.jpeg'):
-                                        data_url = f"data:image/jpeg;base64,{base64_data}"
+                                        data_url = f"data:image/jpeg;base64,{base64_data}#filename={filename}"
                                     elif filename.lower().endswith('.webp'):
-                                        data_url = f"data:image/webp;base64,{base64_data}"
+                                        data_url = f"data:image/webp;base64,{base64_data}#filename={filename}"
                                     else:
-                                        data_url = f"data:image/png;base64,{base64_data}"
+                                        data_url = f"data:image/png;base64,{base64_data}#filename={filename}"
                                     
                                     logger.debug("[comfyui] Constructed base64 data URL for %s", filename)
                                     result_files.append(data_url)
@@ -887,6 +929,15 @@ class RunPodComfyUIClient(ComfyUIClient):
             uploaded_name = filename
         return uploaded_name
 
+    def update_instance_id(self, new_instance_id: str):
+        """Update the instance ID for this client."""
+        logger.info(
+            "Updating RunPodComfyUIClient instance_id from %s to %s",
+            self.instance_id,
+            new_instance_id
+        )
+        self.instance_id = new_instance_id
+
 
 class ComfyUIClientFactory:
     """Factory to create appropriate ComfyUI client based on environment and type."""
@@ -917,7 +968,15 @@ _video_client_config_hash: Optional[str] = None
 
 def _get_config_hash(client_type: ClientType) -> str:
     """Generate a hash of current ComfyUI configuration for a specific client type."""
-    from videomerge.config import COMFYUI_URL, RUN_ENV, RUNPOD_IMAGE_INSTANCE_ID, RUNPOD_VIDEO_INSTANCE_ID
+    from videomerge.config import (
+        ensure_config_current,
+        COMFYUI_URL,
+        RUN_ENV,
+        RUNPOD_IMAGE_INSTANCE_ID,
+        RUNPOD_VIDEO_INSTANCE_ID,
+    )
+
+    ensure_config_current()
     
     if client_type == ClientType.IMAGE:
         instance_id = RUNPOD_IMAGE_INSTANCE_ID
@@ -936,9 +995,13 @@ def get_comfyui_client(client_type: ClientType = ClientType.IMAGE, force_refresh
         force_refresh: If True, force recreation of the client even if config hasn't changed.
     """
     global _image_client, _video_client, _image_client_config_hash, _video_client_config_hash
-    
+
+    from videomerge.config import ensure_config_current
+
+    ensure_config_current()
+
     current_config_hash = _get_config_hash(client_type)
-    
+
     # Select the appropriate global variables
     if client_type == ClientType.IMAGE:
         client = _image_client
