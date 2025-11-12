@@ -132,6 +132,22 @@ class ComfyUIClient(ABC):
             "Referer": origin + "/",
         }
 
+    def _load_workflow_config(self, run_env: str) -> tuple[dict[str, str], Path, Path]:
+        """Load workflow configuration."""
+        workflows = {
+            "local": {
+                "t2i": "path/to/t2i/template.json",
+                "i2v": "path/to/i2v/template.json",
+            },
+            "runpod": {
+                "t2i": "path/to/t2i/template.json",
+                "i2v": "path/to/i2v/template.json",
+            },
+        }
+        workflows_base_path = Path(workflows[run_env]["t2i"]).parent
+        workflow_i2v_path = Path(workflows[run_env]["i2v"])
+        return workflows, workflows_base_path, workflow_i2v_path
+
     def _load_workflow_template(self, path: Path) -> str:
         """Load a workflow JSON template as a raw string."""
         with path.open("r", encoding="utf-8") as f:
@@ -512,6 +528,105 @@ class RunPodComfyUIClient(ComfyUIClient):
         
         return headers
 
+    @staticmethod
+    def _guess_media_type(filename: Optional[str], media_hint: Optional[str]) -> str:
+        if media_hint and "/" in media_hint:
+            return media_hint.lower()
+        if filename:
+            lower = filename.lower()
+            if lower.endswith(".png"):
+                return "image/png"
+            if lower.endswith(".jpg") or lower.endswith(".jpeg"):
+                return "image/jpeg"
+            if lower.endswith(".webp"):
+                return "image/webp"
+            if lower.endswith(".gif"):
+                return "image/gif"
+            if lower.endswith(".mp4"):
+                return "video/mp4"
+        return "application/octet-stream"
+
+    @staticmethod
+    def _default_extension(media_type: str) -> str:
+        mapping = {
+            "image/png": "png",
+            "image/jpeg": "jpg",
+            "image/webp": "webp",
+            "image/gif": "gif",
+            "video/mp4": "mp4",
+        }
+        return mapping.get(media_type.lower(), "bin")
+
+    def _output_filename_for_index(
+        self,
+        *,
+        media_type: str,
+        provided: Optional[str],
+        index: int,
+    ) -> str:
+        """Generate a deterministic filename preserving output order."""
+        ext = self._default_extension(media_type)
+        sanitized: Optional[str] = None
+
+        if provided:
+            provided_name = Path(provided).name
+            if provided_name not in {"", "ComfyUI_00001_.mp4"}:
+                sanitized = provided_name
+
+        if sanitized:
+            return f"{index:03d}_{sanitized}"
+
+        return f"{index:03d}_{uuid.uuid4().hex}.{ext}"
+
+    def _build_data_url(
+        self,
+        base64_data: str,
+        filename: Optional[str],
+        media_hint: Optional[str] = None,
+    ) -> str:
+        media_type = self._guess_media_type(filename, media_hint)
+        payload = base64_data.strip()
+        data_url = f"data:{media_type};base64,{payload}"
+        if filename:
+            data_url = f"{data_url}#filename={filename}"
+        return data_url
+
+    def _extract_runpod_outputs(self, payload: Any) -> List[str]:
+        results: List[str] = []
+
+        if payload is None:
+            return results
+
+        if isinstance(payload, dict):
+            # Direct data payload
+            base64_value = payload.get("data")
+            filename = payload.get("filename")
+            media_hint = payload.get("mime") or payload.get("type")
+            if isinstance(base64_value, str):
+                results.append(self._build_data_url(base64_value, filename, media_hint))
+                return results
+
+            # URL-style payloads
+            url_value = payload.get("url")
+            if isinstance(url_value, str):
+                results.append(url_value)
+
+            # Nested structures - recurse into known keys
+            for key in ("output", "outputs", "images", "videos", "gifs", "files", "result", "items"):
+                if key in payload:
+                    results.extend(self._extract_runpod_outputs(payload[key]))
+            return results
+
+        if isinstance(payload, list):
+            for item in payload:
+                results.extend(self._extract_runpod_outputs(item))
+            return results
+
+        if isinstance(payload, str):
+            results.append(payload)
+
+        return results
+
     def submit_text_to_image(self, prompt_text: str, *, template_path: Path, client_id: Optional[str] = None) -> str:
         """Submit a text-to-image workflow to RunPod serverless ComfyUI."""
         workflow_name = template_path.stem
@@ -719,73 +834,13 @@ class RunPodComfyUIClient(ComfyUIClient):
                 logger.debug("[comfyui] RunPod job status='%s' (raw='%s') for prompt_id=%s", status, raw_status, prompt_id)
                 
                 if status == "COMPLETED":
-                    # Extract outputs from RunPod response structure
-                    outputs = data.get("output", {})
-                    if isinstance(outputs, dict):
-                        # RunPod returns base64 encoded image data
-                        result_files = []
-                        
-                        # Handle images - check for both formats
-                        images = outputs.get("images", [])
-                        if not images and "image_url" in outputs:
-                            # Handle single image_url format
-                            images = [outputs["image_url"]]
-                        
-                        for image in images:
-                            if isinstance(image, str):
-                                # Handle base64 string format (data:image/png;base64,...)
-                                if image.startswith("data:image/"):
-                                    # Store the full base64 data URL for later use
-                                    # We'll use this as the "filename" for video generation
-                                    result_files.append(image)
-                                else:
-                                    # Fallback: treat as filename
-                                    result_files.append(image)
-                            elif isinstance(image, dict):
-                                # Handle new RunPod format: {"data": "iVBORw...", "filename": "...", "type": "base64"}
-                                if "data" in image and "filename" in image:
-                                    # Construct full base64 data URL with filename as parameter
-                                    base64_data = image["data"]
-                                    filename = image["filename"]
-                                    
-                                    # Determine image type from filename or default to PNG
-                                    if filename.lower().endswith('.jpg') or filename.lower().endswith('.jpeg'):
-                                        data_url = f"data:image/jpeg;base64,{base64_data}#filename={filename}"
-                                    elif filename.lower().endswith('.webp'):
-                                        data_url = f"data:image/webp;base64,{base64_data}#filename={filename}"
-                                    else:
-                                        data_url = f"data:image/png;base64,{base64_data}#filename={filename}"
-                                    
-                                    logger.debug("[comfyui] Constructed base64 data URL for %s", filename)
-                                    result_files.append(data_url)
-                                elif "filename" in image:
-                                    # Fallback: just use filename
-                                    filename = image["filename"]
-                                    result_files.append(filename)
-                        
-                        # Handle videos
-                        videos = outputs.get("videos", [])
-                        for video in videos:
-                            if isinstance(video, str) and video.startswith("data:video/"):
-                                result_files.append(video)
-                            elif isinstance(video, dict) and "filename" in video:
-                                filename = video["filename"]
-                                result_files.append(filename)
-                        
-                        # Handle gifs
-                        gifs = outputs.get("gifs", [])
-                        for gif in gifs:
-                            if isinstance(gif, str) and gif.startswith("data:image/gif"):
-                                result_files.append(gif)
-                            elif isinstance(gif, dict) and "filename" in gif:
-                                filename = gif["filename"]
-                                result_files.append(filename)
-                        
-                        if result_files:
-                            logger.info("[comfyui] RunPod job completed with %d outputs", len(result_files))
-                            return result_files
-                    
-                    # If we can't parse outputs, return empty list to indicate completion
+                    outputs = data.get("output")
+                    result_files = self._extract_runpod_outputs(outputs)
+
+                    if result_files:
+                        logger.info("[comfyui] RunPod job completed with %d outputs", len(result_files))
+                        return result_files
+
                     logger.info("[comfyui] RunPod job completed but no outputs found")
                     return []
                 elif status in ("FAILED", "ERROR"):
@@ -835,12 +890,37 @@ class RunPodComfyUIClient(ComfyUIClient):
         # This is a simplified implementation - in practice, you might need to
         # store the job_id when polling and pass it here, or modify the interface
         
-        for hint in file_hints:
-            # For RunPod, the hint is typically just the filename
-            # We need to fetch the actual data from the last status call
-            # This is a limitation of the current interface design
-            
-            # As a fallback, try to download from a generic endpoint
+        for index, hint in enumerate(file_hints):
+            if hint.startswith("data:"):
+                header, _, remainder = hint.partition(",")
+                if not remainder:
+                    logger.warning("[comfyui] Skipping malformed data URL output")
+                    continue
+
+                data_part, _, filename_meta = remainder.partition("#filename=")
+                media_type = header[5:]
+                if ";" in media_type:
+                    media_type = media_type.split(";", 1)[0]
+
+                try:
+                    decoded = base64.b64decode(data_part.strip())
+                except Exception as exc:
+                    logger.warning("[comfyui] Failed to decode base64 output: %s", exc)
+                    continue
+
+                filename = self._output_filename_for_index(
+                    media_type=media_type,
+                    provided=filename_meta,
+                    index=index,
+                )
+
+                dest_dir.mkdir(parents=True, exist_ok=True)
+                out_path = dest_dir / filename
+                out_path.write_bytes(decoded)
+                saved.append(out_path)
+                continue
+
+            # Fallback to remote download when we only have a filename/url
             url = f"{self.base_url}/output/{hint}"
             logger.info("[comfyui] Downloading RunPod output %s from %s", hint, url)
             
@@ -848,7 +928,13 @@ class RunPodComfyUIClient(ComfyUIClient):
                 r = self._make_request("GET", url, stream=True, timeout=60, headers=self._default_headers())
                 r.raise_for_status()
                 dest_dir.mkdir(parents=True, exist_ok=True)
-                out_path = dest_dir / hint
+                content_type = r.headers.get("Content-Type", "application/octet-stream")
+                filename = self._output_filename_for_index(
+                    media_type=content_type,
+                    provided=hint,
+                    index=index,
+                )
+                out_path = dest_dir / filename
                 with out_path.open("wb") as f:
                     for chunk in r.iter_content(chunk_size=8192):
                         if chunk:
@@ -856,43 +942,34 @@ class RunPodComfyUIClient(ComfyUIClient):
                 saved.append(out_path)
             except Exception as e:
                 logger.warning("[comfyui] Failed to download %s from generic endpoint: %s", hint, e)
-                # For RunPod, we might need a different approach
-                # This could involve storing the base64 data during polling
-                # and writing it here instead
-                pass
+                continue
                 
         return saved
 
     def fetch_output_bytes(self, hint: str) -> Tuple[str, bytes]:
         """Fetch a single output file from RunPod."""
         # Check if hint is a base64 data URL
-        if hint.startswith("data:image/") or hint.startswith("data:video/"):
-            # This is base64 data directly from the RunPod response
+        if hint.startswith("data:"):
             try:
-                # Extract the base64 data (remove data:...;base64, prefix)
-                if "," in hint:
-                    base64_data = hint.split(",", 1)[1]
-                else:
-                    base64_data = hint
-                
-                # Decode base64 data
-                decoded_data = base64.b64decode(base64_data)
-                
-                # Generate a filename based on the data type
-                if "png" in hint:
-                    filename = "generated_image.png"
-                elif "jpeg" in hint or "jpg" in hint:
-                    filename = "generated_image.jpg"
-                elif "gif" in hint:
-                    filename = "generated_video.gif"
-                elif "mp4" in hint:
-                    filename = "generated_video.mp4"
-                else:
-                    filename = "generated_file"
-                
+                header, _, remainder = hint.partition(",")
+                if not remainder:
+                    raise ValueError("Malformed data URL")
+
+                data_part, _, filename_meta = remainder.partition("#filename=")
+                media_type = header[5:]
+                if ";" in media_type:
+                    media_type = media_type.split(";", 1)[0]
+
+                decoded_data = base64.b64decode(data_part.strip())
+                filename = self._output_filename_for_index(
+                    media_type=media_type,
+                    provided=filename_meta,
+                    index=0,
+                )
+
                 logger.info("[comfyui] Decoded base64 data for %s", filename)
                 return filename, decoded_data
-                
+
             except Exception as e:
                 logger.error("[comfyui] Failed to decode base64 data: %s", e)
                 raise ValueError(f"Failed to decode base64 data: {e}")

@@ -67,7 +67,7 @@ async def generate_image(prompt_text: str, workflow_path: str, index: int) -> st
     filenames = await asyncio.to_thread(client.poll_until_complete, prompt_id, timeout_s=600, poll_interval_s=15)
     if not filenames:
         raise RuntimeError(f"Image generation failed for prompt index {index}: No output files.")
-    logger.info(f"Image generated for prompt index {index}: {filenames[0]}")
+    #logger.info(f"Image generated for prompt index {index}: {filenames[0]}")
     return filenames[0]
 
 

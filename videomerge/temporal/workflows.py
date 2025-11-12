@@ -118,6 +118,17 @@ class VideoGenerationWorkflow:
             else:
                 workflow.logger.info("Skipping voiceover generation as ENABLE_VOICEOVER_GEN is false.")
 
+            if not voiceover_path:
+                if run_dir.endswith("/") or run_dir.endswith("\\"):
+                    default_voiceover = f"{run_dir}voiceover.mp3"
+                elif "\\" in run_dir:
+                    default_voiceover = f"{run_dir}\\voiceover.mp3"
+                else:
+                    default_voiceover = f"{run_dir}/voiceover.mp3"
+
+                workflow.logger.info("Using default voiceover path %s", default_voiceover)
+                voiceover_path = default_voiceover
+
             # 3. Process each scene as a child workflow
             scene_processing_tasks = []
             image_style = req.image_style or "default"

@@ -16,8 +16,12 @@ logger = get_logger(__name__)
 @router.post("/orchestrate/start")
 async def orchestrate_start(req: OrchestrateStartRequest):
     """Starts a new video generation workflow."""
-    workflow_id = f"tabario-user-{req.user_id}"
-    logger.info(f"Received request to start video generation with workflow_id={workflow_id}")
+    workflow_id = f"tabario-user-{req.user_id}-{req.run_id}"
+    logger.info(
+        "Received request to start video generation with workflow_id=%s for run_id=%s",
+        workflow_id,
+        req.run_id,
+    )
 
 
     client = await Client.connect(TEMPORAL_SERVER_URL)
@@ -34,11 +38,16 @@ async def orchestrate_start(req: OrchestrateStartRequest):
                 "TabarioRunId": [req.run_id],  # Allows searching parent + all children by run_id
             },
         )
-        logger.info(f"Successfully started workflow with workflow_id={workflow_id}")
+        logger.info(
+            "Successfully started workflow with workflow_id=%s for run_id=%s",
+            workflow_id,
+            req.run_id,
+        )
         return JSONResponse(
             content={
                 "message": "Workflow started successfully.",
                 "workflow_id": workflow_id,
+                "run_id": req.run_id,
             },
             status_code=202,
         )
