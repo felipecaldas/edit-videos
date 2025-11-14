@@ -24,6 +24,7 @@ async def main():
         activities=[
             activities.setup_run_directory,
             activities.generate_voiceover,
+            activities.generate_scene_prompts,
             activities.generate_image,
             activities.upload_image_for_video_generation,
             activities.generate_video_from_image,

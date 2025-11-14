@@ -13,6 +13,7 @@ with workflow.unsafe.imports_passed_through():
     from videomerge.temporal.activities import (
         setup_run_directory,
         generate_voiceover,
+        generate_scene_prompts,
         generate_image,
         upload_image_for_video_generation,
         generate_video_from_image,
@@ -113,7 +114,9 @@ class VideoGenerationWorkflow:
             voiceover_path = ""
             if ENABLE_VOICEOVER_GEN:
                 voiceover_path = await workflow.execute_activity(
-                    generate_voiceover, args=[req.run_id, req.script], **activity_defaults
+                    generate_voiceover,
+                    args=[req.run_id, req.script, req.language, req.elevenlabs_voice_id],
+                    **activity_defaults,
                 )
             else:
                 workflow.logger.info("Skipping voiceover generation as ENABLE_VOICEOVER_GEN is false.")
@@ -129,9 +132,16 @@ class VideoGenerationWorkflow:
                 workflow.logger.info("Using default voiceover path %s", default_voiceover)
                 voiceover_path = default_voiceover
 
-            # 3. Process each scene as a child workflow
-            scene_processing_tasks = []
+            # 3. Generate prompts for each scene via external service
             image_style = req.image_style or "default"
+            scene_prompts = await workflow.execute_activity(
+                generate_scene_prompts,
+                args=[req.run_id, req.script, image_style],
+                **activity_defaults,
+            )
+
+            # 4. Process each scene as a child workflow
+            scene_processing_tasks = []
             workflow_filename = IMAGE_WORKFLOWS.get(image_style, IMAGE_WORKFLOWS["default"])
             workflow_path = f"{WORKFLOWS_BASE_PATH}/{workflow_filename}"
 
@@ -139,7 +149,14 @@ class VideoGenerationWorkflow:
             parent_workflow_id = workflow.info().workflow_id
             parent_run_id = workflow.info().run_id
             
-            for i, prompt in enumerate(req.prompts):
+            for i, prompt in enumerate(scene_prompts):
+                # Support both dict-based prompts and PromptItem-like objects
+                if isinstance(prompt, dict):
+                    image_prompt = prompt.get("image_prompt")
+                    video_prompt = prompt.get("video_prompt")
+                else:
+                    image_prompt = getattr(prompt, "image_prompt", None)
+                    video_prompt = getattr(prompt, "video_prompt", None)
                 # Each scene gets its own child workflow for better isolation and resumability
                 child_id = f"{req.run_id}-scene-{i}"
                 
@@ -185,8 +202,15 @@ class VideoGenerationWorkflow:
                 burn_subtitles_into_video, args=[req.run_id, stitched_video_path, req.language, voiceover_path], **activity_defaults
             )
 
-            # Collect generated image filenames from child workflows for webhook payload
-            image_files = [prompt.image_prompt or "" for prompt in req.prompts if prompt.image_prompt]
+            # Collect generated image filenames from prompts for webhook payload
+            image_files = []
+            for prompt in scene_prompts:
+                if isinstance(prompt, dict):
+                    img = prompt.get("image_prompt")
+                else:
+                    img = getattr(prompt, "image_prompt", None)
+                if img:
+                    image_files.append(img)
 
             # 8. Send completion webhook
             await workflow.execute_activity(
@@ -219,7 +243,11 @@ class VideoGenerationWorkflow:
                     req.workflow_id,
                     run_dir if "run_dir" in locals() else "",
                     locals().get("video_paths", []),
-                    [prompt.image_prompt or "" for prompt in req.prompts if prompt.image_prompt],
+                    [
+                        (p.get("image_prompt") if isinstance(p, dict) else getattr(p, "image_prompt", None)) or ""
+                        for p in locals().get("scene_prompts", [])
+                        if (p.get("image_prompt") if isinstance(p, dict) else getattr(p, "image_prompt", None))
+                    ],
                     voiceover_path if "voiceover_path" in locals() else "",
                 ],
                 **activity_defaults,
