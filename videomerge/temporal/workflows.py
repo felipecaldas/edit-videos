@@ -94,7 +94,7 @@ class VideoGenerationWorkflow:
 
         # Define a retry policy for activities that might fail due to transient issues.
         retry_policy = RetryPolicy(
-            maximum_attempts=3,
+            maximum_attempts=1,
             initial_interval=timedelta(seconds=10),
             backoff_coefficient=2.0,
         )
@@ -185,9 +185,23 @@ class VideoGenerationWorkflow:
                 burn_subtitles_into_video, args=[req.run_id, stitched_video_path, req.language, voiceover_path], **activity_defaults
             )
 
+            # Collect generated image filenames from child workflows for webhook payload
+            image_files = [prompt.image_prompt or "" for prompt in req.prompts if prompt.image_prompt]
+
             # 8. Send completion webhook
             await workflow.execute_activity(
-                send_completion_webhook, args=[req.run_id, "completed", final_video_path], **activity_defaults
+                send_completion_webhook,
+                args=[
+                    req.run_id,
+                    "completed",
+                    final_video_path,
+                    req.workflow_id,
+                    run_dir,
+                    video_paths,
+                    image_files,
+                    voiceover_path,
+                ],
+                **activity_defaults,
             )
 
             workflow.logger.info(f"Workflow for run_id={req.run_id} completed successfully.")
@@ -197,6 +211,17 @@ class VideoGenerationWorkflow:
             workflow.logger.error(f"Workflow for run_id={req.run_id} failed: {e}")
             # Send failure webhook
             await workflow.execute_activity(
-                send_completion_webhook, args=[req.run_id, "failed", ""], **activity_defaults
+                send_completion_webhook,
+                args=[
+                    req.run_id,
+                    "failed",
+                    "",
+                    req.workflow_id,
+                    run_dir if "run_dir" in locals() else "",
+                    locals().get("video_paths", []),
+                    [prompt.image_prompt or "" for prompt in req.prompts if prompt.image_prompt],
+                    voiceover_path if "voiceover_path" in locals() else "",
+                ],
+                **activity_defaults,
             )
             raise

@@ -23,6 +23,9 @@ async def orchestrate_start(req: OrchestrateStartRequest):
         req.run_id,
     )
 
+    # Ensure the workflow_id is propagated into the workflow request payload
+    req.workflow_id = workflow_id
+
 
     client = await Client.connect(TEMPORAL_SERVER_URL)
     try:

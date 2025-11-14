@@ -17,9 +17,9 @@ sequenceDiagram
 
     Note over N,B:  Workflow Initiation
     N->>B: POST /orchestrate/start<br/>{script, caption, prompts, run_id}
-    B->>T: Start Workflow 'VideoGenerationWorkflow'<br/>with run_id
-    B-->>N: 202 Accepted {run_id}
-    N-->>F: {run_id, status: "started"}
+    B->>T: Start Workflow 'VideoGenerationWorkflow'<br/>with workflow_id + run_id
+    B-->>N: 202 Accepted {workflow_id, run_id}
+    N-->>F: {workflow_id, run_id, status: "started"}
 
     Note over T,TW: ⚡ Parent Workflow Execution
     T->>TW: Add 'VideoGenerationWorkflow' Task to Queue
@@ -50,14 +50,14 @@ sequenceDiagram
         Note over TW,N: ✅ Send Completion Webhook
         TW->>T: Schedule 'send_completion_webhook' activity
         T->>TW: Execute activity
-        TW->>N: POST {VIDEO_COMPLETED_N8N_WEBHOOK_URL}<br/>{run_id, status: "completed", ...}
+        TW->>N: POST {VIDEO_COMPLETED_N8N_WEBHOOK_URL}<br/>{workflow_id, run_id, status: "completed", ...}
 
     else Workflow Failure
         Note over TW,N: ❌ Send Failure Webhook
         TW-->>TW: Workflow logic catches exception
         TW->>T: Schedule 'send_completion_webhook' activity
         T->>TW: Execute activity
-        TW->>N: POST {VIDEO_COMPLETED_N8N_WEBHOOK_URL}<br/>{run_id, status: "failed", ...}
+        TW->>N: POST {VIDEO_COMPLETED_N8N_WEBHOOK_URL}<br/>{workflow_id, run_id, status: "failed", ...}
     end
 
     Note over N,F: 📢 Notification to Frontend
@@ -71,9 +71,9 @@ sequenceDiagram
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/orchestrate/start` | POST | Create new video processing job |
+| `/orchestrate/start` | POST | Create new video processing job (returns `workflow_id` + `run_id`) |
 | `/orchestrate/status/{run_id}` | GET | Check workflow status (via Temporal UI). Note: Direct video download endpoint is removed as files are accessed via shared volume. |
-| `{VIDEO_COMPLETED_N8N_WEBHOOK_URL}` | POST | N8N receives job completion/failure notifications |
+| `{VIDEO_COMPLETED_N8N_WEBHOOK_URL}` | POST | N8N receives job completion/failure notifications (includes `workflow_id` for correlation) |
 
 ## 💾 Data Flow
 
@@ -142,7 +142,7 @@ graph TD
 # Points to the Temporal Server gRPC endpoint
 TEMPORAL_SERVER_URL=temporal:7233
 
-# N8N webhook for job completion/failure notifications
+# N8N webhook for job completion/failure notifications (payload includes workflow_id for correlation)
 VIDEO_COMPLETED_N8N_WEBHOOK_URL=https://your-n8n-instance.com/webhook/job-complete
 
 # Shared volume for data exchange between services
@@ -158,7 +158,8 @@ VOICEOVER_SERVICE_URL=http://your-voiceover-service:8083
 ### Webhook Payload Structure:
 ```json
 {
-  "run_id": "my-first-temporal-run",
-  "status": "completed", // or "failed"
+  "workflow_id": "tabario-user-123-my-first-temporal-run", // Primary correlation ID (Temporal workflow ID)
+  "run_id": "my-first-temporal-run",                        // Business-level run identifier
+  "status": "completed",                                    // or "failed"
   "final_video_path": "/data/shared/my-first-temporal-run/final_video.mp4" // Empty string on failure
 }

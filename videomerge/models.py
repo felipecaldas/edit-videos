@@ -44,4 +44,5 @@ class OrchestrateStartRequest(BaseModel):
     language: str = "en"
     image_style: Optional[str] = None
     run_id: str
+    workflow_id: Optional[str] = None
     enable_image_gen: Optional[bool] = None

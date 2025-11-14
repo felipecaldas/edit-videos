@@ -3,6 +3,7 @@
 import base64
 import json
 import os
+import re
 import time
 import uuid
 from abc import ABC, abstractmethod
@@ -571,12 +572,28 @@ class RunPodComfyUIClient(ComfyUIClient):
         if provided:
             provided_name = Path(provided).name
             if provided_name not in {"", "ComfyUI_00001_.mp4"}:
-                sanitized = provided_name
+                sanitized_candidate = self._sanitize_filename(provided_name)
+                if sanitized_candidate:
+                    sanitized = sanitized_candidate
 
         if sanitized:
             return f"{index:03d}_{sanitized}"
 
         return f"{index:03d}_{uuid.uuid4().hex}.{ext}"
+
+    @staticmethod
+    def _sanitize_filename(filename: str) -> str:
+        """Return a filesystem-safe filename for cross-platform mounts."""
+        # Replace disallowed characters (Windows reserved: <>:"/\|?*) with underscore
+        safe = re.sub(r"[<>:\\|?*\n\r\t]", "_", filename)
+        # Remove any remaining control characters
+        safe = re.sub(r"[\x00-\x1f]", "", safe)
+        # Replace anything outside a conservative safe set with underscore
+        safe = re.sub(r"[^A-Za-z0-9._-]", "_", safe)
+        # Strip trailing dots or spaces which Windows disallows
+        safe = safe.rstrip(" .")
+        # Ensure basename still has an extension preserved; if empty, return empty string
+        return safe
 
     def _build_data_url(
         self,

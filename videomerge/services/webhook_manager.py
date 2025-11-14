@@ -28,7 +28,10 @@ class WebhookManager:
             )
 
             if response.status_code == 200:
-                logger.info(f"Webhook sent successfully to {webhook_url} for job {job_data.get('job_id')} (event: {event_type})")
+                logger.info(
+                    f"Webhook sent successfully to {webhook_url} for workflow {job_data.get('workflow_id')} "
+                    f"(event: {event_type})"
+                )
                 return True
             else:
                 logger.error(f"Webhook failed with status {response.status_code}: {response.text}")

@@ -1,7 +1,7 @@
 import asyncio
 import json
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 from temporalio import activity
 
@@ -167,15 +167,37 @@ async def burn_subtitles_into_video(run_id: str, stitched_video_path: str, langu
 
 
 @activity.defn
-async def send_completion_webhook(run_id: str, status: str, final_video_path: str):
+async def send_completion_webhook(
+    run_id: str,
+    status: str,
+    final_video_path: str,
+    workflow_id: Optional[str] = None,
+    run_dir: Optional[str] = None,
+    video_files: Optional[List[str]] = None,
+    image_files: Optional[List[str]] = None,
+    voiceover_path: Optional[str] = None,
+):
     """Sends a webhook notification to N8N upon completion."""
     activity.heartbeat()
 
-    payload = {
+    payload: Dict[str, Any] = {
         "run_id": run_id,
         "status": status,
-        "final_video_path": final_video_path,
     }
+
+    if workflow_id:
+        payload["workflow_id"] = workflow_id
+    if run_dir:
+        payload["output_dir"] = run_dir
+    if final_video_path:
+        payload["final_video_path"] = final_video_path
+    if video_files:
+        payload["video_files"] = video_files
+    if image_files:
+        payload["image_files"] = image_files
+    if voiceover_path:
+        payload["voiceover_path"] = voiceover_path
+
     event_type = "job_completed" if status == "completed" else "job_failed"
     logger.info(f"Sending '{event_type}' webhook for run_id={run_id}")
     await webhook_manager.send_webhook(VIDEO_COMPLETED_N8N_WEBHOOK_URL, payload, event_type)
