@@ -40,9 +40,10 @@ class OrchestrateStartRequest(BaseModel):
     user_id: str
     script: str
     caption: str
-    prompts: List[PromptItem]
+    prompts: Optional[List[PromptItem]] = None
     language: str = "en"
     image_style: Optional[str] = None
     run_id: str
+    elevenlabs_voice_id: str
     workflow_id: Optional[str] = None
     enable_image_gen: Optional[bool] = None

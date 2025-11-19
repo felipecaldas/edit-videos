@@ -4,6 +4,7 @@ import time
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
+import httpx
 from temporalio import activity
 
 from videomerge.config import DATA_SHARED_BASE, WORKFLOW_I2V_PATH, VIDEO_COMPLETED_N8N_WEBHOOK_URL
@@ -62,30 +63,109 @@ async def setup_run_directory(run_id: str, payload: Dict[str, Any]) -> str:
 
 
 @activity.defn
-async def generate_voiceover(run_id: str, script: str) -> str:
-    """Generates voiceover audio from the script."""
+async def generate_voiceover(run_id: str, script: str, language: str, elevenlabs_voice_id: str) -> str:
+    """Trigger voiceover generation through N8N and record duration metrics."""
     activity.heartbeat()
     run_dir = DATA_SHARED_BASE / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
     audio_path = run_dir / "voiceover.mp3"
-    logger.info(f"Generating voiceover for run_id={run_id}")
-    # This is a CPU-bound task, so we run it in a thread pool to avoid blocking the event loop.
-    await asyncio.to_thread(synthesize_voice, script, audio_path)
 
-    # Measure resulting audio length and record it as a Prometheus metric
-    duration = get_duration(audio_path)
+    url = "https://birthdaypartyai.app/n8n/webhook/96b6d82c-ee94-46aa-b38d-4c9e77d096b4"
+    payload: Dict[str, Any] = {
+        "script": script,
+        "runId": run_id,
+        "elevenlabs_voice_id": elevenlabs_voice_id,
+        "language": language,
+    }
+
+    logger.info(f"[voiceover] Calling N8N webhook for run_id={run_id}")
+
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        response = await client.post(url, json=payload)
+        response.raise_for_status()
+        data = response.json()
+
+    audio_duration_raw = data.get("audio_duration")
+    duration: Optional[float] = None
+    if audio_duration_raw is not None:
+        try:
+            duration = float(audio_duration_raw)
+        except (TypeError, ValueError):
+            logger.warning(
+                f"[voiceover] Invalid audio_duration '{audio_duration_raw}' for run_id={run_id}."
+            )
+
+    metadata_path = run_dir / "voiceover_metadata.json"
+    try:
+        metadata_payload = {"audio_duration": duration} if duration is not None else {}
+        metadata_path.write_text(
+            json.dumps(metadata_payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        logger.info(f"[voiceover] Saved audio metadata for run_id={run_id}: {metadata_payload}")
+    except Exception as exc:
+        logger.warning(f"[voiceover] Failed to write metadata for run_id={run_id}: {exc}")
+
     if duration is not None:
         length_bucket = get_length_bucket(duration)
         voiceover_length_seconds.labels(length_bucket=length_bucket).observe(duration)
 
-        # Persist length_bucket so other activities (image/video/stitch) can reuse it
         try:
             bucket_path = run_dir / "length_bucket.txt"
             bucket_path.write_text(length_bucket, encoding="utf-8")
-        except Exception as e:
-            logger.warning(f"Failed to write length_bucket for run_id={run_id}: {e}")
+        except Exception as exc:
+            logger.warning(f"[voiceover] Failed to write length_bucket for run_id={run_id}: {exc}")
 
-    logger.info(f"Voiceover generated successfully for run_id={run_id}")
+    logger.info(f"[voiceover] Voiceover generation triggered successfully for run_id={run_id}")
     return str(audio_path)
+
+
+@activity.defn
+async def generate_scene_prompts(run_id: str, script: str, image_style: str | None = None) -> List[Dict[str, Any]]:
+    """Generate scene prompts based on the synthesized voiceover duration."""
+    activity.heartbeat()
+    run_dir = DATA_SHARED_BASE / run_id
+    metadata_path = run_dir / "voiceover_metadata.json"
+
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            f"voiceover_metadata.json not found for run_id={run_id}; cannot generate prompts"
+        ) from exc
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Invalid voiceover metadata for run_id={run_id}: {exc}") from exc
+
+    audio_duration = metadata.get("audio_duration")
+    if audio_duration is None:
+        raise RuntimeError(f"audio_duration missing in voiceover metadata for run_id={run_id}")
+
+    url = "https://birthdaypartyai.app/n8n/webhook/1f8c887d-0247-4378-b855-934f780bdb0c"
+    payload: Dict[str, Any] = {
+        "script": script,
+        "audio_duration": audio_duration,
+        "image_style": image_style,
+    }
+
+    logger.info(f"[prompts] Calling N8N prompts webhook for run_id={run_id}")
+
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        response = await client.post(url, json=payload)
+        response.raise_for_status()
+        data = response.json()
+
+    prompts = data.get("prompts")
+    if not isinstance(prompts, list):
+        raise RuntimeError(f"Prompts webhook returned invalid payload for run_id={run_id}: {data}")
+
+    prompts_path = run_dir / "scene_prompts.json"
+    try:
+        prompts_path.write_text(json.dumps(prompts, ensure_ascii=False, indent=2), encoding="utf-8")
+        logger.info(f"[prompts] Saved scene prompts for run_id={run_id} to {prompts_path}")
+    except Exception as exc:
+        logger.warning(f"[prompts] Failed to write scene prompts for run_id={run_id}: {exc}")
+
+    return prompts
 
 
 @activity.defn

@@ -105,7 +105,7 @@ def _apply_config() -> None:
     ) = _load_misc_defaults()
 
     global ENABLE_VOICEOVER_GEN
-    ENABLE_VOICEOVER_GEN = _str_to_bool(os.getenv("ENABLE_VOICEOVER_GEN"), "false")
+    ENABLE_VOICEOVER_GEN = _str_to_bool(os.getenv("ENABLE_VOICEOVER_GEN"), "true")
 
     global COMFYUI_URL, ENABLE_IMAGE_GEN, COMFYUI_TIMEOUT_SECONDS, COMFYUI_POLL_INTERVAL_SECONDS
     global RUN_ENV, RUNPOD_IMAGE_INSTANCE_ID, RUNPOD_VIDEO_INSTANCE_ID
