@@ -1,14 +1,15 @@
 # Tabario.com - Financial Analysis & Pricing Strategy
 ## AI Video Generation Service - Cost Structure & Revenue Model
 
-**Document Version:** 1.1  
-**Last Updated:** October 27, 2025  
+**Document Version:** 1.2  
+**Last Updated:** November 19, 2025  
 **Purpose:** Define cost structure and pricing strategy for monthly subscription model
 
-**⚠️ IMPORTANT:** Costs updated with actual production data:
-- Video model: Wan 2.2 Lightning (180 sec/clip)
-- Image model: Qwen (25 sec/image)
-- GPU: RTX A5000 @ $0.00045/sec
+**⚠️ IMPORTANT:** Costs use a **measurement-based framework** on RunPod Serverless:
+- Video model: Wan 2.2 Lightning (image-to-video)
+- Image model: Qwen
+- Effective GPU prices: **$0.00016/sec** for text-to-image, **$0.00019/sec** for image-to-video
+- Costs per video are calculated from measured GPU seconds per stage + external API usage
 
 ---
 
@@ -53,33 +54,33 @@ Tabario.com provides AI-powered long-form video generation services. This docume
 - ElevenLabs Creator tier: ~$0.30 per 1,000 characters
 - Professional voices with emotion: Higher tier required
 
-#### C. Image Generation (Qwen via RunPod Serverless)
+#### C. Image Generation (Flux via RunPod Serverless)
 
 | Component | Quantity | Unit Cost | Total Cost |
 |-----------|----------|-----------|------------|
-| **Image Generation (Qwen)** | 13-15 images | $0.011 per image | **$0.16** |
-| **GPU Time** | 25 seconds per image | RTX A5000 @ $0.00045/sec | |
+| **Image Generation (Flux)** | 13-15 images | $0.004 per image | **$0.06** |
+| **GPU Time** | 25 seconds per image | RunPod Serverless @ $0.00016/sec | |
 
 **RunPod Serverless Pricing (Actual):**
 - Model: Qwen (fast image generation)
 - Generation time: 25 seconds per image (measured)
-- GPU: RTX A5000 recommended
-- Cost per image: 25 sec × $0.00045 = $0.01125
-- Total for 14 images: $0.16
+- GPU pricing: text-to-image @ $0.00016/sec
+- Cost per image: 25 sec × $0.00016 = $0.004
+- Total for 14 images: $0.06
 
 #### D. Video Generation (Wan 2.2 Lightning via RunPod Serverless)
 
 | Component | Quantity | Unit Cost | Total Cost |
 |-----------|----------|-----------|------------|
-| **Video Clip Generation (Wan 2.2)** | 13-15 clips (3-5 sec each) | $0.081 per clip | **$1.13** |
-| **GPU Time** | 180 seconds per clip | RTX A5000 @ $0.00045/sec | |
+| **Video Clip Generation (Wan 2.2)** | 13-15 clips (3-5 sec each) | $0.034 per clip | **$0.48** |
+| **GPU Time** | 180 seconds per clip | RunPod Serverless @ $0.00019/sec | |
 
 **RunPod Serverless Pricing (Actual):**
 - Model: Wan 2.2 Lightning (I2V - Image to Video)
 - Generation time: 180 seconds per clip (estimated, pending production data)
-- GPU: RTX A5000 recommended
-- Cost per clip: 180 sec × $0.00045 = $0.081
-- Total for 14 clips: $1.13
+- GPU pricing: image-to-video @ $0.00019/sec
+- Cost per clip: 180 sec × $0.00019 ≈ $0.034
+- Total for 14 clips: ~$0.48
 - **Note:** This is a conservative estimate; actual times may vary ±30%
 
 #### E. Audio Processing & Subtitles
@@ -109,26 +110,77 @@ Tabario.com provides AI-powered long-form video generation services. This docume
 
 ---
 
-### 1.2 Total Variable Cost Per Video (50-second video)
+### 1.2 Cost Per Video (CPV) – Measurement-Based Formula
+
+Instead of a single fixed value per video, CPV is calculated from **measured timings** and **RunPod Serverless GPU prices**.
+
+Let:
+- `C_llm` = Claude cost per video (USD)
+- `C_voice` = ElevenLabs voice cost per video (USD)
+- `C_gpu` = GPU cost per video (USD)
+- `C_storage` = Allocated RunPod network volume cost per video (USD)
+- `C_cpu` = CPU/FFmpeg cost per video (USD)
+
+Then for a single video `v`:
+
+> **CPV(v) = C_llm(v) + C_voice(v) + C_gpu(v) + C_storage(v) + C_cpu(v)**
+
+Where:
+
+- **GPU cost per video**
+  - Let `p_img = 0.00016` USD/sec (RunPod Serverless text-to-image rate).
+  - Let `p_vid = 0.00019` USD/sec (RunPod Serverless video rate).
+  - Let `t_img(v)` = total measured GPU seconds spent in **image generation** for video `v` (from `image_generation_seconds`).
+  - Let `t_vid(v)` = total measured GPU seconds spent in **video generation** for video `v` (from `video_generation_seconds`).
+  - `C_gpu(v) = t_img(v) × p_img + t_vid(v) × p_vid`
+
+- **Storage (RunPod network volume)**
+  - Monthly RunPod volume cost: **$7/month**
+  - Let `N_month` = number of videos generated in the last 30 days (from `videos_generated_total`).
+  - `C_storage(v) ≈ 7 / N_month`
+
+- **CPU/FFmpeg cost**
+  - Let `t_ffmpeg(v)` = CPU seconds spent in stitching/subtitles.
+  - Let `p_cpu` = effective CPU cost per second on your backend.
+  - `C_cpu(v) = t_ffmpeg(v) × p_cpu`
+
+For **aggregated analysis by video length** (current product: 420p at 15s, 30s, 45s):
+
+- Define a `length_bucket` label ∈ {`"15"`, `"30"`, `"45"`} derived from **voiceover generation duration** (e.g. using 0–20s → `"15"`, 20–37s → `"30"`, 37–55s → `"45"`).
+- Let `T_img_avg[L]` = average **image-generation GPU seconds** per completed video in bucket `L`, over a period (e.g. 30 days), from `image_generation_seconds_sum`.
+- Let `T_vid_avg[L]` = average **video-generation GPU seconds** per completed video in bucket `L`, over a period, from `video_generation_seconds_sum`.
+
+Then:
+
+> **Expected GPU cost for a length bucket L:**  
+> `C_gpu_avg[L] = T_img_avg[L] × p_img + T_vid_avg[L] × p_vid`
+
+And:
+
+> **Expected CPV for bucket L:**  
+> `CPV_avg[L] = C_llm_avg + C_voice_avg[L] + C_gpu_avg[L] + C_storage_avg + C_cpu_avg[L]`
+
+Where `C_llm_avg`, `C_voice_avg[L]`, `C_storage_avg`, and `C_cpu_avg[L]` are estimated from historic data or vendor pricing.
+
+#### Example: Total Variable Cost Per 50-Second Video (Current Best Estimate)
+
+Using the assumptions above (≈14 images and ≈14 clips for a ~50s video):
 
 | Cost Category | Cost | % of Total |
 |--------------|------|------------|
-| Claude (Idea + Prompts) | $0.53 | 25% |
-| ElevenLabs Voice | $0.20 | 10% |
-| Image Generation (Qwen, 14 images) | $0.16 | 8% |
-| Video Generation (Wan 2.2, 14 clips) | $1.13 | 54% |
+| Claude (Idea + Prompts) | $0.53 | 39% |
+| ElevenLabs Voice | $0.20 | 15% |
+| Image Generation (Flux, 14 images) | $0.06 | 4% |
+| Video Generation (Wan 2.2, 14 clips) | $0.48 | 35% |
 | Audio Processing (Whisper) | $0.02 | 1% |
-| Video Post-Processing (FFmpeg) | $0.08 | 4% |
-| **TOTAL COST PER VIDEO** | **$2.12** | **100%** |
+| Video Post-Processing (FFmpeg) | $0.08 | 6% |
+| **TOTAL COST PER VIDEO (CPV)** | **$1.37** | **100%** |
 
 **Critical Notes:**
-- Video generation (Wan 2.2) is 54% of total variable cost
-- Total cost is **$2.12 per video** (previously estimated at $4.60)
-- This represents a **54% cost reduction** from initial estimates
-- Actual costs may vary ±15% based on:
-  - Number of Claude iterations
-  - Video clip count (13-15 segments)
-  - GPU availability and cold starts
+- Video generation (Wan 2.2) is ~35% of total variable cost; Claude + ElevenLabs together are ~54%.
+- Total cost is **$1.37 per ~50s video** under current assumptions.
+- This is significantly lower than the original $4.60 estimate (≈70% reduction), driven mainly by RunPod Serverless pricing and workflow optimizations.
+- Actual costs will vary per customer and over time; use the Prometheus-based formulas above as the source of truth.
 
 ---
 
@@ -138,12 +190,12 @@ Tabario.com provides AI-powered long-form video generation services. This docume
 |---------|---------|--------------|
 | **Supabase Pro** | Database, Auth, Storage | $25 - $100 |
 | **FastAPI Backend Hosting** | Orchestration service | $20 - $100 |
-| **Redis** | Job queue | $10 - $30 |
+| **RunPod Network Volume** | Persistent GPU storage | $7 |
 | **Monitoring & Logging** | Prometheus, Grafana | $0 - $50 |
 | **Domain & SSL** | tabario.com | $15 - $30 |
 | **CDN (if needed)** | Video delivery | $0 - $100 |
-| **Temporal.io (optional)** | Workflow orchestration | $0 - $200 |
-| **TOTAL FIXED COSTS** | | **$70 - $610/month** |
+| **Temporal.io** | Workflow orchestration | $0 - $200 |
+| **TOTAL FIXED COSTS** | | **$67 - $587/month** |
 
 **Scaling Considerations:**
 - Supabase storage: $0.021 per GB (videos add up quickly)
@@ -156,23 +208,23 @@ Tabario.com provides AI-powered long-form video generation services. This docume
 
 ### 2.1 Recommended Monthly Subscription Tiers
 
-#### **Tier 1: Starter** - $49/month ❌ NOT RECOMMENDED
+#### **Tier 1: Starter** - $49/month
 - **10 videos per month** (50-60 seconds each)
 - Standard voices (ElevenLabs)
 - 720p video quality
 - Basic support
-- **Cost:** $21.20 (10 videos × $2.12)
-- **Gross Margin:** $27.80 (57%)
+- **Cost:** $13.70 (10 videos × $1.37)
+- **Gross Margin:** $35.30 (72%)
 - **Target:** Individual creators, testing users
-- **Issue:** Too low for market positioning
+- **Positioning:** Entry tier to reduce friction and drive upgrades into Creator/Pro
 
 #### **Tier 2: Creator** - $149/month ✅ VIABLE
 - **40 videos per month** (50-60 seconds each)
 - Premium voices (ElevenLabs)
 - 1080p video quality
 - Priority support
-- **Cost:** $84.80 (40 videos × $2.12)
-- **Gross Margin:** $64.20 (43%)
+- **Cost:** $54.80 (40 videos × $1.37)
+- **Gross Margin:** $94.20 (63%)
 - **Target:** Small businesses, content creators
 
 #### **Tier 3: Professional** - $399/month ✅ PROFITABLE
@@ -180,8 +232,8 @@ Tabario.com provides AI-powered long-form video generation services. This docume
 - Premium voices + custom voice cloning
 - 1080p video quality
 - Priority support + dedicated account manager
-- **Cost:** $254.40 (120 videos × $2.12)
-- **Gross Margin:** $144.60 (36%)
+- **Cost:** $164.40 (120 videos × $1.37)
+- **Gross Margin:** $234.60 (59%)
 - **Target:** Agencies, marketing teams
 
 #### **Tier 4: Enterprise** - $999/month ✅ PROFITABLE
@@ -190,8 +242,8 @@ Tabario.com provides AI-powered long-form video generation services. This docume
 - 4K video quality option
 - White-label option
 - Dedicated support
-- **Cost:** $742 (350 videos × $2.12)
-- **Gross Margin:** $257 (26%)
+- **Cost:** $479.50 (350 videos × $1.37)
+- **Gross Margin:** $519.50 (52%)
 - **Target:** Large agencies, enterprises
 
 ---
@@ -204,12 +256,12 @@ Given the actual production costs, here are three pricing options:
 
 | Tier | Price | Videos/Month | Cost | Gross Margin | Margin % |
 |------|-------|--------------|------|--------------|----------|
-| **Starter** | $99/month | 10 videos | $21 | $78 | 79% |
-| **Creator** | $349/month | 40 videos | $85 | $264 | 76% |
-| **Professional** | $999/month | 120 videos | $254 | $745 | 75% |
-| **Enterprise** | $2,499/month | 350 videos | $742 | $1,757 | 70% |
+| **Starter** | $99/month | 10 videos | $14 | $85 | 86% |
+| **Creator** | $349/month | 40 videos | $55 | $294 | 84% |
+| **Professional** | $999/month | 120 videos | $164 | $835 | 84% |
+| **Enterprise** | $2,499/month | 350 videos | $480 | $2,019 | 81% |
 
-**Target Gross Margin:** 70-79% (premium positioning)  
+**Target Gross Margin:** 81-86% (premium positioning)  
 **Advantage:** Maximum profitability, strong unit economics  
 **Risk:** May be too expensive for early adopters
 
@@ -217,12 +269,12 @@ Given the actual production costs, here are three pricing options:
 
 | Tier | Price | Videos/Month | Cost | Gross Margin | Margin % |
 |------|-------|--------------|------|--------------|----------|
-| **Starter** | $49/month | 10 videos | $21 | $28 | 57% |
-| **Creator** | $149/month | 40 videos | $85 | $64 | 43% |
-| **Professional** | $399/month | 120 videos | $254 | $145 | 36% |
-| **Enterprise** | $999/month | 350 videos | $742 | $257 | 26% |
+| **Starter** | $49/month | 10 videos | $14 | $35 | 71% |
+| **Creator** | $149/month | 40 videos | $55 | $94 | 63% |
+| **Professional** | $399/month | 120 videos | $164 | $235 | 59% |
+| **Enterprise** | $999/month | 350 videos | $480 | $519 | 52% |
 
-**Target Gross Margin:** 26-57% (competitive positioning)  
+**Target Gross Margin:** 52-71% (competitive positioning)  
 **Advantage:** Lower barrier to entry, faster customer acquisition  
 **Risk:** Lower margins, less room for CAC
 
@@ -230,13 +282,13 @@ Given the actual production costs, here are three pricing options:
 
 | Tier | Base Price | Included Videos | Cost | Margin | Margin % | Overage Price |
 |------|-----------|-----------------|------|--------|----------|---------------|
-| **Starter** | $79/month | 10 videos | $21 | $58 | 73% | $6/video |
-| **Creator** | $249/month | 40 videos | $85 | $164 | 66% | $5/video |
-| **Professional** | $699/month | 120 videos | $254 | $445 | 64% | $4/video |
+| **Starter** | $79/month | 10 videos | $14 | $65 | 82% | $6/video |
+| **Creator** | $249/month | 40 videos | $55 | $194 | 78% | $5/video |
+| **Professional** | $699/month | 120 videos | $164 | $535 | 77% | $4/video |
 | **Enterprise** | Custom | Custom | Variable | Variable | 60%+ | $3/video |
 
 **Why This Works:**
-- **Excellent margins:** 64-73% gross margin
+- **Excellent margins:** 77-82% gross margin
 - **Predictable revenue** from base subscription
 - **Overage incentive:** Lower per-video cost at higher tiers
 - **Competitive positioning:** Premium but not excessive
@@ -283,25 +335,27 @@ Given the actual production costs, here are three pricing options:
 
 | Scenario | Starter | Creator | Pro | Enterprise | MRR | Total Videos | Total Costs | Gross Profit | Margin % |
 |----------|---------|---------|-----|------------|-----|--------------|-------------|--------------|----------|
-| **Conservative** | 20 | 10 | 3 | 1 | $11,255 | 730 | $1,548 | $9,707 | 86% |
-| **Moderate** | 50 | 30 | 10 | 3 | $31,420 | 2,300 | $4,876 | $26,544 | 84% |
-| **Aggressive** | 100 | 60 | 25 | 8 | $68,375 | 5,360 | $11,363 | $57,012 | 83% |
+| **Conservative** | 20 | 10 | 3 | 1 | $11,255 | 730 | $1,000 | $10,255 | 91% |
+| **Moderate** | 50 | 30 | 10 | 3 | $31,420 | 2,300 | $3,151 | $28,269 | 90% |
+| **Aggressive** | 100 | 60 | 25 | 8 | $68,375 | 5,360 | $7,343 | $61,032 | 89% |
 
 **Fixed Costs:** $300-$600/month (averaged at $450)
 
 **Net Profit (after $450 fixed costs):**
-- Conservative: $9,257/month ($111,084/year)
-- Moderate: $26,094/month ($313,128/year)
-- Aggressive: $56,562/month ($678,744/year)
+- Conservative: $9,805/month ($117,660/year)
+- Moderate: $27,819/month ($333,828/year)
+- Aggressive: $60,582/month ($726,984/year)
 
-**Key Insight:** With $2.12 CPV, profitability is significantly higher than initial projections.
+**Key Insight:** With ~$1.37 CPV, profitability is even higher than initial projections, providing substantial buffer for CAC and overhead.
 
 ### 4.2 Break-Even Analysis
 
-**Monthly Fixed Costs:** $450  
-**Average Gross Margin per Customer:** $150 (weighted average)
+**Monthly Fixed Costs:** $500  
+**Average Gross Margin per Customer:** $300 (weighted average from scenarios above)
 
-**Break-Even Point:** 3 customers (any mix)
+**Break-Even Point:**
+- Approximate break-even customers = `Fixed Costs / Avg Gross Margin` = `500 / 300 ≈ 1.7`.
+- **Round up to 2 customers** (any mix) to account for variability.
 
 **To Reach $10K MRR:** ~15-20 customers  
 **To Reach $50K MRR:** ~80-100 customers  
@@ -315,9 +369,9 @@ Given the actual production costs, here are three pricing options:
 
 | Metric | Formula | Target |
 |--------|---------|--------|
-| **Cost Per Video (CPV)** | Total variable costs / videos generated | **$2.12** |
-| **Revenue Per Video** | Total revenue / videos generated | $6-8 |
-| **Gross Margin per Video** | (Revenue - CPV) / Revenue | **64-73%** |
+| **Cost Per Video (CPV)** | `C_llm + C_voice + C_gpu + C_storage + C_cpu` (measured per video) | Track separately for 15s / 30s / 45s |
+| **Revenue Per Video** | Total revenue / videos generated | $6-8+ (depends on tier) |
+| **Gross Margin per Video** | (Revenue - CPV) / Revenue | **>60% for all length buckets** |
 | **Customer Acquisition Cost (CAC)** | Marketing spend / new customers | <$150 |
 | **Lifetime Value (LTV)** | Avg monthly revenue × avg customer lifetime (12 months) | >$900 |
 | **LTV:CAC Ratio** | LTV / CAC | >6:1 |
@@ -330,6 +384,38 @@ Given the actual production costs, here are three pricing options:
 - **Overage Revenue** (% of total revenue)
 - **GPU Utilization Rate**
 - **Video Generation Success Rate** (target: >95%)
+
+### 5.3 RunPod Cost & Performance Metrics (Serverless)
+
+To support accurate CPV calculations for **15s / 30s / 45s** videos, Prometheus should capture:
+
+- **Histograms (per job)**
+  - `image_generation_seconds_bucket{length_bucket}` – total **image-generation** GPU time.
+  - `video_generation_seconds_bucket{length_bucket}` – total **video-generation** GPU time.
+  - `voiceover_generation_seconds_bucket{length_bucket}` – aligns with final video length and defines the `length_bucket`.
+  - `stitch_seconds_bucket{length_bucket}` – FFmpeg CPU time.
+
+- **Counters**
+  - `videos_generated_total{length_bucket}` – number of successfully completed videos.
+
+- **Recommended labels**
+  - `length_bucket` ∈ {`"15"`, `"30"`, `"45"`} (derived from voiceover duration)
+  - `resolution` (e.g. `"420p"`, future `"1080p"`)
+  - `pipeline_version` (for when workflows change)
+
+- **Example Prometheus queries (30‑day window)**
+
+  - Average image and video GPU seconds per 30s video:
+    - `T_img_avg[30] = sum(rate(image_generation_seconds_sum{length_bucket="30"}[30d])) /
+       sum(rate(videos_generated_total{length_bucket="30"}[30d]))`
+    - `T_vid_avg[30] = sum(rate(video_generation_seconds_sum{length_bucket="30"}[30d])) /
+       sum(rate(videos_generated_total{length_bucket="30"}[30d]))`
+
+  - Videos per month (for allocating the $7 RunPod volume):
+    - `N_month = sum(increase(videos_generated_total[30d]))`
+    - `C_storage_per_video = 7 / N_month`
+
+These queries back the formulas in **Section 1.2**, allowing you to derive **CPV per length bucket** directly from historic production data.
 
 ---
 
@@ -349,8 +435,8 @@ Given the actual production costs, here are three pricing options:
 
 **Competitive Advantage:**
 - End-to-end automation (idea → script → video)
-- High-quality models (Wan 2.2 + Qwen)
-- Cost structure allows for 64-73% margins
+- High-quality models (Wan 2.2 + Flux)
+- Cost structure allows for 77-82% margins (Hybrid model)
 - Can compete on price OR invest heavily in marketing
 
 ---
@@ -370,7 +456,7 @@ Given the actual production costs, here are three pricing options:
 - [ ] **A/B test pricing** with early customers
 - [ ] **Optimize RunPod GPU selection** (cost vs. speed)
 - [ ] **Implement video segment caching**
-- [ ] **Set up automated cost alerts** (>$2.50/video)
+- [ ] **Set up automated cost alerts** (>$2.00/video)
 - [ ] **Analyze customer usage patterns**
 
 ### 7.3 Medium-Term (Month 3-6)
@@ -418,15 +504,15 @@ Given the actual production costs, here are three pricing options:
 
 | Scenario | Video Cost | Starter Margin | Creator Margin | Pro Margin |
 |----------|-----------|----------------|----------------|------------|
-| **Base Case** | $2.12 | 73% | 66% | 64% |
-| **10% Cost Increase** | $2.33 | 70% | 63% | 61% |
-| **20% Cost Increase** | $2.54 | 68% | 60% | 58% |
-| **30% Cost Reduction** | $1.48 | 81% | 75% | 73% |
-| **50% Cost Increase** | $3.18 | 60% | 51% | 48% |
+| **Base Case** | $1.37 | 82% | 78% | 77% |
+| **10% Cost Increase** | $1.51 | 81% | 76% | 74% |
+| **20% Cost Increase** | $1.64 | 79% | 74% | 72% |
+| **30% Cost Reduction** | $0.96 | 88% | 85% | 84% |
+| **50% Cost Increase** | $2.05 | 74% | 67% | 65% |
 
 **Conclusion:** 
-- Every 10% cost change = ~3% margin change
-- Even with 50% cost increase, margins remain healthy (48-60%)
+- Every 10% cost change moves margins by only a few percentage points
+- Even with a 50% cost increase, margins remain strong (65-74%)
 - Strong buffer against cost volatility
 
 ### 9.2 Impact of Pricing Changes
@@ -444,16 +530,20 @@ Given the actual production costs, here are three pricing options:
 
 ## 10. Appendix: Detailed Cost Assumptions
 
-### 10.1 RunPod Serverless Pricing (Current Rates)
+### 10.1 RunPod Serverless GPU Pricing (Current Rates)
 
-| GPU Type | Cost per Second | Image Gen Time (Qwen) | Video Gen Time (Wan 2.2) | Cost per Video | Recommended Use |
-|----------|----------------|----------------------|--------------------------|----------------|------------------|
-| **RTX A4000** | $0.00034/sec | 25 sec | 180 sec | $1.62 | Budget option |
-| **RTX A5000** | $0.00045/sec | 25 sec | 180 sec | **$2.12** | **Recommended** |
-| **RTX A6000** | $0.00068/sec | 25 sec | 180 sec | $3.20 | Premium/faster |
-| **A100 40GB** | $0.00114/sec | 25 sec | 180 sec | $5.40 | Not recommended |
+For cost modeling we assume **separate effective GPU prices** on RunPod Serverless:
 
-**Note:** Video generation time (180 sec) is estimated. Actual production data pending.
+- Text-to-image (Qwen): **$0.00016/sec** (USD)
+- Video generation (Wan 2.2 Lightning): **$0.00019/sec** (USD)
+
+**Cost per video is fully measurement-based:**
+
+- Let `t_img(v)` = total GPU seconds used for all image generations for video `v`.
+- Let `t_vid(v)` = total GPU seconds used for all video generations for video `v`.
+- `C_gpu(v) = t_img(v) × 0.00016 + t_vid(v) × 0.00019`
+
+All CPV calculations in this document use these rates together with the duration-based `length_bucket` metrics from Prometheus.
 
 ### 10.2 Claude API Pricing (Anthropic)
 
@@ -477,6 +567,40 @@ Given the actual production costs, here are three pricing options:
 
 ---
 
+## 11. Glossary
+
+- **CPV (Cost Per Video)**  
+  Total variable cost to generate one finished video, including Claude, ElevenLabs, GPU time (image + video), allocated RunPod network volume, and FFmpeg CPU. Formally: `CPV(v) = C_llm(v) + C_voice(v) + C_gpu(v) + C_storage(v) + C_cpu(v)`.
+
+- **CPV_avg[L] (Average Cost Per Video for length bucket L)**  
+  Average CPV for a specific video length bucket `L ∈ {"15","30","45"}` over a period (e.g. 30 days), computed from Prometheus metrics. Used for pricing and margin analysis per video length.
+
+- **CAC (Customer Acquisition Cost)**  
+  Average sales + marketing spend required to acquire one paying customer. Calculated as `Total acquisition spend / Number of new customers acquired`.
+
+- **LTV (Lifetime Value)**  
+  Total expected gross revenue from a customer over their lifecycle. Approximated here as `Average monthly revenue per customer × Average customer lifetime (in months)`.
+
+- **MRR (Monthly Recurring Revenue)**  
+  Sum of all subscription revenue in a given month, normalized to a monthly basis (e.g. number of customers per tier × tier price).
+
+- **Gross Margin**  
+  Profit after variable costs but before fixed costs and overhead. For a video: `(Revenue per video − CPV) / Revenue per video`. For a customer: `(Subscription price − variable costs of included videos) / Subscription price`.
+
+- **ARPU (Average Revenue Per User/Customer)**  
+  Average monthly revenue per active paying customer. Calculated as `MRR / Number of active customers`.
+
+- **Churn Rate**  
+  Percentage of customers who cancel in a given period. Calculated as `Customers lost during period / Customers at start of period`.
+
+- **length_bucket**  
+  Label used in Prometheus metrics to group videos by target length: `"15"`, `"30"`, or `"45"` seconds. Derived from voiceover duration and used to compute CPV by video length.
+
+- **GPU Seconds (t_img, t_vid)**  
+  Measured GPU time spent on image generation (`t_img`) and video generation (`t_vid`) for a single video. Used with RunPod per‑second pricing to compute `C_gpu(v)`.
+
+---
+
 ## Document Control
 
 **Prepared by:** CFO Advisory Team  
@@ -492,6 +616,11 @@ Given the actual production costs, here are three pricing options:
   - Total CPV reduced from $4.60 to $2.12 (54% reduction)
   - Gross margins improved to 64-73% (from 42-46%)
   - All pricing tiers now profitable
+ - v1.2 (Nov 19, 2025): Updated for RunPod Serverless + Flux and measurement-based CPV
+   - Image model: Flux via RunPod Serverless (text-to-image @ $0.00016/sec)
+   - Video pricing: Wan 2.2 Lightning (image-to-video @ $0.00019/sec)
+   - New CPV example: ~$1.37 per 50s video (significant further reduction)
+   - Pricing tables, projections, and sensitivity analysis recalculated using new CPV
 
 ---
 

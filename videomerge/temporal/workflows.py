@@ -46,7 +46,7 @@ class ProcessSceneWorkflow:
             if prompt.image_prompt:
                 try:
                     image_hint = await workflow.execute_activity(
-                        generate_image, args=[prompt.image_prompt, workflow_path, index], **activity_defaults
+                        generate_image, args=[run_id, prompt.image_prompt, workflow_path, index], **activity_defaults
                     )
                 except Exception as e:
                     workflow.logger.error(f"Image generation failed for scene {index}: {e}")

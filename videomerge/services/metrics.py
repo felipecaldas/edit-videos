@@ -36,6 +36,14 @@ voiceover_generation_seconds = Histogram(
     registry=registry
 )
 
+voiceover_length_seconds = Histogram(
+    'voiceover_length_seconds',
+    'Length of generated voiceover audio in seconds',
+    labelnames=['length_bucket'],
+    buckets=[10, 20, 40, 60, 120, 300],
+    registry=registry,
+)
+
 voiceover_failures_total = Counter(
     'voiceover_failures_total',
     'Total number of voiceover generation failures',
@@ -62,6 +70,7 @@ image_generation_failures_total = Counter(
 total_images_generation_seconds = Histogram(
     'total_images_generation_seconds',
     'Total time spent generating all images for a job',
+    labelnames=['length_bucket'],
     buckets=[10, 30, 60, 120, 300, 600, 1200, 3600],
     registry=registry
 )
@@ -85,6 +94,7 @@ video_generation_seconds = Histogram(
 total_videos_generation_seconds = Histogram(
     'total_videos_generation_seconds',
     'Total time spent generating all videos for a job',
+    labelnames=['length_bucket'],
     buckets=[10, 30, 60, 120, 300, 600, 1200, 3600],
     registry=registry
 )
@@ -96,10 +106,18 @@ videos_generated_total = Counter(
     registry=registry
 )
 
+videos_completed_total = Counter(
+    'videos_completed_total',
+    'Total number of final videos completed successfully',
+    labelnames=['length_bucket'],
+    registry=registry
+)
+
 # Stitching and Subtitles metrics
 stitch_seconds = Histogram(
     'stitch_seconds',
     'Time spent stitching videos together',
+    labelnames=['length_bucket'],
     buckets=[1, 5, 10, 30, 60, 120, 300],
     registry=registry
 )
@@ -107,6 +125,7 @@ stitch_seconds = Histogram(
 subtitles_seconds = Histogram(
     'subtitles_seconds',
     'Time spent generating and burning subtitles',
+    labelnames=['length_bucket'],
     buckets=[1, 5, 10, 30, 60, 120, 300],
     registry=registry
 )
@@ -167,15 +186,13 @@ comfyui_request_seconds = Histogram(
 )
 
 
-# Environment label for all metrics
-def add_environment_labels(func):
-    """Decorator to add environment label to metrics"""
-    def wrapper(*args, **kwargs):
-        # Add environment label if not already present
-        if not hasattr(func, '_environment_added'):
-            func._environment_added = True
-        return func(*args, **kwargs)
-    return wrapper
+def get_length_bucket(length_seconds: float) -> str:
+    """Map a raw audio/video length in seconds to a 15/30/45 second bucket."""
+    if length_seconds <= 20:
+        return "15"
+    if length_seconds <= 37:
+        return "30"
+    return "45"
 
 
 def get_metrics_response() -> Response:

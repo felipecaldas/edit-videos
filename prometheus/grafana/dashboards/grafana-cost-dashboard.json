@@ -1,0 +1,230 @@
+{
+  "id": null,
+  "title": "Tabario Cost & Length Buckets",
+  "tags": ["video-generation", "cost", "length-buckets"],
+  "timezone": "browser",
+  "refresh": "30s",
+  "schemaVersion": 16,
+  "version": 1,
+  "time": {
+    "from": "now-30d",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Videos Completed by Length Bucket (rate)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(videos_completed_total[1d])) by (length_bucket)",
+          "refId": "A",
+          "interval": "",
+          "legendFormat": "{{length_bucket}}s"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "barAlignment": 0,
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": false,
+            "insertNulls": false,
+            "showPoints": "never",
+            "pointSize": 5,
+            "stacking": { "mode": "none", "group": "A" },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": { "type": "linear" }
+          },
+          "unit": "reqps",
+          "min": "0"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 }
+    },
+    {
+      "id": 2,
+      "title": "Videos Completed by Length Bucket (30d total)",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "sum(increase(videos_completed_total[30d])) by (length_bucket)",
+          "refId": "A",
+          "interval": "",
+          "legendFormat": "{{length_bucket}}s"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "displayMode": "lcd", "orientation": "horizontal" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [ { "color": "green", "value": null } ]
+          },
+          "unit": "short",
+          "min": 0
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 }
+    },
+    {
+      "id": 3,
+      "title": "Avg Image GPU Seconds per Video by Length Bucket (30d)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(total_images_generation_seconds_sum[30d])) by (length_bucket) / sum(rate(videos_completed_total[30d])) by (length_bucket)",
+          "refId": "A",
+          "interval": "",
+          "legendFormat": "{{length_bucket}}s"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "barAlignment": 0,
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": false,
+            "insertNulls": false,
+            "showPoints": "never",
+            "pointSize": 5,
+            "stacking": { "mode": "none", "group": "A" },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": { "type": "linear" }
+          },
+          "unit": "s",
+          "min": "0"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 }
+    },
+    {
+      "id": 4,
+      "title": "Avg Video GPU Seconds per Video by Length Bucket (30d)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(total_videos_generation_seconds_sum[30d])) by (length_bucket) / sum(rate(videos_completed_total[30d])) by (length_bucket)",
+          "refId": "A",
+          "interval": "",
+          "legendFormat": "{{length_bucket}}s"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "barAlignment": 0,
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": false,
+            "insertNulls": false,
+            "showPoints": "never",
+            "pointSize": 5,
+            "stacking": { "mode": "none", "group": "A" },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": { "type": "linear" }
+          },
+          "unit": "s",
+          "min": "0"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 }
+    },
+    {
+      "id": 5,
+      "title": "GPU Cost per Video by Length Bucket (USD, 30d)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "(sum(rate(total_images_generation_seconds_sum[30d])) by (length_bucket) * 0.00016 + sum(rate(total_videos_generation_seconds_sum[30d])) by (length_bucket) * 0.00019) / sum(rate(videos_completed_total[30d])) by (length_bucket)",
+          "refId": "A",
+          "interval": "",
+          "legendFormat": "{{length_bucket}}s"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "barAlignment": 0,
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": false,
+            "insertNulls": false,
+            "showPoints": "never",
+            "pointSize": 5,
+            "stacking": { "mode": "none", "group": "A" },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": { "type": "linear" }
+          },
+          "unit": "currencyUSD",
+          "min": "0"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 }
+    },
+    {
+      "id": 6,
+      "title": "Avg Voiceover Length by Length Bucket (30d)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(voiceover_length_seconds_sum[30d])) by (length_bucket) / sum(rate(voiceover_length_seconds_count[30d])) by (length_bucket)",
+          "refId": "A",
+          "interval": "",
+          "legendFormat": "{{length_bucket}}s"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "barAlignment": 0,
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": false,
+            "insertNulls": false,
+            "showPoints": "never",
+            "pointSize": 5,
+            "stacking": { "mode": "none", "group": "A" },
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": { "type": "linear" }
+          },
+          "unit": "s",
+          "min": "0"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 }
+    }
+  ],
+  "timepicker": {},
+  "templating": { "list": [] },
+  "annotations": { "list": [] }
+}
