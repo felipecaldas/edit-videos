@@ -15,7 +15,7 @@ services:
       - DATA_SHARED_BASE=/data/shared
       - COMFYUI_URL=http://192.168.68.51:8188
       - ENABLE_IMAGE_GEN=true
-      - ENABLE_VOICEOVER_GEN=false
+      - ENABLE_VOICEOVER_GEN=true
       - COMFYUI_TIMEOUT_SECONDS=600
       - COMFYUI_POLL_INTERVAL_SECONDS=15
       - LOG_LEVEL=DEBUG

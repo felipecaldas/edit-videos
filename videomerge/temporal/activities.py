@@ -17,6 +17,11 @@ from videomerge.services.metrics import (
     stitch_seconds,
     subtitles_seconds,
     videos_completed_total,
+    jobs_started_total,
+    jobs_completed_total,
+    jobs_failed_total,
+    job_total_seconds,
+    worker_active,
 )
 from videomerge.services.comfyui_client import get_image_client, get_video_client, refresh_comfyui_client, ClientType, get_comfyui_client
 from videomerge.services.comfyui import (
@@ -33,6 +38,10 @@ from videomerge.services.webhook_manager import webhook_manager
 from videomerge.utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+_metrics_lock = asyncio.Lock()
+_active_runs: set[str] = set()
+_job_start_times: Dict[str, float] = {}
 
 
 def _load_length_bucket(run_id: str) -> Optional[str]:
@@ -51,6 +60,16 @@ def _load_length_bucket(run_id: str) -> Optional[str]:
 async def setup_run_directory(run_id: str, payload: Dict[str, Any]) -> str:
     """Creates the run directory and saves the manifest."""
     activity.heartbeat()
+    start_ts = time.time()
+    first_start = False
+    async with _metrics_lock:
+        if run_id not in _active_runs:
+            _active_runs.add(run_id)
+            _job_start_times[run_id] = start_ts
+            worker_active.set(len(_active_runs))
+            first_start = True
+    if first_start:
+        jobs_started_total.inc()
     run_dir = DATA_SHARED_BASE / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = run_dir / "manifest.json"
@@ -328,6 +347,7 @@ async def send_completion_webhook(
     video_files: Optional[List[str]] = None,
     image_files: Optional[List[str]] = None,
     voiceover_path: Optional[str] = None,
+    failure_reason: Optional[str] = None,
 ):
     """Sends a webhook notification to N8N upon completion."""
     activity.heartbeat()
@@ -359,3 +379,21 @@ async def send_completion_webhook(
         length_bucket = _load_length_bucket(run_id)
         if length_bucket is not None:
             videos_completed_total.labels(length_bucket=length_bucket).inc()
+        jobs_completed_total.inc()
+    else:
+        reason_label = failure_reason or "unknown"
+        jobs_failed_total.labels(reason=reason_label).inc()
+
+    duration_observed = False
+    async with _metrics_lock:
+        start_ts = _job_start_times.pop(run_id, None)
+        if run_id in _active_runs:
+            _active_runs.remove(run_id)
+        worker_active.set(len(_active_runs))
+        if start_ts is not None:
+            duration = max(0.0, time.time() - start_ts)
+            job_total_seconds.observe(duration)
+            duration_observed = True
+
+    if not duration_observed:
+        logger.debug(f"[metrics] No start timestamp recorded for run_id={run_id}; skipping job_total_seconds")

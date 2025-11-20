@@ -249,6 +249,7 @@ class VideoGenerationWorkflow:
                         if (p.get("image_prompt") if isinstance(p, dict) else getattr(p, "image_prompt", None))
                     ],
                     voiceover_path if "voiceover_path" in locals() else "",
+                    str(e),
                 ],
                 **activity_defaults,
             )

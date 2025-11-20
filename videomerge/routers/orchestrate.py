@@ -7,6 +7,7 @@ from temporalio.common import WorkflowIDReusePolicy
 from videomerge.config import TEMPORAL_SERVER_URL
 from videomerge.models import OrchestrateStartRequest
 from videomerge.temporal.workflows import VideoGenerationWorkflow
+from videomerge.services.metrics import jobs_enqueued_total
 from videomerge.utils.logging import get_logger
 
 router = APIRouter(prefix="", tags=["orchestrate"])
@@ -25,6 +26,8 @@ async def orchestrate_start(req: OrchestrateStartRequest):
 
     # Ensure the workflow_id is propagated into the workflow request payload
     req.workflow_id = workflow_id
+
+    jobs_enqueued_total.inc()
 
 
     client = await Client.connect(TEMPORAL_SERVER_URL)

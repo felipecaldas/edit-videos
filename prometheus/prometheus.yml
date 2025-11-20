@@ -28,7 +28,7 @@ scrape_configs:
   - job_name: 'video-merger'
     scrape_interval: 30s
     static_configs:
-      - targets: ['video-editor-video-merger-1:8000']
+      - targets: ['video-editor-video-merger-1:8000', 'video-editor-temporal-worker-1:9100']
     # Optional: Add labels to all metrics from this job
     relabel_configs:
       - source_labels: [__address__]
