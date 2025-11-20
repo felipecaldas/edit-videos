@@ -100,6 +100,7 @@ services:
 
 networks:
   tabario:
+    name: tabario
     driver: bridge
 
 volumes:

@@ -10,8 +10,7 @@ RUN mkdir -p /app/dashboards && chown -R 472:472 /app/dashboards
 # Switch back to the non-root 'grafana' user
 USER grafana
 
-# Copy the dashboard JSON files into our dedicated directory
-COPY ./dashboards/grafana-dashboard.json /app/dashboards/grafana-dashboard.json
+COPY ./dashboards/ /app/dashboards/
 
 # Copy the dashboard provider to tell Grafana where to look
 COPY ./provisioning/dashboards/dashboard.yml /etc/grafana/provisioning/dashboards/dashboard.yml

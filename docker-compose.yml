@@ -32,14 +32,7 @@ services:
     networks:
       - tabario
 
-  # redis:
-  #   image: "redis:alpine"
-  #   ports:
-  #     - "6379:6379"
-  #   restart: unless-stopped
-  #   networks:
-  #     - tabario
-
 networks:
   tabario:
+    name: tabario
     driver: bridge

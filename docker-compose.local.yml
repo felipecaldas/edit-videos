@@ -96,6 +96,11 @@ services:
     networks:
       - tabario
 
+networks:
+  tabario:
+    name: tabario
+    driver: bridge
+
 volumes:
   postgres_data:
 
