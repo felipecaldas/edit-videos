@@ -141,7 +141,14 @@ async def test_video_generation_workflow_uses_generated_prompts(tmp_path: Path) 
         recorded["scene_prompts"] = prompts
         return prompts
 
-    async def generate_image(prompt_text: str, workflow_path: str, index: int) -> str:
+    async def generate_image(
+        run_id: str,
+        prompt_text: str,
+        workflow_path: str,
+        index: int,
+        image_width: int | None = None,
+        image_height: int | None = None,
+    ) -> str:
         # Return a dummy image hint per scene
         return f"image-{index}.png"
 

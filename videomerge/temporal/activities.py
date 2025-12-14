@@ -7,7 +7,7 @@ from typing import List, Dict, Any, Optional
 import httpx
 from temporalio import activity
 
-from videomerge.config import DATA_SHARED_BASE, WORKFLOW_I2V_PATH, VIDEO_COMPLETED_N8N_WEBHOOK_URL
+from videomerge.config import DATA_SHARED_BASE, WORKFLOW_I2V_PATH, VIDEO_COMPLETED_N8N_WEBHOOK_URL, IMAGE_WIDTH, IMAGE_HEIGHT
 from videomerge.services.media import get_duration
 from videomerge.services.metrics import (
     voiceover_length_seconds,
@@ -42,6 +42,15 @@ logger = get_logger(__name__)
 _metrics_lock = asyncio.Lock()
 _active_runs: set[str] = set()
 _job_start_times: Dict[str, float] = {}
+
+
+def _safe_heartbeat() -> None:
+    """Call Temporal activity heartbeat if running in an activity context."""
+
+    try:
+        activity.heartbeat()
+    except Exception:
+        return
 
 
 def _load_length_bucket(run_id: str) -> Optional[str]:
@@ -142,7 +151,7 @@ async def generate_voiceover(run_id: str, script: str, language: str, elevenlabs
 @activity.defn
 async def generate_scene_prompts(run_id: str, script: str, image_style: str | None = None) -> List[Dict[str, Any]]:
     """Generate scene prompts based on the synthesized voiceover duration."""
-    activity.heartbeat()
+    _safe_heartbeat()
     run_dir = DATA_SHARED_BASE / run_id
     metadata_path = run_dir / "voiceover_metadata.json"
 
@@ -188,7 +197,14 @@ async def generate_scene_prompts(run_id: str, script: str, image_style: str | No
 
 
 @activity.defn
-async def generate_image(run_id: str, prompt_text: str, workflow_path: str, index: int) -> str:
+async def generate_image(
+    run_id: str,
+    prompt_text: str,
+    workflow_path: str,
+    index: int,
+    image_width: int | None = None,
+    image_height: int | None = None,
+) -> str:
     """Generates a single image from a text prompt."""
     activity.heartbeat()
     logger.info(f"Generating image for prompt index {index}")
@@ -203,7 +219,15 @@ async def generate_image(run_id: str, prompt_text: str, workflow_path: str, inde
     client = get_comfyui_client(ClientType.IMAGE, force_refresh=True)
 
     start_time = time.time()
-    prompt_id = await asyncio.to_thread(client.submit_text_to_image, prompt_text, template_path=workflow_path)
+    width = int(image_width) if image_width is not None else int(IMAGE_WIDTH)
+    height = int(image_height) if image_height is not None else int(IMAGE_HEIGHT)
+    prompt_id = await asyncio.to_thread(
+        client.submit_text_to_image,
+        prompt_text,
+        template_path=workflow_path,
+        image_width=width,
+        image_height=height,
+    )
     filenames = await asyncio.to_thread(client.poll_until_complete, prompt_id, timeout_s=600, poll_interval_s=15)
     duration = time.time() - start_time
 

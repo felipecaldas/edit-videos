@@ -49,7 +49,15 @@ class ComfyUIClient(ABC):
         self.poll_interval_seconds = COMFYUI_POLL_INTERVAL_SECONDS
 
     @abstractmethod
-    def submit_text_to_image(self, prompt_text: str, *, template_path: Path, client_id: Optional[str] = None) -> str:
+    def submit_text_to_image(
+        self,
+        prompt_text: str,
+        *,
+        template_path: Path,
+        client_id: Optional[str] = None,
+        image_width: Optional[int] = None,
+        image_height: Optional[int] = None,
+    ) -> str:
         """Submit a text-to-image workflow and return the prompt_id."""
         pass
 
@@ -132,6 +140,25 @@ class ComfyUIClient(ABC):
             "Origin": origin,
             "Referer": origin + "/",
         }
+
+    @staticmethod
+    def _coerce_width_height_to_int(payload: Any) -> None:
+        """Recursively coerce digit-only `width`/`height` strings to integers."""
+
+        if isinstance(payload, dict):
+            for key, value in list(payload.items()):
+                if key in {"width", "height"} and isinstance(value, str):
+                    stripped = value.strip()
+                    if stripped.isdigit():
+                        payload[key] = int(stripped)
+                        continue
+                ComfyUIClient._coerce_width_height_to_int(value)
+            return
+
+        if isinstance(payload, list):
+            for item in payload:
+                ComfyUIClient._coerce_width_height_to_int(item)
+            return
 
     def _load_workflow_config(self, run_env: str) -> tuple[dict[str, str], Path, Path]:
         """Load workflow configuration."""
@@ -216,7 +243,15 @@ class ComfyUIClient(ABC):
 class LocalComfyUIClient(ComfyUIClient):
     """ComfyUI client for local development environment."""
 
-    def submit_text_to_image(self, prompt_text: str, *, template_path: Path, client_id: Optional[str] = None) -> str:
+    def submit_text_to_image(
+        self,
+        prompt_text: str,
+        *,
+        template_path: Path,
+        client_id: Optional[str] = None,
+        image_width: Optional[int] = None,
+        image_height: Optional[int] = None,
+    ) -> str:
         """Submit a text-to-image workflow to local ComfyUI."""
         client_id = client_id or str(uuid.uuid4())
         
@@ -227,9 +262,15 @@ class LocalComfyUIClient(ComfyUIClient):
                 f"Workflow template '{template_path.name}' is missing the '{{ POSITIVE_PROMPT }}' placeholder."
             )
         
+        width = int(image_width) if image_width is not None else 480
+        height = int(image_height) if image_height is not None else 480
+
         # Inject prompt
         escaped_prompt = json.dumps(prompt_text)[1:-1]
         final_workflow_str = workflow_str.replace("{{ POSITIVE_PROMPT }}", escaped_prompt)
+
+        final_workflow_str = final_workflow_str.replace("{{ IMAGE_WIDTH }}", str(width))
+        final_workflow_str = final_workflow_str.replace("{{ IMAGE_HEIGHT }}", str(height))
         
         # Parse JSON
         try:
@@ -243,6 +284,8 @@ class LocalComfyUIClient(ComfyUIClient):
             workflow_payload = workflow_json["prompt"]
         else:
             workflow_payload = workflow_json
+
+        self._coerce_width_height_to_int(workflow_payload)
 
         # Submit to ComfyUI
         url = f"{self.base_url}/prompt"
@@ -565,13 +608,31 @@ class RunPodComfyUIClient(ComfyUIClient):
         provided: Optional[str],
         index: int,
     ) -> str:
-        """Generate a deterministic filename preserving output order."""
+        """Generate a safe filename preserving output order.
+
+        For RunPod video outputs, we *must not* reuse generic ComfyUI filenames
+        like ``ComfyUI_00002_.mp4`` across scenes, because they collide within
+        the same ``/data/shared/{run_id}`` directory and cause later clips to
+        overwrite earlier ones. To avoid this, all video outputs get a fresh
+        UUID-based basename while still keeping the per-output index prefix.
+
+        For non-video outputs (e.g. images), we keep the previous behavior of
+        attempting to preserve a sanitized version of the provided filename.
+        """
         ext = self._default_extension(media_type)
+        media_type_lower = media_type.lower()
+        is_video = media_type_lower.startswith("video/") or ext == "mp4"
+
+        # For video outputs, always use a UUID-based filename to avoid
+        # collisions when ComfyUI reuses generic names between jobs/scenes.
+        if is_video:
+            return f"{index:03d}_{uuid.uuid4().hex}.{ext}"
+
         sanitized: Optional[str] = None
 
         if provided:
             provided_name = Path(provided).name
-            if provided_name not in {"", "ComfyUI_00001_.mp4"}:
+            if provided_name:
                 sanitized_candidate = self._sanitize_filename(provided_name)
                 if sanitized_candidate:
                     sanitized = sanitized_candidate
@@ -644,7 +705,15 @@ class RunPodComfyUIClient(ComfyUIClient):
 
         return results
 
-    def submit_text_to_image(self, prompt_text: str, *, template_path: Path, client_id: Optional[str] = None) -> str:
+    def submit_text_to_image(
+        self,
+        prompt_text: str,
+        *,
+        template_path: Path,
+        client_id: Optional[str] = None,
+        image_width: Optional[int] = None,
+        image_height: Optional[int] = None,
+    ) -> str:
         """Submit a text-to-image workflow to RunPod serverless ComfyUI."""
         workflow_name = template_path.stem
         start_time = time.time()
@@ -659,13 +728,21 @@ class RunPodComfyUIClient(ComfyUIClient):
                     f"Workflow template '{template_path.name}' is missing the '{{ POSITIVE_PROMPT }}' placeholder."
                 )
             
+            width = int(image_width) if image_width is not None else 480
+            height = int(image_height) if image_height is not None else 480
+
             # Inject prompt
             escaped_prompt = json.dumps(prompt_text)[1:-1]
             final_workflow_str = workflow_str.replace("{{ POSITIVE_PROMPT }}", escaped_prompt)
+
+            final_workflow_str = final_workflow_str.replace("{{ IMAGE_WIDTH }}", str(width))
+            final_workflow_str = final_workflow_str.replace("{{ IMAGE_HEIGHT }}", str(height))
             
             # Parse JSON - for RunPod, check if it's already wrapped or needs wrapping
             try:
                 workflow_data = json.loads(final_workflow_str)
+
+                self._coerce_width_height_to_int(workflow_data)
                 
                 # Check if the workflow is already wrapped in input.workflow
                 if "input" in workflow_data and "workflow" in workflow_data["input"]:

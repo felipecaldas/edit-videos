@@ -5,7 +5,7 @@ from typing import List
 from temporalio import workflow
 from temporalio.common import RetryPolicy
 
-from videomerge.config import IMAGE_WORKFLOWS, WORKFLOWS_BASE_PATH, ENABLE_VOICEOVER_GEN
+from videomerge.config import IMAGE_WORKFLOWS, WORKFLOWS_BASE_PATH, ENABLE_VOICEOVER_GEN, IMAGE_WIDTH, IMAGE_HEIGHT
 from videomerge.models import OrchestrateStartRequest, PromptItem
 
 # Import all activities from the activities module
@@ -26,7 +26,15 @@ with workflow.unsafe.imports_passed_through():
 @workflow.defn
 class ProcessSceneWorkflow:
     @workflow.run
-    async def run(self, run_id: str, prompt: PromptItem, workflow_path: str, index: int) -> List[str]:
+    async def run(
+        self,
+        run_id: str,
+        prompt: PromptItem,
+        workflow_path: str,
+        index: int,
+        image_width: int,
+        image_height: int,
+    ) -> List[str]:
         """Workflow to process a single scene (image -> video)."""
         # Log parent workflow info for correlation
         parent_info = workflow.info().parent
@@ -47,7 +55,9 @@ class ProcessSceneWorkflow:
             if prompt.image_prompt:
                 try:
                     image_hint = await workflow.execute_activity(
-                        generate_image, args=[run_id, prompt.image_prompt, workflow_path, index], **activity_defaults
+                        generate_image,
+                        args=[run_id, prompt.image_prompt, workflow_path, index, image_width, image_height],
+                        **activity_defaults,
                     )
                 except Exception as e:
                     workflow.logger.error(f"Image generation failed for scene {index}: {e}")
@@ -140,6 +150,9 @@ class VideoGenerationWorkflow:
                 **activity_defaults,
             )
 
+            image_width = int(req.image_width) if req.image_width is not None else int(IMAGE_WIDTH)
+            image_height = int(req.image_height) if req.image_height is not None else int(IMAGE_HEIGHT)
+
             # 4. Process each scene as a child workflow
             scene_processing_tasks = []
             workflow_filename = IMAGE_WORKFLOWS.get(image_style, IMAGE_WORKFLOWS["default"])
@@ -164,7 +177,7 @@ class VideoGenerationWorkflow:
                 # Note: Parent workflow also has TabarioRunId set (in orchestrate.py)
                 task = workflow.execute_child_workflow(
                     ProcessSceneWorkflow.run,
-                    args=[req.run_id, prompt, workflow_path, i],
+                    args=[req.run_id, prompt, workflow_path, i, image_width, image_height],
                     id=child_id,
                     memo={
                         "parent_workflow_id": parent_workflow_id,
