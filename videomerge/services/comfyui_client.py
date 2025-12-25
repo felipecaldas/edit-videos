@@ -53,7 +53,8 @@ class ComfyUIClient(ABC):
         self,
         prompt_text: str,
         *,
-        template_path: Path,
+        template_path: Optional[Path] = None,
+        comfyui_workflow_name: Optional[str] = None,
         client_id: Optional[str] = None,
         image_width: Optional[int] = None,
         image_height: Optional[int] = None,
@@ -247,13 +248,17 @@ class LocalComfyUIClient(ComfyUIClient):
         self,
         prompt_text: str,
         *,
-        template_path: Path,
+        template_path: Optional[Path] = None,
+        comfyui_workflow_name: Optional[str] = None,
         client_id: Optional[str] = None,
         image_width: Optional[int] = None,
         image_height: Optional[int] = None,
     ) -> str:
         """Submit a text-to-image workflow to local ComfyUI."""
         client_id = client_id or str(uuid.uuid4())
+
+        if template_path is None:
+            raise ValueError("template_path is required for local ComfyUI text-to-image")
         
         # Load and validate template
         workflow_str = self._load_workflow_template(template_path)
@@ -709,58 +714,82 @@ class RunPodComfyUIClient(ComfyUIClient):
         self,
         prompt_text: str,
         *,
-        template_path: Path,
+        template_path: Optional[Path] = None,
+        comfyui_workflow_name: Optional[str] = None,
         client_id: Optional[str] = None,
         image_width: Optional[int] = None,
         image_height: Optional[int] = None,
     ) -> str:
         """Submit a text-to-image workflow to RunPod serverless ComfyUI."""
-        workflow_name = template_path.stem
+        workflow_name = comfyui_workflow_name or (template_path.stem if template_path is not None else "unknown")
         start_time = time.time()
         
         try:
             client_id = client_id or str(uuid.uuid4())
-            
-            # Load and validate template
-            workflow_str = self._load_workflow_template(template_path)
-            if "{{ POSITIVE_PROMPT }}" not in workflow_str:
-                raise ValueError(
-                    f"Workflow template '{template_path.name}' is missing the '{{ POSITIVE_PROMPT }}' placeholder."
-                )
-            
+
             width = int(image_width) if image_width is not None else 480
             height = int(image_height) if image_height is not None else 480
 
-            # Inject prompt
-            escaped_prompt = json.dumps(prompt_text)[1:-1]
-            final_workflow_str = workflow_str.replace("{{ POSITIVE_PROMPT }}", escaped_prompt)
+            if not self.comfy_org_api_key:
+                logger.warning("[comfyui] COMFY_ORG_API_KEY is not configured; RunPod may reject the request")
 
-            final_workflow_str = final_workflow_str.replace("{{ IMAGE_WIDTH }}", str(width))
-            final_workflow_str = final_workflow_str.replace("{{ IMAGE_HEIGHT }}", str(height))
-            
-            # Parse JSON - for RunPod, check if it's already wrapped or needs wrapping
-            try:
-                workflow_data = json.loads(final_workflow_str)
-
-                self._coerce_width_height_to_int(workflow_data)
-                
-                # Check if the workflow is already wrapped in input.workflow
-                if "input" in workflow_data and "workflow" in workflow_data["input"]:
-                    # Already wrapped (like runpod-t2i-fluxdev.json)
-                    payload = workflow_data
-                    logger.debug("[comfyui] Using pre-wrapped workflow structure")
-                else:
-                    # Needs wrapping (like qwen-image-fast-runpod.json)
-                    payload = {
-                        "input": {
-                            "workflow": workflow_data
-                        }
+            if comfyui_workflow_name:
+                payload = {
+                    "input": {
+                        "prompt": prompt_text,
+                        "width": width,
+                        "height": height,
+                        "comfyui_workflow_name": comfyui_workflow_name,
+                        "comfy_org_api_key": self.comfy_org_api_key,
                     }
-                    logger.debug("[comfyui] Wrapped workflow in input.workflow structure")
-                    
-            except json.JSONDecodeError as e:
-                logger.error("[comfyui] Failed to parse RunPod workflow JSON after prompt injection: %s", e)
-                raise ValueError(f"Failed to parse RunPod workflow JSON: {e}")
+                }
+                logger.debug("[comfyui] Using comfyui_workflow_name invocation for RunPod text->image")
+            else:
+                if template_path is None:
+                    raise ValueError("template_path is required when comfyui_workflow_name is not provided")
+
+                # Load and validate template
+                workflow_str = self._load_workflow_template(template_path)
+                if "{{ POSITIVE_PROMPT }}" not in workflow_str:
+                    raise ValueError(
+                        f"Workflow template '{template_path.name}' is missing the '{{ POSITIVE_PROMPT }}' placeholder."
+                    )
+
+                # Inject prompt
+                escaped_prompt = json.dumps(prompt_text)[1:-1]
+                final_workflow_str = workflow_str.replace("{{ POSITIVE_PROMPT }}", escaped_prompt)
+
+                final_workflow_str = final_workflow_str.replace("{{ IMAGE_WIDTH }}", str(width))
+                final_workflow_str = final_workflow_str.replace("{{ IMAGE_HEIGHT }}", str(height))
+
+                # Parse JSON - for RunPod, check if it's already wrapped or needs wrapping
+                try:
+                    workflow_data = json.loads(final_workflow_str)
+
+                    self._coerce_width_height_to_int(workflow_data)
+
+                    # Check if the workflow is already wrapped in input.workflow
+                    if "input" in workflow_data and "workflow" in workflow_data["input"]:
+                        # Already wrapped (like runpod-t2i-fluxdev.json)
+                        payload = workflow_data
+                        if isinstance(payload.get("input"), dict) and "comfy_org_api_key" not in payload["input"]:
+                            payload["input"]["comfy_org_api_key"] = self.comfy_org_api_key
+                        logger.debug("[comfyui] Using pre-wrapped workflow structure")
+                    else:
+                        # Needs wrapping (like qwen-image-fast-runpod.json)
+                        payload = {
+                            "input": {
+                                "workflow": workflow_data,
+                                "comfy_org_api_key": self.comfy_org_api_key,
+                            }
+                        }
+                        logger.debug("[comfyui] Wrapped workflow in input.workflow structure")
+
+                except json.JSONDecodeError as e:
+                    logger.error(
+                        "[comfyui] Failed to parse RunPod workflow JSON after prompt injection: %s", e
+                    )
+                    raise ValueError(f"Failed to parse RunPod workflow JSON: {e}")
 
             # Submit to RunPod using the exact structure from the file
             url = f"{self.base_url}/v2/{self.instance_id}/run"

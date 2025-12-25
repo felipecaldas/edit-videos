@@ -2,6 +2,7 @@
 
 import json
 import pytest
+import os
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 from typing import Dict, Any
@@ -27,7 +28,12 @@ class TestComfyUIClientFactory:
 
     def test_create_runpod_client(self):
         """Test creating a RunPod ComfyUI client."""
-        client = ComfyUIClientFactory.create_client("https://api.runpod.ai", "runpod")
+        with patch('videomerge.services.comfyui_client.RUNPOD_API_KEY', 'test-key'):
+            client = ComfyUIClientFactory.create_client(
+                "https://api.runpod.ai",
+                "runpod",
+                instance_id="test-instance",
+            )
         assert isinstance(client, RunPodComfyUIClient)
         assert client.base_url == "https://api.runpod.ai"
 
@@ -177,8 +183,16 @@ class TestRunPodComfyUIClient:
 
     def setup_method(self):
         """Set up test fixtures."""
-        self.client = RunPodComfyUIClient("https://api.runpod.ai")
+        self._runpod_key_patcher = patch('videomerge.services.comfyui_client.RUNPOD_API_KEY', 'test-key')
+        self._runpod_key_patcher.start()
+        self._comfy_org_key_patcher = patch('videomerge.services.comfyui_client.COMFY_ORG_API_KEY', 'test-comfy-org-key')
+        self._comfy_org_key_patcher.start()
+        self.client = RunPodComfyUIClient("https://api.runpod.ai", "test-instance")
         self.template_path = Path("test_workflow.json")
+
+    def teardown_method(self):
+        self._runpod_key_patcher.stop()
+        self._comfy_org_key_patcher.stop()
 
     @patch('videomerge.services.comfyui_client.Path.open')
     @patch('videomerge.services.comfyui_client.requests.request')
@@ -199,6 +213,35 @@ class TestRunPodComfyUIClient:
 
         assert result == "runpod-job-id"
         mock_request.assert_called_once()
+
+    @patch('videomerge.services.comfyui_client.requests.request')
+    def test_submit_text_to_image_with_comfyui_workflow_name(self, mock_request):
+        """Test RunPod comfyui_workflow_name invocation payload."""
+        mock_response = Mock()
+        mock_response.ok = True
+        mock_response.json.return_value = {"id": "runpod-job-id"}
+        mock_request.return_value = mock_response
+
+        result = self.client.submit_text_to_image(
+            "test prompt",
+            comfyui_workflow_name="image_qwen_t2i",
+            image_width=720,
+            image_height=1280,
+        )
+
+        assert result == "runpod-job-id"
+        _method, url = mock_request.call_args.args[:2]
+        assert url.endswith("/v2/test-instance/run")
+        payload = mock_request.call_args.kwargs.get("json")
+        assert payload == {
+            "input": {
+                "prompt": "test prompt",
+                "width": 720,
+                "height": 1280,
+                "comfyui_workflow_name": "image_qwen_t2i",
+                "comfy_org_api_key": "test-comfy-org-key",
+            }
+        }
 
     @patch('videomerge.services.comfyui_client.requests.request')
     def test_poll_until_complete_success(self, mock_request):

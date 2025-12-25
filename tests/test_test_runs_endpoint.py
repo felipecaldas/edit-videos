@@ -18,7 +18,8 @@ class DummyComfyClient:
         self,
         prompt_text: str,
         *,
-        template_path: Path,
+        template_path: Path | None = None,
+        comfyui_workflow_name: str | None = None,
         client_id: str | None = None,
         image_width: int | None = None,
         image_height: int | None = None,
@@ -27,7 +28,8 @@ class DummyComfyClient:
             {
                 "kind": "t2i",
                 "prompt": prompt_text,
-                "template": str(template_path),
+                "template": str(template_path) if template_path is not None else None,
+                "comfyui_workflow_name": comfyui_workflow_name,
                 "image_width": image_width,
                 "image_height": image_height,
             }
@@ -133,3 +135,41 @@ async def test_tests_run_endpoint_creates_outputs(monkeypatch, tmp_path: Path) -
     assert len({p.name for p in image_files + video_files}) == 4
 
     assert recorded["image_style"] == "cinematic"
+
+
+@pytest.mark.asyncio
+async def test_tests_run_endpoint_uses_disney_workflow_name(monkeypatch, tmp_path: Path) -> None:
+    app = create_app()
+
+    import videomerge.routers.test_runs as test_runs_router
+
+    test_runs_router.DATA_SHARED_BASE = tmp_path
+
+    recorded: Dict[str, Any] = {}
+
+    async def fake_generate_scene_prompts(run_id: str, script: str, image_style: str | None = None):
+        recorded["image_style"] = image_style
+        return [{"image_prompt": "img prompt 1", "video_prompt": "vid prompt 1"}]
+
+    monkeypatch.setattr(test_runs_router, "generate_scene_prompts", fake_generate_scene_prompts)
+
+    img_client = DummyComfyClient(kind="image", tmp_dir=tmp_path)
+    vid_client = DummyComfyClient(kind="video", tmp_dir=tmp_path)
+
+    def fake_get_client(client_type, force_refresh: bool = False):
+        value = getattr(client_type, "value", str(client_type))
+        return img_client if value == "image" else vid_client
+
+    monkeypatch.setattr(test_runs_router, "get_comfyui_client", fake_get_client)
+
+    client = TestClient(app)
+    resp = client.post(
+        "/tests/run",
+        json={"script": "Hello world", "language": "en", "image_style": "disney"},
+    )
+    assert resp.status_code == 200
+
+    assert recorded["image_style"] == "disney"
+    assert img_client.submitted
+    assert img_client.submitted[0]["comfyui_workflow_name"] == "image_disneyizt_t2i"
+    assert img_client.submitted[0]["template"] is None

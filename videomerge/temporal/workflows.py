@@ -34,6 +34,7 @@ class ProcessSceneWorkflow:
         index: int,
         image_width: int,
         image_height: int,
+        comfyui_workflow_name: str | None = None,
     ) -> List[str]:
         """Workflow to process a single scene (image -> video)."""
         # Log parent workflow info for correlation
@@ -56,7 +57,15 @@ class ProcessSceneWorkflow:
                 try:
                     image_hint = await workflow.execute_activity(
                         generate_image,
-                        args=[run_id, prompt.image_prompt, workflow_path, index, image_width, image_height],
+                        args=[
+                            run_id,
+                            prompt.image_prompt,
+                            workflow_path,
+                            index,
+                            image_width,
+                            image_height,
+                            comfyui_workflow_name,
+                        ],
                         **activity_defaults,
                     )
                 except Exception as e:
@@ -158,6 +167,12 @@ class VideoGenerationWorkflow:
             workflow_filename = IMAGE_WORKFLOWS.get(image_style, IMAGE_WORKFLOWS["default"])
             workflow_path = f"{WORKFLOWS_BASE_PATH}/{workflow_filename}"
 
+            comfyui_workflow_name: str | None = None
+            if image_style == "cinematic":
+                comfyui_workflow_name = "image_qwen_t2i"
+            elif image_style == "disney":
+                comfyui_workflow_name = "image_disneyizt_t2i"
+
             # Get parent workflow info for child correlation
             parent_workflow_id = workflow.info().workflow_id
             parent_run_id = workflow.info().run_id
@@ -177,7 +192,15 @@ class VideoGenerationWorkflow:
                 # Note: Parent workflow also has TabarioRunId set (in orchestrate.py)
                 task = workflow.execute_child_workflow(
                     ProcessSceneWorkflow.run,
-                    args=[req.run_id, prompt, workflow_path, i, image_width, image_height],
+                    args=[
+                        req.run_id,
+                        prompt,
+                        workflow_path,
+                        i,
+                        image_width,
+                        image_height,
+                        comfyui_workflow_name,
+                    ],
                     id=child_id,
                     memo={
                         "parent_workflow_id": parent_workflow_id,

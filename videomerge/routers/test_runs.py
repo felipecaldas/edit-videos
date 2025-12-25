@@ -123,6 +123,12 @@ async def run_test(req: TestRunRequest) -> TestRunResponse:
         workflow_filename = IMAGE_WORKFLOWS.get(image_style, IMAGE_WORKFLOWS["default"])
         workflow_path = f"{WORKFLOWS_BASE_PATH}/{workflow_filename}"
 
+        comfyui_workflow_name: Optional[str] = None
+        if image_style == "cinematic":
+            comfyui_workflow_name = "image_qwen_t2i"
+        elif image_style == "disney":
+            comfyui_workflow_name = "image_disneyizt_t2i"
+
         image_files: List[str] = []
         video_files: List[str] = []
 
@@ -138,7 +144,8 @@ async def run_test(req: TestRunRequest) -> TestRunResponse:
 
             prompt_id = image_client.submit_text_to_image(
                 image_prompt,
-                template_path=Path(workflow_path),
+                template_path=None if comfyui_workflow_name else Path(workflow_path),
+                comfyui_workflow_name=comfyui_workflow_name,
                 image_width=req.image_width,
                 image_height=req.image_height,
             )

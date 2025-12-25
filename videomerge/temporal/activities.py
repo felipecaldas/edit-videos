@@ -204,6 +204,7 @@ async def generate_image(
     index: int,
     image_width: int | None = None,
     image_height: int | None = None,
+    comfyui_workflow_name: str | None = None,
 ) -> str:
     """Generates a single image from a text prompt."""
     activity.heartbeat()
@@ -225,6 +226,7 @@ async def generate_image(
         client.submit_text_to_image,
         prompt_text,
         template_path=workflow_path,
+        comfyui_workflow_name=comfyui_workflow_name,
         image_width=width,
         image_height=height,
     )
