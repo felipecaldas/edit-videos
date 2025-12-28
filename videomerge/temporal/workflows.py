@@ -5,7 +5,7 @@ from typing import List
 from temporalio import workflow
 from temporalio.common import RetryPolicy
 
-from videomerge.config import IMAGE_WORKFLOWS, WORKFLOWS_BASE_PATH, ENABLE_VOICEOVER_GEN, IMAGE_WIDTH, IMAGE_HEIGHT
+from videomerge.config import IMAGE_WORKFLOWS, WORKFLOWS_BASE_PATH, ENABLE_VOICEOVER_GEN, IMAGE_WIDTH, IMAGE_HEIGHT, IMAGE_STYLE_TO_WORKFLOW_MAPPING
 from videomerge.models import OrchestrateStartRequest, PromptItem
 
 # Import all activities from the activities module
@@ -167,11 +167,8 @@ class VideoGenerationWorkflow:
             workflow_filename = IMAGE_WORKFLOWS.get(image_style, IMAGE_WORKFLOWS["default"])
             workflow_path = f"{WORKFLOWS_BASE_PATH}/{workflow_filename}"
 
-            comfyui_workflow_name: str | None = None
-            if image_style == "cinematic":
-                comfyui_workflow_name = "image_qwen_t2i"
-            elif image_style == "disney":
-                comfyui_workflow_name = "image_disneyizt_t2i"
+            # Map image_style to comfyui_workflow_name using the YAML config
+            comfyui_workflow_name: str | None = IMAGE_STYLE_TO_WORKFLOW_MAPPING.get(image_style)
 
             # Get parent workflow info for child correlation
             parent_workflow_id = workflow.info().workflow_id

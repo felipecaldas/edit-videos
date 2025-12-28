@@ -194,29 +194,28 @@ class TestRunPodComfyUIClient:
         self._runpod_key_patcher.stop()
         self._comfy_org_key_patcher.stop()
 
-    @patch('videomerge.services.comfyui_client.Path.open')
     @patch('videomerge.services.comfyui_client.requests.request')
-    def test_submit_text_to_image_success(self, mock_request, mock_open):
+    def test_submit_text_to_image_success(self, mock_request):
         """Test successful text-to-image submission to RunPod."""
-        # Mock template file
-        mock_file = MagicMock()
-        mock_file.read.return_value = '{"prompt": {"text": "{{ POSITIVE_PROMPT }}"}}'
-        mock_open.return_value.__enter__.return_value = mock_file
-
         # Mock HTTP response
         mock_response = Mock()
         mock_response.ok = True
         mock_response.json.return_value = {"id": "runpod-job-id"}
         mock_request.return_value = mock_response
 
-        result = self.client.submit_text_to_image("test prompt", template_path=self.template_path)
+        result = self.client.submit_text_to_image(
+            "test prompt",
+            comfyui_workflow_name="image_qwen_t2i",
+            image_width=720,
+            image_height=1024,
+        )
 
         assert result == "runpod-job-id"
         mock_request.assert_called_once()
 
     @patch('videomerge.services.comfyui_client.requests.request')
-    def test_submit_text_to_image_with_comfyui_workflow_name(self, mock_request):
-        """Test RunPod comfyui_workflow_name invocation payload."""
+    def test_submit_text_to_image_validates_payload(self, mock_request):
+        """Test RunPod T2I payload structure matches OpenAPI spec."""
         mock_response = Mock()
         mock_response.ok = True
         mock_response.json.return_value = {"id": "runpod-job-id"}
@@ -242,6 +241,11 @@ class TestRunPodComfyUIClient:
                 "comfy_org_api_key": "test-comfy-org-key",
             }
         }
+
+    def test_submit_text_to_image_requires_workflow_name(self):
+        """Test that comfyui_workflow_name is required for RunPod T2I."""
+        with pytest.raises(ValueError, match="comfyui_workflow_name is required"):
+            self.client.submit_text_to_image("test prompt", image_width=720, image_height=1024)
 
     @patch('videomerge.services.comfyui_client.requests.request')
     def test_poll_until_complete_success(self, mock_request):
@@ -275,6 +279,34 @@ class TestRunPodComfyUIClient:
 
         with pytest.raises(RuntimeError, match="RunPod job failed: Processing failed"):
             self.client.poll_until_complete("runpod-job-id", timeout_s=60, poll_interval_s=1)
+
+    @patch('videomerge.services.comfyui_client.DEFAULT_I2V_WORKFLOW_NAME', 'video_wan2_2_14B_i2v')
+    @patch('videomerge.services.comfyui_client.requests.request')
+    def test_submit_image_to_video_validates_payload(self, mock_request):
+        """Test RunPod I2V payload structure matches OpenAPI spec."""
+        mock_response = Mock()
+        mock_response.ok = True
+        mock_response.json.return_value = {"id": "runpod-video-job-id"}
+        mock_request.return_value = mock_response
+
+        base64_image = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+        result = self.client.submit_image_to_video(
+            "video prompt",
+            base64_image,
+            template_path=self.template_path,
+        )
+
+        assert result == "runpod-video-job-id"
+        _method, url = mock_request.call_args.args[:2]
+        assert url.endswith("/v2/test-instance/run")
+        payload = mock_request.call_args.kwargs.get("json")
+        assert payload["input"]["prompt"] == "video prompt"
+        assert payload["input"]["image"] == base64_image
+        assert payload["input"]["width"] == 480
+        assert payload["input"]["height"] == 640
+        assert payload["input"]["length"] == 81
+        assert payload["input"]["comfyui_workflow_name"] == "video_wan2_2_14B_i2v"
+        assert payload["input"]["comfy_org_api_key"] == "test-comfy-org-key"
 
 
 class TestRunPodOutputFilenames:

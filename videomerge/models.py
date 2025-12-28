@@ -41,8 +41,8 @@ class OrchestrateStartRequest(BaseModel):
     script: str
     caption: str
     prompts: Optional[List[PromptItem]] = None
-    language: str = "pt"
-    image_style: Optional[str] = None
+    language: str = "en"
+    image_style: str
     image_width: Optional[int] = None
     image_height: Optional[int] = None
     run_id: str

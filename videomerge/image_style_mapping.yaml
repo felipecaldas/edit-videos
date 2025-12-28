@@ -1,0 +1,9 @@
+# Image Style to ComfyUI Workflow Mapping
+# This file maps user-facing image styles to their corresponding ComfyUI workflow names
+# Used by the /orchestrate/start endpoint to validate and transform image_style values
+
+# Supported image styles and their ComfyUI workflow mappings
+cinematic: "image_qwen_t2i"
+disney: "image_disneyizt_t2i"
+crayon-drawing: "crayon-drawing"
+anime: "T2I_ChromaAnimaAIO"

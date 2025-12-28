@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from videomerge.config import DATA_SHARED_BASE, IMAGE_WORKFLOWS, WORKFLOWS_BASE_PATH, WORKFLOW_I2V_PATH
+from videomerge.config import DATA_SHARED_BASE, IMAGE_WORKFLOWS, WORKFLOWS_BASE_PATH, WORKFLOW_I2V_PATH, IMAGE_STYLE_TO_WORKFLOW_MAPPING
 from videomerge.services.comfyui_client import ClientType, get_comfyui_client
 from videomerge.temporal.activities import generate_scene_prompts
 from videomerge.utils.logging import get_logger
@@ -123,11 +123,8 @@ async def run_test(req: TestRunRequest) -> TestRunResponse:
         workflow_filename = IMAGE_WORKFLOWS.get(image_style, IMAGE_WORKFLOWS["default"])
         workflow_path = f"{WORKFLOWS_BASE_PATH}/{workflow_filename}"
 
-        comfyui_workflow_name: Optional[str] = None
-        if image_style == "cinematic":
-            comfyui_workflow_name = "image_qwen_t2i"
-        elif image_style == "disney":
-            comfyui_workflow_name = "image_disneyizt_t2i"
+        # Map image_style to comfyui_workflow_name using the YAML config
+        comfyui_workflow_name: Optional[str] = IMAGE_STYLE_TO_WORKFLOW_MAPPING.get(image_style)
 
         image_files: List[str] = []
         video_files: List[str] = []
