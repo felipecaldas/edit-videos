@@ -720,83 +720,58 @@ class RunPodComfyUIClient(ComfyUIClient):
         image_width: Optional[int] = None,
         image_height: Optional[int] = None,
     ) -> str:
-        """Submit a text-to-image workflow to RunPod serverless ComfyUI."""
-        workflow_name = comfyui_workflow_name or (template_path.stem if template_path is not None else "unknown")
+        """Submit a text-to-image workflow to RunPod serverless ComfyUI.
+        
+        Args:
+            prompt_text: The text prompt for image generation
+            template_path: Deprecated for RunPod, kept for backward compatibility
+            comfyui_workflow_name: The workflow name to use (required for RunPod)
+            client_id: Optional client ID
+            image_width: Image width in pixels
+            image_height: Image height in pixels
+            
+        Returns:
+            Job ID from RunPod
+        """
+        if not comfyui_workflow_name:
+            raise ValueError(
+                "comfyui_workflow_name is required for RunPod text-to-image generation. "
+                "Use IMAGE_STYLE_TO_WORKFLOW_MAPPING to map image_style to comfyui_workflow_name."
+            )
+        
+        workflow_name = comfyui_workflow_name
         start_time = time.time()
         
         try:
             client_id = client_id or str(uuid.uuid4())
 
-            width = int(image_width) if image_width is not None else 480
-            height = int(image_height) if image_height is not None else 480
+            width = int(image_width) if image_width is not None else 720
+            height = int(image_height) if image_height is not None else 1024
 
             if not self.comfy_org_api_key:
                 logger.warning("[comfyui] COMFY_ORG_API_KEY is not configured; RunPod may reject the request")
 
-            if comfyui_workflow_name:
-                payload = {
-                    "input": {
-                        "prompt": prompt_text,
-                        "width": width,
-                        "height": height,
-                        "comfyui_workflow_name": comfyui_workflow_name,
-                        "comfy_org_api_key": self.comfy_org_api_key,
-                    }
+            # Build payload according to new RunPod API structure
+            payload = {
+                "input": {
+                    "prompt": prompt_text,
+                    "width": width,
+                    "height": height,
+                    "comfyui_workflow_name": comfyui_workflow_name,
+                    "comfy_org_api_key": self.comfy_org_api_key,
                 }
-                logger.debug("[comfyui] Using comfyui_workflow_name invocation for RunPod text->image")
-            else:
-                if template_path is None:
-                    raise ValueError("template_path is required when comfyui_workflow_name is not provided")
+            }
+            
+            logger.info(
+                "[comfyui] Submitting text->image to RunPod: workflow=%s, size=%dx%d",
+                comfyui_workflow_name, width, height
+            )
 
-                # Load and validate template
-                workflow_str = self._load_workflow_template(template_path)
-                if "{{ POSITIVE_PROMPT }}" not in workflow_str:
-                    raise ValueError(
-                        f"Workflow template '{template_path.name}' is missing the '{{ POSITIVE_PROMPT }}' placeholder."
-                    )
-
-                # Inject prompt
-                escaped_prompt = json.dumps(prompt_text)[1:-1]
-                final_workflow_str = workflow_str.replace("{{ POSITIVE_PROMPT }}", escaped_prompt)
-
-                final_workflow_str = final_workflow_str.replace("{{ IMAGE_WIDTH }}", str(width))
-                final_workflow_str = final_workflow_str.replace("{{ IMAGE_HEIGHT }}", str(height))
-
-                # Parse JSON - for RunPod, check if it's already wrapped or needs wrapping
-                try:
-                    workflow_data = json.loads(final_workflow_str)
-
-                    self._coerce_width_height_to_int(workflow_data)
-
-                    # Check if the workflow is already wrapped in input.workflow
-                    if "input" in workflow_data and "workflow" in workflow_data["input"]:
-                        # Already wrapped (like runpod-t2i-fluxdev.json)
-                        payload = workflow_data
-                        if isinstance(payload.get("input"), dict) and "comfy_org_api_key" not in payload["input"]:
-                            payload["input"]["comfy_org_api_key"] = self.comfy_org_api_key
-                        logger.debug("[comfyui] Using pre-wrapped workflow structure")
-                    else:
-                        # Needs wrapping (like qwen-image-fast-runpod.json)
-                        payload = {
-                            "input": {
-                                "workflow": workflow_data,
-                                "comfy_org_api_key": self.comfy_org_api_key,
-                            }
-                        }
-                        logger.debug("[comfyui] Wrapped workflow in input.workflow structure")
-
-                except json.JSONDecodeError as e:
-                    logger.error(
-                        "[comfyui] Failed to parse RunPod workflow JSON after prompt injection: %s", e
-                    )
-                    raise ValueError(f"Failed to parse RunPod workflow JSON: {e}")
-
-            # Submit to RunPod using the exact structure from the file
+            # Submit to RunPod
             url = f"{self.base_url}/v2/{self.instance_id}/run"
             headers = self._default_headers()
-            logger.info("[comfyui] Submitting text->image prompt to RunPod at %s", url)
-            logger.debug("[comfyui] RunPod request headers: %s", json.dumps(headers, indent=2))
-            logger.debug("[comfyui] RunPod request payload: %s", json.dumps(payload, indent=2))
+            logger.debug("[comfyui] RunPod T2I payload: %s", json.dumps(payload, indent=2))
+            
             resp = self._make_request("POST", url, json=payload, timeout=30, headers=headers)
             if not resp.ok:
                 try:
@@ -806,13 +781,13 @@ class RunPodComfyUIClient(ComfyUIClient):
                 resp.raise_for_status()
             
             data = resp.json()
-            # RunPod returns job ID and status
             job_id = data.get("id")
             if not job_id:
                 raise ValueError(f"Unexpected response from RunPod: {data}")
             
             # Record successful image generation submission
             images_generated_total.labels(workflow=workflow_name).inc()
+            logger.info("[comfyui] RunPod T2I job submitted: job_id=%s", job_id)
             return job_id
             
         except Exception as e:
@@ -832,41 +807,49 @@ class RunPodComfyUIClient(ComfyUIClient):
         template_path: Path,
         client_id: Optional[str] = None,
         run_id: Optional[str] = None,
+        comfyui_workflow_name: Optional[str] = None,
     ) -> str:
         """Submit an image-to-video workflow to RunPod serverless ComfyUI.
         
         Args:
             prompt_text: The video generation prompt
             image_data: Base64 image data URL (e.g., "data:image/png;base64,iVBORw0KGgo...")
-            template_path: Path to the workflow template
+            template_path: Deprecated for RunPod, kept for backward compatibility
             client_id: Optional client ID
             run_id: Optional run ID for debugging purposes
+            comfyui_workflow_name: The workflow name to use (defaults to video_wan2_2_14B_i2v)
+            
+        Returns:
+            Job ID from RunPod
         """
-        workflow_name = template_path.stem
+        # Import default I2V workflow name from config
+        from videomerge.config import DEFAULT_I2V_WORKFLOW_NAME
+        
+        # Use provided workflow name or default
+        workflow_name = comfyui_workflow_name or DEFAULT_I2V_WORKFLOW_NAME
         start_time = time.time()
         
         try:
             client_id = client_id or str(uuid.uuid4())
             
             # For RunPod, image_data should be base64 data URL from image generation
-            # If it's a filename (from local deployment), that indicates an error
             if not image_data.startswith("data:image/"):
                 logger.error("[comfyui] Received filename instead of base64 image data - this indicates a workflow error for RunPod")
                 raise ValueError("Expected base64 image data URL, but received filename")
             
             logger.info("[comfyui] Using base64 image data for video generation: %s...", image_data[:50])
             
-            # Extract filename from base64 data URL if available, but RunPod payload only needs the data URL
+            # Extract filename from base64 data URL if available
             if "#filename=" in image_data:
                 clean_image_data = image_data.split("#filename=")[0]
-                logger.info("[comfyui] Stripped filename metadata from data URL for RunPod payload")
+                logger.debug("[comfyui] Stripped filename metadata from data URL for RunPod payload")
             else:
                 clean_image_data = image_data
-                logger.debug("[comfyui] Base64 image data has no filename metadata")
 
             if not self.comfy_org_api_key:
                 logger.warning("[comfyui] COMFY_ORG_API_KEY is not configured; RunPod may reject the request")
 
+            # Build payload according to new RunPod API structure
             payload = {
                 "input": {
                     "prompt": prompt_text,
@@ -874,36 +857,20 @@ class RunPodComfyUIClient(ComfyUIClient):
                     "width": 480,
                     "height": 640,
                     "length": 81,
+                    "comfyui_workflow_name": workflow_name,
                     "comfy_org_api_key": self.comfy_org_api_key,
                 }
             }
-            logger.debug("[comfyui] Constructed RunPod I2V payload with hardcoded dimensions")
+            
+            logger.info(
+                "[comfyui] Submitting image->video to RunPod: workflow=%s, size=%dx%d, length=%d",
+                workflow_name, 480, 640, 81
+            )
 
-            # Submit to RunPod using the exact structure from the file
+            # Submit to RunPod
             url = f"{self.base_url}/v2/{self.instance_id}/run"
             headers = self._default_headers()
-            logger.info("[comfyui] Submitting image->video prompt to RunPod at %s", url)
-            logger.debug("[comfyui] RunPod video request headers: %s", json.dumps(headers, indent=2))
-            
-            # Write payload to file for debugging
-            try:
-                import datetime
-                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                
-                if run_id:
-                    debug_dir = Path(f"/data/shared/{run_id}")
-                    payload_file = debug_dir / f"runpod_payload_{timestamp}.json"
-                else:
-                    debug_dir = Path("/data/shared")
-                    payload_file = debug_dir / f"runpod_payload_{timestamp}.json"
-                
-                debug_dir.mkdir(parents=True, exist_ok=True)
-                
-                with open(payload_file, 'w') as f:
-                    json.dump(payload, f, indent=2)
-                logger.info(f"[comfyui] RunPod payload written to: {payload_file}")
-            except Exception as e:
-                logger.warning(f"[comfyui] Failed to write payload to file: {e}")
+            logger.debug("[comfyui] RunPod I2V payload: %s", json.dumps(payload, indent=2))
             
             resp = self._make_request("POST", url, json=payload, timeout=30, headers=headers)
             if not resp.ok:
@@ -920,10 +887,11 @@ class RunPodComfyUIClient(ComfyUIClient):
             
             # Record successful video generation submission
             videos_generated_total.labels(workflow=workflow_name).inc()
+            logger.info("[comfyui] RunPod I2V job submitted: job_id=%s", job_id)
             return job_id
             
         except Exception as e:
-            # Record failed video generation (using image failures counter as there's no specific video failure counter)
+            # Record failed video generation
             image_generation_failures_total.labels(reason=type(e).__name__, workflow=f"{workflow_name}_video").inc()
             raise
         finally:

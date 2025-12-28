@@ -1,7 +1,8 @@
 from pathlib import Path
 import os
-from typing import Optional
+from typing import Optional, Dict
 from dotenv import load_dotenv
+import yaml
 
 
 def _str_to_bool(value: str | None, default: str) -> bool:
@@ -56,7 +57,28 @@ def _load_misc_defaults() -> tuple[str, str | None, Path, str]:
     return voiceover_url, voiceover_api_key, subtitle_path, temporal_url
 
 
-def _load_workflow_config(run_env: str) -> tuple[dict[str, str], Path, str, Path]:
+def _load_image_style_mapping() -> Dict[str, str]:
+    """Load image style to ComfyUI workflow name mapping from YAML."""
+    mapping_path = Path(__file__).parent / "image_style_mapping.yaml"
+    try:
+        with mapping_path.open("r", encoding="utf-8") as f:
+            mapping = yaml.safe_load(f)
+            if not isinstance(mapping, dict):
+                raise ValueError("Image style mapping must be a dictionary")
+            return mapping
+    except FileNotFoundError:
+        # Fallback to hardcoded defaults if YAML file is missing
+        return {
+            "cinematic": "image_qwen_t2i",
+            "disney": "image_disneyizt_t2i",
+            "crayon-drawing": "crayon-drawing",
+            "anime": "T2I_ChromaAnimaAIO",
+        }
+    except Exception as e:
+        raise RuntimeError(f"Failed to load image style mapping: {e}")
+
+
+def _load_workflow_config(run_env: str) -> tuple[dict[str, str], Path, str, Path, str]:
     """Load workflow-related configuration values from the environment."""
 
     def _base_workflows() -> dict[str, str]:
@@ -81,8 +103,11 @@ def _load_workflow_config(run_env: str) -> tuple[dict[str, str], Path, str, Path
             f"videomerge/comfyui-workflows/{default_i2v_workflow}",
         )
     )
+    
+    # Default I2V workflow name for RunPod API
+    default_i2v_workflow_name = "video_wan2_2_14B_i2v"
 
-    return workflows, workflows_base_path, default_i2v_workflow, workflow_i2v_path
+    return workflows, workflows_base_path, default_i2v_workflow, workflow_i2v_path, default_i2v_workflow_name
 
 
 def _load_notifications_defaults() -> tuple[str, str | None]:
@@ -133,13 +158,17 @@ def _apply_config() -> None:
         "comfyui-67e0362fbb7d9989c297e9d6d0b7e3ea0a08214897b4a0be25146e16ec22ea4f",
     )
 
-    global IMAGE_WORKFLOWS, WORKFLOWS_BASE_PATH, DEFAULT_I2V_WORKFLOW, WORKFLOW_I2V_PATH
+    global IMAGE_WORKFLOWS, WORKFLOWS_BASE_PATH, DEFAULT_I2V_WORKFLOW, WORKFLOW_I2V_PATH, DEFAULT_I2V_WORKFLOW_NAME
     (
         IMAGE_WORKFLOWS,
         WORKFLOWS_BASE_PATH,
         DEFAULT_I2V_WORKFLOW,
         WORKFLOW_I2V_PATH,
+        DEFAULT_I2V_WORKFLOW_NAME,
     ) = _load_workflow_config(RUN_ENV)
+
+    global IMAGE_STYLE_TO_WORKFLOW_MAPPING
+    IMAGE_STYLE_TO_WORKFLOW_MAPPING = _load_image_style_mapping()
 
     global VIDEO_COMPLETED_N8N_WEBHOOK_URL, WEBHOOK_SECRET
     (
