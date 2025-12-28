@@ -206,8 +206,11 @@ def concat_videos_with_voiceover(video_paths: Iterable[Path], voiceover_path: Pa
             use_apad = True  # fallback to previous behavior
 
     # Build concat list based on possibly adjusted selection
-    concat_list = output_path.parent / "inputs.txt"
-    with open(concat_list, "w", encoding="utf-8") as f:
+    # Write to local temp directory to avoid network filesystem issues
+    import tempfile
+    temp_dir = Path(tempfile.gettempdir())
+    concat_list = temp_dir / f"inputs_{output_path.stem}.txt"
+    with open(str(concat_list), "w", encoding="utf-8") as f:
         for p in selected_paths:
             f.write(f"file '{Path(p).resolve().as_posix()}'\n")
 
