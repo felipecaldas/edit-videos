@@ -1,37 +1,46 @@
-"""ComfyUI client abstraction for local and RunPod serverless environments."""
+"""ComfyUI client abstraction for local and RunPod serverless environments.
 
-import base64
-import json
-import os
-import re
-import time
-import uuid
-from abc import ABC, abstractmethod
-from enum import Enum
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import urlparse
+DEPRECATED: This module has been refactored into a package structure.
+All imports are re-exported from videomerge.services.comfyui for backward compatibility.
 
-import requests
+New code should import from videomerge.services.comfyui directly:
+    from videomerge.services.comfyui import (
+        ClientType,
+        ComfyUIClient,
+        LocalComfyUIClient,
+        RunPodComfyUIClient,
+        get_comfyui_client,
+        get_image_client,
+        get_video_client,
+    )
+"""
 
-from videomerge.config import (
-    COMFYUI_TIMEOUT_SECONDS,
-    COMFYUI_POLL_INTERVAL_SECONDS,
-    RUNPOD_API_KEY,
+# Re-export everything from the new package structure for backward compatibility
+from videomerge.services.comfyui import (
+    ClientType,
+    ComfyUIClient,
+    ComfyUIClientFactory,
+    LocalComfyUIClient,
+    RunPodComfyUIClient,
+    get_comfyui_client,
+    get_image_client,
+    get_video_client,
+    refresh_comfyui_client,
+    reset_comfyui_client,
 )
-from videomerge.services.metrics import (
-    comfyui_request_seconds,
-    comfyui_requests_total,
-    worker_active,
-    image_generation_seconds,
-    image_generation_failures_total,
-    images_generated_total,
-    video_generation_seconds,
-    videos_generated_total,
-)
-from videomerge.utils.logging import get_logger
 
-logger = get_logger(__name__)
+__all__ = [
+    "ClientType",
+    "ComfyUIClient",
+    "ComfyUIClientFactory",
+    "LocalComfyUIClient",
+    "RunPodComfyUIClient",
+    "get_comfyui_client",
+    "get_image_client",
+    "get_video_client",
+    "refresh_comfyui_client",
+    "reset_comfyui_client",
+]
 
 
 class ClientType(Enum):
@@ -970,8 +979,37 @@ class RunPodComfyUIClient(ComfyUIClient):
                 
         raise TimeoutError(f"Timed out waiting for RunPod results for {prompt_id}. Last error: {last_error}")
 
+    def _extract_video_frames_if_needed(self, video_path: Path, media_type: str, dest_dir: Path) -> None:
+        """Extract first and last frames from video files if applicable.
+        
+        Args:
+            video_path: Path to the saved video file
+            media_type: MIME type of the file (e.g., "video/mp4")
+            dest_dir: Base directory where video was saved (e.g., /data/shared/{run_id})
+        """
+        media_type_lower = media_type.lower()
+        is_video = media_type_lower.startswith("video/") or video_path.suffix.lower() == ".mp4"
+        
+        if not is_video:
+            return
+        
+        try:
+            # Create first_last subdirectory in the run directory
+            frames_dir = dest_dir / "first_last"
+            frames_dir.mkdir(parents=True, exist_ok=True)
+            
+            logger.info(f"[comfyui] Extracting first and last frames from {video_path.name}")
+            first_frame, last_frame = extract_first_and_last_frames(video_path, frames_dir)
+            logger.info(f"[comfyui] Extracted frames: {first_frame.name}, {last_frame.name}")
+        except Exception as e:
+            logger.warning(f"[comfyui] Failed to extract frames from {video_path.name}: {e}")
+
     def download_outputs(self, file_hints: List[str], dest_dir: Path) -> List[Path]:
-        """Download output files from RunPod by fetching the final status and decoding base64 data."""
+        """Download output files from RunPod by fetching the final status and decoding base64 data.
+        
+        For video files, also extracts the first and last frames as PNG files to
+        /data/shared/{run_id}/first_last/ directory.
+        """
         saved: List[Path] = []
         
         # For RunPod, we need to get the job status to access the base64 data
@@ -1009,6 +1047,9 @@ class RunPodComfyUIClient(ComfyUIClient):
                 out_path = dest_dir / filename
                 out_path.write_bytes(decoded)
                 saved.append(out_path)
+                
+                # Extract first and last frames for video files
+                self._extract_video_frames_if_needed(out_path, media_type, dest_dir)
                 continue
 
             # Fallback to remote download when we only have a filename/url
@@ -1031,6 +1072,9 @@ class RunPodComfyUIClient(ComfyUIClient):
                         if chunk:
                             f.write(chunk)
                 saved.append(out_path)
+                
+                # Extract first and last frames for video files
+                self._extract_video_frames_if_needed(out_path, content_type, dest_dir)
             except Exception as e:
                 logger.warning("[comfyui] Failed to download %s from generic endpoint: %s", hint, e)
                 continue
