@@ -24,7 +24,7 @@ from videomerge.services.metrics import (
     worker_active,
 )
 from videomerge.services.comfyui_client import get_image_client, get_video_client, refresh_comfyui_client, ClientType, get_comfyui_client
-from videomerge.services.comfyui import (
+from videomerge.services.comfyui_wrapper import (
     submit_text_to_image,
     poll_until_complete,
     download_outputs,
