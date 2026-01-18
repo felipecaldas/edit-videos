@@ -151,8 +151,9 @@ def _apply_config() -> None:
         IMAGE_HEIGHT,
     ) = _load_comfyui_defaults()
 
-    global RUNPOD_API_KEY, COMFY_ORG_API_KEY
+    global RUNPOD_API_KEY, COMFY_ORG_API_KEY, RUNPOD_BASE_URL
     RUNPOD_API_KEY = os.getenv("RUNPOD_API_KEY")
+    RUNPOD_BASE_URL = os.getenv("RUNPOD_BASE_URL", "https://api.runpod.ai")
     COMFY_ORG_API_KEY = os.getenv(
         "COMFY_ORG_API_KEY",
         "comfyui-67e0362fbb7d9989c297e9d6d0b7e3ea0a08214897b4a0be25146e16ec22ea4f",

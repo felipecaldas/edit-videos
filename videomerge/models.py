@@ -30,22 +30,12 @@ class FolderStitchWithSubsRequest(FolderStitchRequest):
     subtitle_position: Optional[str] = "bottom"
 
 
-# ---- Orchestration payloads ----
-class PromptItem(BaseModel):
-    image_prompt: Optional[str] = None
-    video_prompt: Optional[str] = None
-
-
-class OrchestrateStartRequest(BaseModel):
+class UpscaleStartRequest(BaseModel):
+    video_url: str
+    video_id: str
+    original_video_id: str
     user_id: str
-    script: str
-    caption: str
-    prompts: Optional[List[PromptItem]] = None
-    language: str = "en"
-    image_style: str
-    image_width: Optional[int] = None
-    image_height: Optional[int] = None
-    run_id: str
-    elevenlabs_voice_id: str
-    workflow_id: Optional[str] = None
-    enable_image_gen: Optional[bool] = None
+    original_resolution: str
+    target_resolution: str
+    workflow_id: str
+    title: str

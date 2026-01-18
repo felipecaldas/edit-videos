@@ -1,6 +1,8 @@
 import asyncio
 import json
 import time
+import base64
+import subprocess
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
@@ -423,3 +425,167 @@ async def send_completion_webhook(
 
     if not duration_observed:
         logger.debug(f"[metrics] No start timestamp recorded for run_id={run_id}; skipping job_total_seconds")
+
+
+@activity.defn
+async def download_video(video_url: str, video_id: str) -> str:
+    """Downloads a video from the given URL and saves it to the run directory."""
+    activity.heartbeat()
+    run_dir = DATA_SHARED_BASE / video_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    video_path = run_dir / "input_video.mp4"
+
+    logger.info(f"[download] Downloading video from {video_url} for video_id={video_id}")
+
+    async with httpx.AsyncClient(timeout=300.0) as client:  # 5 minute timeout
+        response = await client.get(video_url)
+        response.raise_for_status()
+        with open(video_path, "wb") as f:
+            f.write(response.content)
+
+    logger.info(f"[download] Video downloaded successfully to {video_path}")
+    return str(video_path)
+
+
+@activity.defn
+async def start_video_upscaling(video_id: str, video_path: str, target_resolution: str) -> str:
+    """Prepares video for upscaling, converts to base64, gets dimensions, and calls Runpod."""
+    activity.heartbeat()
+    
+    # Map target_resolution to output_resolution
+    if target_resolution == "720p":
+        output_resolution = 1280
+    elif target_resolution == "1080p":
+        output_resolution = 1920
+    else:
+        raise ValueError(f"Unsupported target_resolution: {target_resolution}")
+
+    # Get video dimensions using ffmpeg
+    probe_cmd = [
+        "ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", 
+        "stream=width,height", "-of", "csv=s=x:p=0", video_path
+    ]
+    try:
+        result = subprocess.run(probe_cmd, capture_output=True, text=True, check=True)
+        width, height = map(int, result.stdout.strip().split('x'))
+        logger.info(f"[upscale] Video dimensions: {width}x{height}")
+    except subprocess.CalledProcessError as e:
+        logger.error(f"[upscale] Failed to get video dimensions: {e}")
+        raise RuntimeError(f"Failed to get video dimensions: {e}")
+
+    # Convert video to base64
+    with open(video_path, "rb") as f:
+        video_data = f.read()
+    video_b64 = base64.b64encode(video_data).decode('utf-8')
+    video_data_url = f"data:video/mp4;base64,{video_b64}"
+
+    # Call Runpod API
+    from videomerge.config import RUNPOD_API_KEY, COMFY_ORG_API_KEY, RUNPOD_BASE_URL, RUNPOD_VIDEO_INSTANCE_ID
+
+    url = f"{RUNPOD_BASE_URL}/v2/{RUNPOD_VIDEO_INSTANCE_ID}/run"
+    headers = {
+        "Authorization": f"Bearer {RUNPOD_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "input": {
+            "video": video_data_url,
+            "width": width,
+            "height": height,
+            "output_resolution": output_resolution,
+            "comfyui_workflow_name": "seedvr2_video_upscale",
+            "comfy_org_api_key": COMFY_ORG_API_KEY,
+        }
+    }
+
+    logger.info(f"[upscale] Calling Runpod upscaling API for video_id={video_id}")
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(url, json=payload, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+        job_id = data.get("id")
+        if not job_id:
+            raise RuntimeError(f"Runpod API did not return job_id: {data}")
+
+    logger.info(f"[upscale] Runpod upscaling job started: job_id={job_id}")
+    return job_id
+
+
+@activity.defn
+async def poll_upscale_status(job_id: str) -> str:
+    """Polls Runpod for upscaling job completion and returns base64 video."""
+    activity.heartbeat()
+
+    from videomerge.config import RUNPOD_API_KEY, RUNPOD_BASE_URL, RUNPOD_VIDEO_INSTANCE_ID, COMFYUI_TIMEOUT_SECONDS, COMFYUI_POLL_INTERVAL_SECONDS
+
+    status_url = f"{RUNPOD_BASE_URL}/v2/{RUNPOD_VIDEO_INSTANCE_ID}/status/{job_id}"
+    headers = {
+        "Authorization": f"Bearer {RUNPOD_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    start_time = time.time()
+    while time.time() - start_time < COMFYUI_TIMEOUT_SECONDS:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.get(status_url, headers=headers)
+            response.raise_for_status()
+            data = response.json()
+
+        status = data.get("status", "").upper()
+        logger.debug(f"[upscale] Runpod job status: {status}")
+
+        if status == "COMPLETED":
+            outputs = data.get("output", {}).get("output", [])
+            videos = outputs.get("videos", [])
+            if videos:
+                video_data = videos[0].get("data")
+                if video_data:
+                    logger.info(f"[upscale] Upscaling completed successfully")
+                    return video_data
+            raise RuntimeError("Runpod job completed but no video output found")
+
+        elif status in ("FAILED", "ERROR"):
+            error_msg = data.get("error", "Unknown Runpod error")
+            raise RuntimeError(f"Runpod upscaling failed: {error_msg}")
+
+        elif status in ("IN_QUEUE", "RUNNING", "IN_PROGRESS"):
+            await asyncio.sleep(COMFYUI_POLL_INTERVAL_SECONDS)
+            continue
+        else:
+            await asyncio.sleep(COMFYUI_POLL_INTERVAL_SECONDS)
+            continue
+
+    raise TimeoutError(f"Timed out waiting for Runpod upscaling job {job_id}")
+
+
+@activity.defn
+async def send_upscale_completion_webhook(
+    video_id: str,
+    status: str,
+    upscaled_video_b64: str,
+    workflow_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    original_video_id: Optional[str] = None,
+    failure_reason: Optional[str] = None,
+):
+    """Sends a webhook notification to N8N upon upscaling completion."""
+    activity.heartbeat()
+
+    payload: Dict[str, Any] = {
+        "video_id": video_id,
+        "status": status,
+    }
+
+    if workflow_id:
+        payload["workflow_id"] = workflow_id
+    if user_id:
+        payload["user_id"] = user_id
+    if original_video_id:
+        payload["original_video_id"] = original_video_id
+    if upscaled_video_b64 and status == "completed":
+        payload["upscaled_video"] = upscaled_video_b64
+
+    event_type = "upscale_completed" if status == "completed" else "upscale_failed"
+    logger.info(f"Sending '{event_type}' webhook for video_id={video_id}")
+    await webhook_manager.send_webhook(VIDEO_COMPLETED_N8N_WEBHOOK_URL, payload, event_type)

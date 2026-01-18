@@ -6,7 +6,7 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 from videomerge.config import IMAGE_WORKFLOWS, WORKFLOWS_BASE_PATH, ENABLE_VOICEOVER_GEN, IMAGE_WIDTH, IMAGE_HEIGHT, IMAGE_STYLE_TO_WORKFLOW_MAPPING
-from videomerge.models import OrchestrateStartRequest, PromptItem
+from videomerge.models import OrchestrateStartRequest, PromptItem, UpscaleStartRequest
 
 # Import all activities from the activities module
 with workflow.unsafe.imports_passed_through():
@@ -20,6 +20,10 @@ with workflow.unsafe.imports_passed_through():
         stitch_videos,
         burn_subtitles_into_video,
         send_completion_webhook,
+        download_video,
+        start_video_upscaling,
+        poll_upscale_status,
+        send_upscale_completion_webhook,
     )
 
 
@@ -282,6 +286,81 @@ class VideoGenerationWorkflow:
                         if (p.get("image_prompt") if isinstance(p, dict) else getattr(p, "image_prompt", None))
                     ],
                     voiceover_path if "voiceover_path" in locals() else "",
+                    str(e),
+                ],
+                **activity_defaults,
+            )
+            raise
+
+
+@workflow.defn
+class VideoUpscalingWorkflow:
+    @workflow.run
+    async def run(self, req: UpscaleStartRequest) -> str:
+        """Main workflow execution method for video upscaling."""
+        workflow.logger.info(f"Starting video upscaling workflow for video_id={req.video_id}")
+
+        # Define a retry policy for activities that might fail due to transient issues.
+        retry_policy = RetryPolicy(
+            maximum_attempts=1,
+            initial_interval=timedelta(seconds=10),
+            backoff_coefficient=2.0,
+        )
+        activity_defaults = {
+            "start_to_close_timeout": timedelta(minutes=15),
+            "retry_policy": retry_policy,
+        }
+
+        try:
+            # 1. Setup run directory and save manifest
+            run_dir = await workflow.execute_activity(
+                setup_run_directory, args=[req.video_id, req.model_dump()], **activity_defaults
+            )
+
+            # 2. Download video
+            video_path = await workflow.execute_activity(
+                download_video, args=[req.video_url, req.video_id], **activity_defaults
+            )
+
+            # 3. Prepare and call Runpod upscaling
+            upscale_job_id = await workflow.execute_activity(
+                start_video_upscaling, args=[req.video_id, video_path, req.target_resolution], **activity_defaults
+            )
+
+            # 4. Poll for completion
+            upscaled_video_b64 = await workflow.execute_activity(
+                poll_upscale_status, args=[upscale_job_id], **activity_defaults
+            )
+
+            # 5. Send completion webhook
+            await workflow.execute_activity(
+                send_upscale_completion_webhook,
+                args=[
+                    req.video_id,
+                    "completed",
+                    upscaled_video_b64,
+                    req.workflow_id,
+                    req.user_id,
+                    req.original_video_id,
+                ],
+                **activity_defaults,
+            )
+
+            workflow.logger.info(f"Upscaling workflow for video_id={req.video_id} completed successfully.")
+            return upscaled_video_b64
+
+        except Exception as e:
+            workflow.logger.error(f"Upscaling workflow for video_id={req.video_id} failed: {e}")
+            # Send failure webhook
+            await workflow.execute_activity(
+                send_upscale_completion_webhook,
+                args=[
+                    req.video_id,
+                    "failed",
+                    "",
+                    req.workflow_id,
+                    req.user_id,
+                    req.original_video_id,
                     str(e),
                 ],
                 **activity_defaults,
