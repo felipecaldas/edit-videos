@@ -269,7 +269,7 @@ def concat_videos_with_voiceover(video_paths: Iterable[Path], voiceover_path: Pa
     return output_path
 
 
-def generate_and_burn_subtitles(input_video: Path, final_path: Path, *, language: str = 'pt', model_size: str = 'small', position: str = 'bottom', audio_hint: Path | None = None) -> Path:
+def generate_and_burn_subtitles(input_video: Path, final_path: Path, *, language: str, model_size: str = 'small', position: str = 'bottom', audio_hint: Path | None = None) -> Path:
     """Generate subtitles for input_video and burn them into final_path."""
     input_video = Path(input_video)
     final_path = Path(final_path)
