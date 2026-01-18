@@ -17,11 +17,11 @@ logger = get_logger(__name__)
 @router.post("/upscale/start")
 async def upscale_start(req: UpscaleStartRequest):
     """Starts a new video upscaling workflow."""
-    workflow_id = f"upscale-{req.user_id}-{req.video_id}"
+    workflow_id = f"upscale-{req.user_id}-{req.run_id}"
     logger.info(
-        "Received request to start video upscaling with workflow_id=%s for video_id=%s",
+        "Received request to start video upscaling with workflow_id=%s for run_id=%s",
         workflow_id,
-        req.video_id,
+        req.run_id,
     )
 
     # Ensure the workflow_id is propagated into the workflow request payload
@@ -39,19 +39,19 @@ async def upscale_start(req: UpscaleStartRequest):
             task_queue="video-upscaling-task-queue",
             id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY,
             search_attributes={
-                "UpscaleVideoId": [req.video_id],  # Allows searching by video_id
+                "UpscaleRunId": [req.run_id],  # Allows searching by run_id
             },
         )
         logger.info(
-            "Successfully started upscaling workflow with workflow_id=%s for video_id=%s",
+            "Successfully started upscaling workflow with workflow_id=%s for run_id=%s",
             workflow_id,
-            req.video_id,
+            req.run_id,
         )
         return JSONResponse(
             content={
                 "message": "Upscaling workflow started successfully.",
                 "workflow_id": workflow_id,
-                "video_id": req.video_id,
+                "run_id": req.run_id,
             },
             status_code=202,
         )
@@ -59,7 +59,7 @@ async def upscale_start(req: UpscaleStartRequest):
         logger.warning(f"Upscaling workflow with workflow_id={workflow_id} is already running.")
         raise HTTPException(
             status_code=409,
-            detail=f"An upscaling job is already in progress for this video.",
+            detail=f"An upscaling job is already in progress for this run.",
         )
     except Exception as e:
         logger.error(f"Failed to start upscaling workflow with workflow_id={workflow_id}: {e}")

@@ -31,11 +31,22 @@ class FolderStitchWithSubsRequest(FolderStitchRequest):
 
 
 class UpscaleStartRequest(BaseModel):
-    video_url: str
-    video_id: str
-    original_video_id: str
+    run_id: str
     user_id: str
-    original_resolution: str
     target_resolution: str
     workflow_id: str
-    title: str
+
+
+class UpscaleChildRequest(BaseModel):
+    video_path: str
+    video_id: str
+    run_id: str
+    user_id: str
+    target_resolution: str
+    workflow_id: str
+
+
+class UpscaleStitchRequest(BaseModel):
+    run_id: str
+    user_id: str
+    workflow_id: str

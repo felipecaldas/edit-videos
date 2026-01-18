@@ -1,12 +1,13 @@
 import asyncio
 from datetime import timedelta
-from typing import List
+from pathlib import Path
+import base64
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 from videomerge.config import IMAGE_WORKFLOWS, WORKFLOWS_BASE_PATH, ENABLE_VOICEOVER_GEN, IMAGE_WIDTH, IMAGE_HEIGHT, IMAGE_STYLE_TO_WORKFLOW_MAPPING
-from videomerge.models import OrchestrateStartRequest, PromptItem, UpscaleStartRequest
+from videomerge.models import OrchestrateStartRequest, PromptItem, UpscaleStartRequest, UpscaleChildRequest, UpscaleStitchRequest
 
 # Import all activities from the activities module
 with workflow.unsafe.imports_passed_through():
@@ -294,9 +295,9 @@ class VideoGenerationWorkflow:
 
 
 @workflow.defn
-class VideoUpscalingWorkflow:
+class VideoUpscalingChildWorkflow:
     @workflow.run
-    async def run(self, req: UpscaleStartRequest) -> str:
+    async def run(self, req: UpscaleChildRequest) -> str:
         """Main workflow execution method for video upscaling."""
         workflow.logger.info(f"Starting video upscaling workflow for video_id={req.video_id}")
 
@@ -317,22 +318,25 @@ class VideoUpscalingWorkflow:
                 setup_run_directory, args=[req.video_id, req.model_dump()], **activity_defaults
             )
 
-            # 2. Download video
-            video_path = await workflow.execute_activity(
-                download_video, args=[req.video_url, req.video_id], **activity_defaults
-            )
-
-            # 3. Prepare and call Runpod upscaling
+            # 2. Prepare and call Runpod upscaling
             upscale_job_id = await workflow.execute_activity(
-                start_video_upscaling, args=[req.video_id, video_path, req.target_resolution], **activity_defaults
+                start_video_upscaling, args=[req.video_id, req.video_path, req.target_resolution], **activity_defaults
             )
 
-            # 4. Poll for completion
+            # 3. Poll for completion
             upscaled_video_b64 = await workflow.execute_activity(
                 poll_upscale_status, args=[upscale_job_id], **activity_defaults
             )
 
-            # 5. Send completion webhook
+            # Save upscaled video to shared directory
+            video_data = base64.b64decode(upscaled_video_b64)
+            upscaled_path = Path("/data/shared") / req.run_id / f"{req.video_id}_upscaled.mp4"
+            upscaled_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(upscaled_path, "wb") as f:
+                f.write(video_data)
+            workflow.logger.info(f"Saved upscaled video to {upscaled_path}")
+
+            # 4. Send completion webhook
             await workflow.execute_activity(
                 send_upscale_completion_webhook,
                 args=[
@@ -341,7 +345,7 @@ class VideoUpscalingWorkflow:
                     upscaled_video_b64,
                     req.workflow_id,
                     req.user_id,
-                    req.original_video_id,
+                    None,
                 ],
                 **activity_defaults,
             )
@@ -360,9 +364,143 @@ class VideoUpscalingWorkflow:
                     "",
                     req.workflow_id,
                     req.user_id,
-                    req.original_video_id,
+                    None,
                     str(e),
                 ],
                 **activity_defaults,
             )
+            raise
+
+
+@workflow.defn
+class VideoUpscalingStitchWorkflow:
+    @workflow.run
+    async def run(self, req: UpscaleStitchRequest) -> str:
+        """Workflow to stitch upscaled videos with voiceover and burn subtitles."""
+        workflow.logger.info(f"Starting upscaling stitch workflow for run_id={req.run_id}")
+
+        # Define a retry policy for activities that might fail due to transient issues.
+        retry_policy = RetryPolicy(
+            maximum_attempts=1,
+            initial_interval=timedelta(seconds=10),
+            backoff_coefficient=2.0,
+        )
+        activity_defaults = {
+            "start_to_close_timeout": timedelta(minutes=15),
+            "retry_policy": retry_policy,
+        }
+
+        try:
+            shared_dir = Path("/data/shared") / req.run_id
+            run_dir = DATA_SHARED_BASE / req.run_id
+
+            # List upscaled video files and sort by prefix number
+            upscaled_files = sorted(shared_dir.glob("*_upscaled.mp4"), key=lambda p: p.name.split('_')[0])
+
+            workflow.logger.info(f"Found {len(upscaled_files)} upscaled video files to stitch")
+
+            voiceover_path = shared_dir / "voiceover.mp3"
+            srt_path = shared_dir / "generated.srt"
+
+            # Stitch videos with voiceover
+            output_path = run_dir / "stitched_output.mp4"
+            await workflow.execute_activity(
+                stitch_videos, args=[req.run_id, [str(p) for p in upscaled_files], str(voiceover_path)], **activity_defaults
+            )
+
+            # Burn subtitles into video
+            final_path = run_dir / "final_video.mp4"
+            await workflow.execute_activity(
+                burn_subtitles_into_video, args=[req.run_id, str(output_path), "pt", str(voiceover_path)], **activity_defaults
+            )
+
+            # Read final video and encode to base64
+            with open(final_path, "rb") as f:
+                final_video_data = f.read()
+            final_video_b64 = base64.b64encode(final_video_data).decode('utf-8')
+
+            # Send completion webhook
+            await workflow.execute_activity(
+                send_upscale_completion_webhook,
+                args=[
+                    req.run_id,
+                    "completed",
+                    final_video_b64,
+                    req.workflow_id,
+                    req.user_id,
+                    None,
+                ],
+                **activity_defaults,
+            )
+
+            workflow.logger.info(f"Upscaling stitch workflow for run_id={req.run_id} completed successfully.")
+            return final_video_b64
+
+        except Exception as e:
+            workflow.logger.error(f"Upscaling stitch workflow for run_id={req.run_id} failed: {e}")
+            raise
+
+
+@workflow.defn
+class VideoUpscalingWorkflow:
+    @workflow.run
+    async def run(self, req: UpscaleStartRequest) -> str:
+        """Parent workflow for video upscaling that starts child workflows for each video clip."""
+        workflow.logger.info(f"Starting video upscaling parent workflow for run_id={req.run_id}")
+
+        # Define a retry policy for activities that might fail due to transient issues.
+        retry_policy = RetryPolicy(
+            maximum_attempts=1,
+            initial_interval=timedelta(seconds=10),
+            backoff_coefficient=2.0,
+        )
+        activity_defaults = {
+            "start_to_close_timeout": timedelta(minutes=15),
+            "retry_policy": retry_policy,
+        }
+
+        try:
+            # List video files in shared directory
+            shared_dir = Path("/data/shared") / req.run_id
+            video_files = sorted(shared_dir.glob("[0-9][0-9][0-9]_*.mp4"))
+
+            workflow.logger.info(f"Found {len(video_files)} video files to upscale")
+
+            # Start child workflow for each video file in parallel
+            futures = []
+            for idx, video_file in enumerate(video_files):
+                child_req = UpscaleChildRequest(
+                    video_path=str(video_file),
+                    video_id=video_file.stem,  # filename without extension
+                    run_id=req.run_id,
+                    user_id=req.user_id,
+                    target_resolution=req.target_resolution,
+                    workflow_id=req.workflow_id,
+                )
+
+                futures.append(workflow.execute_child_workflow(
+                    VideoUpscalingChildWorkflow.run,
+                    child_req,
+                    id=f"upscale-child-{req.run_id}-{idx}",
+                ))
+
+            # Wait for all upscaling children to complete
+            await asyncio.gather(*futures)
+
+            # Start stitching workflow
+            await workflow.execute_child_workflow(
+                VideoUpscalingStitchWorkflow.run,
+                UpscaleStitchRequest(
+                    run_id=req.run_id,
+                    user_id=req.user_id,
+                    workflow_id=req.workflow_id,
+                ),
+                id=f"upscale-stitch-{req.run_id}",
+            )
+
+            workflow.logger.info(f"Parent upscaling workflow for run_id={req.run_id} completed all workflows.")
+            return "completed"
+
+        except Exception as e:
+            workflow.logger.error(f"Parent upscaling workflow for run_id={req.run_id} failed: {e}")
             raise
