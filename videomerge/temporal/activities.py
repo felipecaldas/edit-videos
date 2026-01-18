@@ -473,6 +473,20 @@ async def start_video_upscaling(video_id: str, video_path: str, target_resolutio
         logger.error(f"[upscale] Failed to get video dimensions: {e}")
         raise RuntimeError(f"Failed to get video dimensions: {e}")
 
+    # Get video frame count for batch_size calculation
+    frame_probe_cmd = [
+        "ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", 
+        "stream=nb_read_frames", "-of", "csv=p=0", video_path
+    ]
+    try:
+        result = subprocess.run(frame_probe_cmd, capture_output=True, text=True, check=True)
+        frame_count = int(result.stdout.strip())
+        batch_size = frame_count - 2
+        logger.info(f"[upscale] Video frame count: {frame_count}, calculated batch_size: {batch_size}")
+    except subprocess.CalledProcessError as e:
+        logger.error(f"[upscale] Failed to get video frame count: {e}")
+        raise RuntimeError(f"Failed to get video frame count: {e}")
+
     # Convert video to base64
     with open(video_path, "rb") as f:
         video_data = f.read()
@@ -495,6 +509,7 @@ async def start_video_upscaling(video_id: str, video_path: str, target_resolutio
             "output_resolution": output_resolution,
             "comfyui_workflow_name": "seedvr2_video_upscale",
             "comfy_org_api_key": COMFY_ORG_API_KEY,
+            "batch_size": batch_size,
         }
     }
 

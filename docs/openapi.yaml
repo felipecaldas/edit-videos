@@ -1,0 +1,323 @@
+openapi: 3.1.0
+info:
+  title: RunPod ComfyUI Worker API
+  version: 0.1.0
+  description: >-
+    Reference OpenAPI definition for the RunPod serverless ComfyUI worker.
+    Use this file with Swagger UI or any OpenAPI viewer to inspect request and
+    response payloads.
+servers:
+  - url: https://api.runpod.ai/v2/{endpoint_id}
+    description: RunPod serverless endpoint base URL
+    variables:
+      endpoint_id:
+        default: YOUR_ENDPOINT_ID
+paths:
+  /run:
+    post:
+      summary: Submit an asynchronous ComfyUI workflow
+      description: |-
+        Wraps a workflow template and forwards it to the ComfyUI API.
+
+        ## Request body
+        Send a JSON payload with a top-level `input` object:
+
+        ```json
+        {
+          "input": {
+            "prompt": "...",
+            "image": "...",
+            "width": 480,
+            "height": 640,
+            "length": 81,
+            "comfyui_workflow_name": "video_wan2_2_14B_i2v",
+            "comfy_org_api_key": "..."
+          }
+        }
+        ```
+
+        - `input.prompt` is required.
+        - `input.image` is optional and is used by image-to-video templates.
+          The worker accepts a plain base64 string or a data URI such as
+          `data:image/png;base64,<BASE64...>`.
+        - `input.comfyui_workflow_name` selects the workflow template to submit.
+          If omitted, it defaults to `video_wan2_2_14B_i2v`.
+          To run a text-to-image workflow you must set `comfyui_workflow_name` to a
+          supported text-to-image template.
+
+        ## Supported `comfyui_workflow_name` values
+        The available workflow templates are:
+
+        | comfyui_workflow_name | Workflow JSON file |
+        | --- | --- |
+        | `video_wan2_2_14B_i2v` | `workflows/video_wan2_2_14B_i2v.json` |
+        | `T2I_ChromaAnimaAIO` | `workflows/T2I_ChromaAnimaAIO.json` |
+        | `qwen-image-fast-runpod` | `workflows/qwen-image-fast-runpod.json` |
+        | `image_qwen_t2i` | `workflows/image_qwen_image_distill_official_comfyui.json` |
+        | `image_disneyizt_t2i` | `workflows/disneyizt-imagez-t2v.json` |
+        | `crayon-drawing` | `workflows/crayon-drawing.json` |
+        | `I2V-Wan-2.2-Lightning-runpod` | `workflows/I2V-Wan-2.2-Lightning-runpod.json` |
+        | `seedvr2_video_upscale` | `workflows/seedvr2_video_upscale.json` |
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RunRequest'
+            examples:
+              text_to_image:
+                summary: Text-to-image generation
+                value:
+                  input:
+                    prompt: "<PROMPT_TEXT>"
+                    width: 720
+                    height: 1024
+                    comfyui_workflow_name: "image_disneyizt_t2i"
+                    comfy_org_api_key: "<COMFY_ORG_API_KEY>"
+              image_to_video:
+                summary: Image-to-video generation (defaults to video_wan2_2_14B_i2v)
+                value:
+                  input:
+                    prompt: "<VIDEO_PROMPT_TEXT>"
+                    image: "data:image/png;base64,<BASE64...>"
+                    width: 480
+                    height: 640
+                    length: 81
+                    comfy_org_api_key: "<COMFY_ORG_API_KEY>"
+              video_upscale:
+                summary: Video upscaling with SeedVR2
+                value:
+                  input:
+                    video: "data:video/mp4;base64,<BASE64...>"
+                    width: 1920
+                    height: 1080
+                    output_resolution: 1920
+                    comfyui_workflow_name: "seedvr2_video_upscale"
+                    comfy_org_api_key: "<COMFY_ORG_API_KEY>"
+      responses:
+        '200':
+          description: Job accepted and queued for processing.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunResponse'
+              example:
+                id: "42be01db-ea96-494a-a156-94c5857d865c"
+                status: "QUEUED"
+        '400':
+          description: Invalid request payload or workflow configuration.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: Upstream ComfyUI service error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /status/{job_id}:
+    get:
+      summary: Retrieve asynchronous job status
+      description: >-
+        Returns the current status and any generated assets for a previously
+        submitted workflow.
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          description: Identifier obtained from the `/run` response.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Current job state. Includes asset payloads when completed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+              examples:
+                videoCompleted:
+                  summary: Completed video generation job
+                  value:
+                    delayTime: 50435
+                    executionTime: 258789
+                    id: "42be01db-ea96-494a-a156-94c5857d865c-e2"
+                    output:
+                      output:
+                        images: []
+                        videos:
+                          - data: "AAAAIGZ0eX.............."
+                            filename: "ComfyUI_00001_.mp4"
+                            type: "base64"
+                    status: "COMPLETED"
+                    workerId: "h721wnkh45pang"
+        '404':
+          description: Job identifier is unknown to the worker.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Unexpected worker error when resolving job status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+components:
+  schemas:
+    RunRequest:
+      type: object
+      required:
+        - input
+      properties:
+        input:
+          type: object
+          description: >-
+            RunPod job payload that the worker uses to populate and submit the
+            selected ComfyUI workflow template.
+          properties:
+            prompt:
+              type: string
+              description: Natural language description that guides the workflow (required for text/image-to-video workflows, optional for upscaling).
+            image:
+              type: string
+              description: >-
+                Optional base64-encoded input image.
+
+                Used for image-to-video workflows, not used for upscaling.
+                May be either a plain base64 string, or a data URI such as
+                `data:image/png;base64,<BASE64...>`.
+            width:
+              type: integer
+              minimum: 64
+              default: 480
+              description: Output video width in pixels (required for image-to-video, mandatory for upscaling input dimensions).
+            height:
+              type: integer
+              minimum: 64
+              default: 640
+              description: Output video height in pixels (required for image-to-video, mandatory for upscaling input dimensions).
+            length:
+              type: integer
+              minimum: 1
+              default: 81
+              description: Number of frames to generate (required for video generation, optional for upscaling).
+            output_resolution:
+              type: integer
+              nullable: true
+              description: Output resolution for video upscaling workflows (e.g., 1980 for SeedVR2 upscaling).
+            comfyui_workflow_name:
+              type: string
+              default: video_wan2_2_14B_i2v
+              description: Identifier of the workflow template to load.
+              enum:
+                - video_wan2_2_14B_i2v
+                - T2I_ChromaAnimaAIO
+                - qwen-image-fast-runpod
+                - image_qwen_t2i
+                - image_disneyizt_t2i
+                - crayon-drawing
+                - I2V-Wan-2.2-Lightning-runpod
+                - seedvr2_video_upscale
+            comfy_org_api_key:
+              type: string
+              nullable: true
+              description: Optional Comfy.Org API key (may be required for specific workflows).
+    RunResponse:
+      type: object
+      required:
+        - id
+        - status
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Generated identifier for the asynchronous job.
+        status:
+          type: string
+          enum: [QUEUED]
+          description: Initial status after the job is accepted.
+    StatusResponse:
+      type: object
+      required:
+        - id
+        - status
+      properties:
+        id:
+          type: string
+          description: Job identifier provided by the `/run` endpoint.
+        status:
+          type: string
+          description: Uppercase job lifecycle state.
+          enum: [QUEUED, RUNNING, COMPLETED, FAILED]
+        created_at:
+          type: number
+          format: double
+          nullable: true
+          description: Timestamp (seconds since epoch) when the job was queued locally.
+        updated_at:
+          type: number
+          format: double
+          nullable: true
+          description: Timestamp of the last state change tracked by the worker.
+        delayTime:
+          type: integer
+          format: int64
+          nullable: true
+          description: Milliseconds spent in the RunPod queue before execution (if available).
+        executionTime:
+          type: integer
+          format: int64
+          nullable: true
+          description: Milliseconds spent executing on the assigned worker (if available).
+        workerId:
+          type: string
+          nullable: true
+          description: Identifier of the RunPod worker that processed the job.
+        error:
+          type: string
+          nullable: true
+          description: Present when `status` is `FAILED`.
+        output:
+          type: object
+          nullable: true
+          description: Generated assets packaged by the worker.
+          properties:
+            output:
+              $ref: '#/components/schemas/WorkerOutput'
+    WorkerOutput:
+      type: object
+      properties:
+        images:
+          type: array
+          items:
+            $ref: '#/components/schemas/Asset'
+        videos:
+          type: array
+          items:
+            $ref: '#/components/schemas/Asset'
+    Asset:
+      type: object
+      required:
+        - filename
+        - type
+        - data
+      properties:
+        filename:
+          type: string
+          description: Asset name returned by ComfyUI.
+        type:
+          type: string
+          description: Serialization method for `data` (e.g., `base64`, `s3_url`).
+        data:
+          type: string
+          description: Encoded payload or remote reference, depending on `type`.
+    ErrorResponse:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          type: string
+          description: Human-readable error message.
