@@ -305,11 +305,24 @@ async def generate_video_from_image(run_id: str, video_prompt: str, image_input:
     saved_files = await asyncio.to_thread(client.download_outputs, video_hints, run_dir)
     duration = time.time() - start_time
 
+    # Rename files to sequential prefixed names
+    renamed_files = []
+    for p in saved_files:
+        original_name = p.name
+        if original_name.startswith("000_"):
+            uuid_part = original_name[4:]  # remove "000_"
+            new_name = f"{index:03d}_{uuid_part}"
+            new_path = p.parent / new_name
+            p.rename(new_path)
+            renamed_files.append(new_path)
+        else:
+            renamed_files.append(p)
+
     if length_bucket is not None:
         total_videos_generation_seconds.labels(length_bucket=length_bucket).observe(duration)
 
-    logger.info(f"Video generated for prompt index {index}: {saved_files}")
-    return [str(p) for p in saved_files]
+    logger.info(f"Video generated for prompt index {index}: {renamed_files}")
+    return [str(p) for p in renamed_files]
 
 
 @activity.defn
