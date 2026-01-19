@@ -203,13 +203,18 @@ class RunPodComfyUIClient(ComfyUIClient):
             if not self.comfy_org_api_key:
                 logger.warning("[comfyui] COMFY_ORG_API_KEY is not configured; RunPod may reject the request")
 
+            width = 480
+            height = 640
+            output_resolution = max(width, height)
+
             payload = {
                 "input": {
                     "prompt": prompt_text,
                     "image": clean_image_data,
-                    "width": 480,
-                    "height": 640,
+                    "width": width,
+                    "height": height,
                     "length": 81,
+                    "output_resolution": output_resolution,
                     "comfyui_workflow_name": workflow_name,
                     "comfy_org_api_key": self.comfy_org_api_key,
                 }
@@ -217,7 +222,7 @@ class RunPodComfyUIClient(ComfyUIClient):
             
             logger.info(
                 "[comfyui] Submitting image->video to RunPod: workflow=%s, size=%dx%d, length=%d",
-                workflow_name, 480, 640, 81
+                workflow_name, width, height, 81
             )
 
             url = f"{self.base_url}/v2/{self.instance_id}/run"
@@ -302,6 +307,8 @@ class RunPodComfyUIClient(ComfyUIClient):
                 attempts += 1
                 logger.warning("[comfyui] RunPod polling timeout: %s. attempt=%d, sleep %.1fs", e, attempts, poll_interval_s)
                 time.sleep(poll_interval_s)
+            except RuntimeError:
+                raise
             except requests.exceptions.HTTPError as e:
                 last_error = e
                 attempts += 1

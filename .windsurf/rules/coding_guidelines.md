@@ -20,4 +20,5 @@ trigger: always_on
 - Follow the PEP 8 style guide.
 - Write unit tests to ensure code reliability and prevent regressions.
 - Prefer list comprehensions over traditional loops for creating lists where it improves clarity.
+- Before committing to git, compile (check syntax and imports `python -m py_compile`) every modified Python file to prevent runtime errors like import failures.
 </python_guidelines>

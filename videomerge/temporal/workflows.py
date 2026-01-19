@@ -40,7 +40,7 @@ class ProcessSceneWorkflow:
         image_width: int,
         image_height: int,
         comfyui_workflow_name: str | None = None,
-    ) -> List[str]:
+    ) -> list[str]:
         """Workflow to process a single scene (image -> video)."""
         # Log parent workflow info for correlation
         parent_info = workflow.info().parent

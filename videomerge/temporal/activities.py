@@ -487,18 +487,109 @@ async def start_video_upscaling(video_id: str, video_path: str, target_resolutio
         raise RuntimeError(f"Failed to get video dimensions: {e}")
 
     # Get video frame count for batch_size calculation
+    frame_count: int | None = None
+    batch_size: int
+
     frame_probe_cmd = [
-        "ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", 
-        "stream=nb_read_frames", "-of", "csv=p=0", video_path
+        "ffprobe",
+        "-v",
+        "error",
+        "-count_frames",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=nb_read_frames",
+        "-of",
+        "default=nokey=1:noprint_wrappers=1",
+        video_path,
     ]
     try:
         result = subprocess.run(frame_probe_cmd, capture_output=True, text=True, check=True)
-        frame_count = int(result.stdout.strip())
-        batch_size = frame_count - 2
-        logger.info(f"[upscale] Video frame count: {frame_count}, calculated batch_size: {batch_size}")
+        raw = result.stdout.strip()
+        if raw.isdigit():
+            frame_count = int(raw)
     except subprocess.CalledProcessError as e:
-        logger.error(f"[upscale] Failed to get video frame count: {e}")
-        raise RuntimeError(f"Failed to get video frame count: {e}")
+        logger.warning(f"[upscale] Failed to get video frame count via nb_read_frames: {e}")
+
+    if frame_count is None:
+        frame_probe_cmd = [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=nb_frames",
+            "-of",
+            "default=nokey=1:noprint_wrappers=1",
+            video_path,
+        ]
+        try:
+            result = subprocess.run(frame_probe_cmd, capture_output=True, text=True, check=True)
+            raw = result.stdout.strip()
+            if raw.isdigit():
+                frame_count = int(raw)
+        except subprocess.CalledProcessError as e:
+            logger.warning(f"[upscale] Failed to get video frame count via nb_frames: {e}")
+
+    if frame_count is None:
+        duration_seconds: float | None = None
+        fps: float | None = None
+
+        duration_cmd = [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=nokey=1:noprint_wrappers=1",
+            video_path,
+        ]
+        try:
+            result = subprocess.run(duration_cmd, capture_output=True, text=True, check=True)
+            raw = result.stdout.strip()
+            if raw:
+                duration_seconds = float(raw)
+        except (subprocess.CalledProcessError, ValueError) as e:
+            logger.warning(f"[upscale] Failed to get video duration for frame estimation: {e}")
+
+        fps_cmd = [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=avg_frame_rate",
+            "-of",
+            "default=nokey=1:noprint_wrappers=1",
+            video_path,
+        ]
+        try:
+            result = subprocess.run(fps_cmd, capture_output=True, text=True, check=True)
+            raw = result.stdout.strip()
+            if raw and raw != "0/0":
+                if "/" in raw:
+                    num_str, den_str = raw.split("/", 1)
+                    num = float(num_str)
+                    den = float(den_str)
+                    if den != 0:
+                        fps = num / den
+                else:
+                    fps = float(raw)
+        except (subprocess.CalledProcessError, ValueError) as e:
+            logger.warning(f"[upscale] Failed to get video fps for frame estimation: {e}")
+
+        if duration_seconds is None or fps is None:
+            raise RuntimeError(
+                f"Failed to determine video frame count for upscaling (nb_read_frames/nb_frames unavailable; duration={duration_seconds}, fps={fps})"
+            )
+
+        frame_count = max(1, int(round(duration_seconds * fps)))
+
+    batch_size = max(1, frame_count - 2)
+    logger.info(f"[upscale] Video frame count: {frame_count}, calculated batch_size: {batch_size}")
 
     # Convert video to base64
     with open(video_path, "rb") as f:

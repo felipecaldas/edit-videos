@@ -280,6 +280,23 @@ class TestRunPodComfyUIClient:
         with pytest.raises(RuntimeError, match="RunPod job failed: Processing failed"):
             self.client.poll_until_complete("runpod-job-id", timeout_s=60, poll_interval_s=1)
 
+    @patch('videomerge.services.comfyui_client.time.sleep')
+    @patch('videomerge.services.comfyui_client.requests.request')
+    def test_poll_until_complete_failed_does_not_retry(self, mock_request, mock_sleep):
+        """RunPod FAILED should raise immediately (not be swallowed by generic retry loop)."""
+        mock_response = Mock()
+        mock_response.ok = True
+        mock_response.json.return_value = {
+            "status": "failed",
+            "error": "Schema error"
+        }
+        mock_request.return_value = mock_response
+
+        with pytest.raises(RuntimeError, match="RunPod job failed: Schema error"):
+            self.client.poll_until_complete("runpod-job-id", timeout_s=60, poll_interval_s=1)
+
+        mock_sleep.assert_not_called()
+
     @patch('videomerge.services.comfyui_client.DEFAULT_I2V_WORKFLOW_NAME', 'video_wan2_2_14B_i2v')
     @patch('videomerge.services.comfyui_client.requests.request')
     def test_submit_image_to_video_validates_payload(self, mock_request):
@@ -305,6 +322,7 @@ class TestRunPodComfyUIClient:
         assert payload["input"]["width"] == 480
         assert payload["input"]["height"] == 640
         assert payload["input"]["length"] == 81
+        assert payload["input"]["output_resolution"] == 640
         assert payload["input"]["comfyui_workflow_name"] == "video_wan2_2_14B_i2v"
         assert payload["input"]["comfy_org_api_key"] == "test-comfy-org-key"
 

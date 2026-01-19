@@ -39,7 +39,7 @@ async def upscale_start(req: UpscaleStartRequest):
             task_queue="video-upscaling-task-queue",
             id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY,
             search_attributes={
-                "UpscaleRunId": [req.run_id],  # Allows searching by run_id
+                "TabarioRunId": [req.run_id],  # Allows searching by run_id
             },
         )
         logger.info(

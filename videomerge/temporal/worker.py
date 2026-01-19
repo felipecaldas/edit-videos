@@ -7,7 +7,7 @@ from temporalio.worker import Worker
 
 from videomerge.config import TEMPORAL_SERVER_URL
 from videomerge.services.metrics import registry
-from videomerge.temporal.workflows import VideoGenerationWorkflow, ProcessSceneWorkflow
+from videomerge.temporal.workflows import VideoGenerationWorkflow, ProcessSceneWorkflow, VideoUpscalingWorkflow, VideoUpscalingChildWorkflow, VideoUpscalingStitchWorkflow
 from videomerge.temporal import activities
 from videomerge.utils.logging import get_logger
 
@@ -101,8 +101,8 @@ async def main() -> None:
     logger.info("Connecting to Temporal server at %s", TEMPORAL_SERVER_URL)
     client = await Client.connect(TEMPORAL_SERVER_URL)
 
-    # Create a worker that connects to the server and hosts the workflow and activities.
-    worker = Worker(
+    # Create workers for each task queue
+    worker_gen = Worker(
         client,
         task_queue="video-generation-task-queue",
         workflows=[VideoGenerationWorkflow, ProcessSceneWorkflow],
@@ -116,13 +116,30 @@ async def main() -> None:
             activities.stitch_videos,
             activities.burn_subtitles_into_video,
             activities.send_completion_webhook,
+            activities.start_video_upscaling,
+            activities.poll_upscale_status,
+            activities.send_upscale_completion_webhook,
+        ],
+    )
+
+    worker_upscale = Worker(
+        client,
+        task_queue="video-upscaling-task-queue",
+        workflows=[VideoUpscalingWorkflow, VideoUpscalingChildWorkflow, VideoUpscalingStitchWorkflow],
+        activities=[
+            activities.setup_run_directory,
+            activities.start_video_upscaling,
+            activities.poll_upscale_status,
+            activities.stitch_videos,
+            activities.burn_subtitles_into_video,
+            activities.send_upscale_completion_webhook,
         ],
     )
 
     logger.info("Starting Temporal worker...")
 
     try:
-        await worker.run()
+        await asyncio.gather(worker_gen.run(), worker_upscale.run())
     finally:
         if metrics_server is not None:
             metrics_server.close()
