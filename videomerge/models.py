@@ -2,6 +2,11 @@ from typing import List, Optional, Union
 from pydantic import BaseModel
 
 
+class PromptItem(BaseModel):
+    image_prompt: Optional[str] = None
+    video_prompt: Optional[str] = None
+
+
 class StitchRequest(BaseModel):
     voiceover: str  # URL or absolute/accessible file path to voiceover.mp3/wav
     videos: List[str]  # Ordered list of URLs or file paths to videos
@@ -28,6 +33,21 @@ class FolderStitchWithSubsRequest(FolderStitchRequest):
     language: Optional[str] = "pt"
     model_size: Optional[str] = "small"
     subtitle_position: Optional[str] = "bottom"
+
+
+class OrchestrateStartRequest(BaseModel):
+    user_id: str
+    script: str
+    caption: str
+    prompts: Optional[List[PromptItem]] = None
+    language: str = "en"
+    image_style: str
+    image_width: Optional[int] = None
+    image_height: Optional[int] = None
+    run_id: str
+    elevenlabs_voice_id: str
+    workflow_id: Optional[str] = None
+    enable_image_gen: Optional[bool] = None
 
 
 class UpscaleStartRequest(BaseModel):
