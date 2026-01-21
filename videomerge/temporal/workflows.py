@@ -385,35 +385,26 @@ class VideoUpscalingStitchWorkflow:
             voiceover_path = DATA_SHARED_BASE / req.run_id / "voiceover.mp3"
             srt_path = DATA_SHARED_BASE / req.run_id / "generated.srt"
 
-            # Stitch videos with voiceover (use longer timeout for upscaled videos)
+            # Stitch videos with voiceover
             output_path = run_dir / "stitched_output.mp4"
             await workflow.execute_activity(
                 stitch_videos,
                 args=[req.run_id, [str(p) for p in upscaled_files], str(voiceover_path)],
-                start_to_close_timeout=timedelta(minutes=30),
+                start_to_close_timeout=timedelta(minutes=7),
                 retry_policy=retry_policy,
             )
 
-            # Burn subtitles into video (use longer timeout for upscaled videos)
+            # Burn subtitles into video
             final_path = run_dir / "final_video.mp4"
-            await workflow.execute_activity(
+            final_video_path = await workflow.execute_activity(
                 burn_subtitles_into_video,
                 args=[req.run_id, str(output_path), "pt", str(voiceover_path)],
-                start_to_close_timeout=timedelta(minutes=30),
-                retry_policy=retry_policy,
-            )
-
-            # Read final video and encode to base64 (must be done via activity; workflow sandbox forbids I/O)
-            # Use longer timeout for encoding large upscaled videos
-            final_video_b64 = await workflow.execute_activity(
-                encode_file_to_base64,
-                args=[str(final_path)],
-                start_to_close_timeout=timedelta(minutes=30),
+                start_to_close_timeout=timedelta(minutes=5),
                 retry_policy=retry_policy,
             )
 
             workflow.logger.info(f"Upscaling stitch workflow for run_id={req.run_id} completed successfully.")
-            return final_video_b64
+            return final_video_path
 
         except Exception as e:
             workflow.logger.error(f"Upscaling stitch workflow for run_id={req.run_id} failed: {e}")
@@ -471,7 +462,7 @@ class VideoUpscalingWorkflow:
             await asyncio.gather(*futures)
 
             # Start stitching workflow
-            final_video_b64 = await workflow.execute_child_workflow(
+            final_video_path = await workflow.execute_child_workflow(
                 VideoUpscalingStitchWorkflow.run,
                 UpscaleStitchRequest(
                     run_id=req.run_id,
@@ -481,14 +472,13 @@ class VideoUpscalingWorkflow:
                 id=f"upscale-stitch-{req.run_id}",
             )
 
-            # Send success webhook with final video
+            # Send success webhook with final video path
             await workflow.execute_activity(
                 send_upscale_completion_webhook,
                 args=[
                     req.run_id,
-                    "final_video",
+                    final_video_path,
                     "completed",
-                    final_video_b64,
                     req.workflow_id,
                     req.user_id,
                     None,
@@ -506,9 +496,8 @@ class VideoUpscalingWorkflow:
                 send_upscale_completion_webhook,
                 args=[
                     req.run_id,
-                    "final_video",
-                    "failed",
                     "",
+                    "failed",
                     req.workflow_id,
                     req.user_id,
                     str(e),

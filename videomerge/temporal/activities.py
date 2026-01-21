@@ -740,23 +740,57 @@ async def save_upscaled_video(run_id: str, video_id: str, upscaled_video_b64: st
 async def encode_file_to_base64(file_path: str) -> str:
     """Read a file and return its base64-encoded contents."""
 
+    logger.info(f"[encode_file_to_base64] STARTED - file_path={file_path}")
     activity.heartbeat()
+    logger.info(f"[encode_file_to_base64] Heartbeat sent")
+    
+    file_path_obj = Path(file_path)
+    logger.info(f"[encode_file_to_base64] Path object created: {file_path_obj}")
+    
+    # Verify file exists and is accessible
+    logger.info(f"[encode_file_to_base64] Checking if file exists...")
+    if not file_path_obj.exists():
+        logger.error(f"[encode_file_to_base64] File not found: {file_path}")
+        raise FileNotFoundError(f"File not found: {file_path}")
+    logger.info(f"[encode_file_to_base64] File exists confirmed")
+    
+    # Wait a moment to ensure file is fully written and closed by previous process
+    logger.info(f"[encode_file_to_base64] Sleeping for 2 seconds...")
+    await asyncio.sleep(2)
+    logger.info(f"[encode_file_to_base64] Sleep completed")
+    
+    # Get file size for logging
+    file_size = file_path_obj.stat().st_size
+    logger.info(f"Encoding file to base64: {file_path} (size: {file_size} bytes)")
     
     # Read file in chunks to send heartbeats for large files
     chunk_size = 10 * 1024 * 1024  # 10MB chunks
     data = bytearray()
     
-    with open(file_path, "rb") as f:
-        while True:
-            chunk = f.read(chunk_size)
-            if not chunk:
-                break
-            data.extend(chunk)
-            activity.heartbeat()
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            with open(file_path, "rb") as f:
+                while True:
+                    chunk = f.read(chunk_size)
+                    if not chunk:
+                        break
+                    data.extend(chunk)
+                    activity.heartbeat()
+            break  # Success, exit retry loop
+        except OSError as e:
+            if attempt < max_retries - 1:
+                logger.warning(f"OSError reading file (attempt {attempt + 1}/{max_retries}): {e}. Retrying...")
+                await asyncio.sleep(2)
+            else:
+                logger.error(f"Failed to read file after {max_retries} attempts: {e}")
+                raise
     
     activity.heartbeat()
+    logger.info(f"Encoding {len(data)} bytes to base64")
     encoded = base64.b64encode(data).decode("utf-8")
     activity.heartbeat()
+    logger.info(f"Base64 encoding complete, result length: {len(encoded)}")
     
     return encoded
 
@@ -764,32 +798,44 @@ async def encode_file_to_base64(file_path: str) -> str:
 @activity.defn
 async def send_upscale_completion_webhook(
     run_id: str,
-    video_id: str,
+    final_video_path: str,
     status: str,
-    upscaled_video_b64: str,
     workflow_id: Optional[str] = None,
     user_id: Optional[str] = None,
-    original_video_id: Optional[str] = None,
     failure_reason: Optional[str] = None,
 ):
     """Sends a webhook notification to N8N upon upscaling completion."""
     activity.heartbeat()
 
+    run_dir = DATA_SHARED_BASE / run_id
+    
     payload: Dict[str, Any] = {
         "run_id": run_id,
-        "video_id": video_id,
         "status": status,
+        "output_dir": str(run_dir),
     }
 
     if workflow_id:
         payload["workflow_id"] = workflow_id
     if user_id:
         payload["user_id"] = user_id
-    if original_video_id:
-        payload["original_video_id"] = original_video_id
-    if upscaled_video_b64 and status == "completed":
-        payload["upscaled_video"] = upscaled_video_b64
+    
+    if status == "completed" and final_video_path:
+        payload["final_video_path"] = final_video_path
+        
+        # Include upscaled video files
+        upscaled_files = sorted(run_dir.glob("*_upscaled.mp4"), key=lambda p: p.name)
+        if upscaled_files:
+            payload["video_files"] = [str(p) for p in upscaled_files]
+        
+        # Include voiceover path if exists
+        voiceover_path = run_dir / "voiceover.mp3"
+        if voiceover_path.exists():
+            payload["voiceover_path"] = str(voiceover_path)
+    
+    if failure_reason:
+        payload["failure_reason"] = failure_reason
 
     event_type = "upscale_completed" if status == "completed" else "upscale_failed"
-    logger.info(f"Sending '{event_type}' webhook for video_id={video_id}")
+    logger.info(f"Sending '{event_type}' webhook for run_id={run_id}")
     await webhook_manager.send_webhook(VIDEO_COMPLETED_N8N_WEBHOOK_URL, payload, event_type)
