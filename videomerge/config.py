@@ -24,17 +24,18 @@ def _load_paths() -> tuple[Path, Path, Path]:
     return tmp_base, data_shared_base, archive_folder
 
 
-def _load_comfyui_defaults() -> tuple[str, bool, int, float, str, str | None, str | None, int, int]:
+def _load_comfyui_defaults() -> tuple[str, bool, int, float, str, str | None, str | None, int, int, int]:
     """Load ComfyUI-related configuration values from the environment."""
     comfyui_url = os.getenv("COMFYUI_URL", "http://192.168.68.51:8188")
     enable_image_gen = _str_to_bool(os.getenv("ENABLE_IMAGE_GEN"), "true")
     timeout_seconds = int(os.getenv("COMFYUI_TIMEOUT_SECONDS", str(20 * 60)))
-    poll_interval = float(os.getenv("COMFYUI_POLL_INTERVAL_SECONDS", "2"))
+    poll_interval = float(os.getenv("COMFYUI_POLL_INTERVAL_SECONDS", "3"))
     run_env = os.getenv("RUN_ENV", "local").lower()
     image_instance_id = os.getenv("RUNPOD_IMAGE_INSTANCE_ID")
     video_instance_id = os.getenv("RUNPOD_VIDEO_INSTANCE_ID")
     image_width = int(os.getenv("IMAGE_WIDTH", "480"))
     image_height = int(os.getenv("IMAGE_HEIGHT", "480"))
+    upscale_batch_size = int(os.getenv("UPSCALE_BATCH_SIZE", "21"))
     return (
         comfyui_url,
         enable_image_gen,
@@ -45,6 +46,7 @@ def _load_comfyui_defaults() -> tuple[str, bool, int, float, str, str | None, st
         video_instance_id,
         image_width,
         image_height,
+        upscale_batch_size,
     )
 
 
@@ -138,7 +140,7 @@ def _apply_config() -> None:
 
     global COMFYUI_URL, ENABLE_IMAGE_GEN, COMFYUI_TIMEOUT_SECONDS, COMFYUI_POLL_INTERVAL_SECONDS
     global RUN_ENV, RUNPOD_IMAGE_INSTANCE_ID, RUNPOD_VIDEO_INSTANCE_ID
-    global IMAGE_WIDTH, IMAGE_HEIGHT
+    global IMAGE_WIDTH, IMAGE_HEIGHT, UPSCALE_BATCH_SIZE
     (
         COMFYUI_URL,
         ENABLE_IMAGE_GEN,
@@ -149,6 +151,7 @@ def _apply_config() -> None:
         RUNPOD_VIDEO_INSTANCE_ID,
         IMAGE_WIDTH,
         IMAGE_HEIGHT,
+        UPSCALE_BATCH_SIZE,
     ) = _load_comfyui_defaults()
 
     global RUNPOD_API_KEY, COMFY_ORG_API_KEY, RUNPOD_BASE_URL
