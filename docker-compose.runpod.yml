@@ -34,7 +34,6 @@ services:
     environment:
       - RUN_ENV=${RUN_ENV}
       - TZ=Australia/Melbourne
-      - VOICEOVER_SERVICE_URL=${VOICEOVER_SERVICE_URL}
       - DATA_SHARED_BASE=/data/shared
       - COMFYUI_URL=${COMFYUI_URL}
       - RUNPOD_IMAGE_INSTANCE_ID=${RUNPOD_IMAGE_INSTANCE_ID}
