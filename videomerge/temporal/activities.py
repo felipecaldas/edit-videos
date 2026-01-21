@@ -836,6 +836,6 @@ async def send_upscale_completion_webhook(
     if failure_reason:
         payload["failure_reason"] = failure_reason
 
-    event_type = "upscale_completed" if status == "completed" else "upscale_failed"
+    event_type = "job_completed" if status == "completed" else "job_failed"
     logger.info(f"Sending '{event_type}' webhook for run_id={run_id}")
     await webhook_manager.send_webhook(VIDEO_COMPLETED_N8N_WEBHOOK_URL, payload, event_type)
