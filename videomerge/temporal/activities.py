@@ -9,7 +9,20 @@ from typing import List, Dict, Any, Optional
 import httpx
 from temporalio import activity
 
-from videomerge.config import DATA_SHARED_BASE, WORKFLOW_I2V_PATH, VIDEO_COMPLETED_N8N_WEBHOOK_URL, IMAGE_WIDTH, IMAGE_HEIGHT
+from videomerge.config import (
+    COMFYUI_POLL_INTERVAL_SECONDS,
+    COMFYUI_TIMEOUT_SECONDS,
+    COMFY_ORG_API_KEY,
+    DATA_SHARED_BASE,
+    IMAGE_HEIGHT,
+    IMAGE_WIDTH,
+    RUNPOD_API_KEY,
+    RUNPOD_BASE_URL,
+    RUNPOD_VIDEO_INSTANCE_ID,
+    UPSCALE_BATCH_SIZE,
+    VIDEO_COMPLETED_N8N_WEBHOOK_URL,
+    WORKFLOW_I2V_PATH,
+)
 from videomerge.services.media import get_duration
 from videomerge.services.metrics import (
     voiceover_length_seconds,
@@ -588,8 +601,8 @@ async def start_video_upscaling(video_id: str, video_path: str, target_resolutio
 
         frame_count = max(1, int(round(duration_seconds * fps)))
 
-    batch_size = max(1, frame_count - 2)
-    logger.info(f"[upscale] Video frame count: {frame_count}, calculated batch_size: {batch_size}")
+    batch_size = UPSCALE_BATCH_SIZE
+    logger.info(f"[upscale] Video frame count: {frame_count}, using batch_size: {batch_size}")
 
     # Convert video to base64
     with open(video_path, "rb") as f:
@@ -598,8 +611,6 @@ async def start_video_upscaling(video_id: str, video_path: str, target_resolutio
     video_data_url = f"data:video/mp4;base64,{video_b64}"
 
     # Call Runpod API
-    from videomerge.config import RUNPOD_API_KEY, COMFY_ORG_API_KEY, RUNPOD_BASE_URL, RUNPOD_VIDEO_INSTANCE_ID
-
     url = f"{RUNPOD_BASE_URL}/v2/{RUNPOD_VIDEO_INSTANCE_ID}/run"
     headers = {
         "Authorization": f"Bearer {RUNPOD_API_KEY}",
@@ -635,8 +646,6 @@ async def start_video_upscaling(video_id: str, video_path: str, target_resolutio
 async def poll_upscale_status(job_id: str) -> str:
     """Polls Runpod for upscaling job completion and returns base64 video."""
     activity.heartbeat()
-
-    from videomerge.config import RUNPOD_API_KEY, RUNPOD_BASE_URL, RUNPOD_VIDEO_INSTANCE_ID, COMFYUI_TIMEOUT_SECONDS, COMFYUI_POLL_INTERVAL_SECONDS
 
     status_url = f"{RUNPOD_BASE_URL}/v2/{RUNPOD_VIDEO_INSTANCE_ID}/status/{job_id}"
     headers = {
@@ -679,7 +688,82 @@ async def poll_upscale_status(job_id: str) -> str:
 
 
 @activity.defn
+async def list_run_videos_for_upscale(run_id: str) -> List[str]:
+    """List video clips (000_*.mp4) in the shared run directory for an upscale run."""
+
+    activity.heartbeat()
+    run_dir = DATA_SHARED_BASE / run_id
+    files = sorted(run_dir.glob("[0-9][0-9][0-9]_*.mp4"), key=lambda p: p.name)
+    return [str(p) for p in files]
+
+
+@activity.defn
+async def list_upscaled_videos(run_id: str) -> List[str]:
+    """List upscaled video clips (*_upscaled.mp4) in the shared run directory."""
+
+    activity.heartbeat()
+    run_dir = DATA_SHARED_BASE / run_id
+    files = sorted(run_dir.glob("*_upscaled.mp4"), key=lambda p: p.name)
+    return [str(p) for p in files]
+
+
+def _strip_base64_data_url(value: str) -> str:
+    """Strip a data URL prefix (e.g. data:video/mp4;base64,...) if present."""
+
+    if value.startswith("data:"):
+        _prefix, _comma, rest = value.partition("base64,")
+        if rest:
+            return rest
+    return value
+
+
+@activity.defn
+async def save_upscaled_video(run_id: str, video_id: str, upscaled_video_b64: str) -> str:
+    """Persist an upscaled video (base64 or data URL) to the shared run directory."""
+
+    activity.heartbeat()
+    run_dir = DATA_SHARED_BASE / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    payload = _strip_base64_data_url(upscaled_video_b64)
+    video_data = base64.b64decode(payload)
+
+    upscaled_path = run_dir / f"{video_id}_upscaled.mp4"
+    with open(upscaled_path, "wb") as f:
+        f.write(video_data)
+
+    logger.info(f"Saved upscaled video to {upscaled_path}")
+    return str(upscaled_path)
+
+
+@activity.defn
+async def encode_file_to_base64(file_path: str) -> str:
+    """Read a file and return its base64-encoded contents."""
+
+    activity.heartbeat()
+    
+    # Read file in chunks to send heartbeats for large files
+    chunk_size = 10 * 1024 * 1024  # 10MB chunks
+    data = bytearray()
+    
+    with open(file_path, "rb") as f:
+        while True:
+            chunk = f.read(chunk_size)
+            if not chunk:
+                break
+            data.extend(chunk)
+            activity.heartbeat()
+    
+    activity.heartbeat()
+    encoded = base64.b64encode(data).decode("utf-8")
+    activity.heartbeat()
+    
+    return encoded
+
+
+@activity.defn
 async def send_upscale_completion_webhook(
+    run_id: str,
     video_id: str,
     status: str,
     upscaled_video_b64: str,
@@ -692,6 +776,7 @@ async def send_upscale_completion_webhook(
     activity.heartbeat()
 
     payload: Dict[str, Any] = {
+        "run_id": run_id,
         "video_id": video_id,
         "status": status,
     }
