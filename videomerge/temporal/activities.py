@@ -125,7 +125,14 @@ async def generate_voiceover(run_id: str, script: str, language: str, elevenlabs
 
     async with httpx.AsyncClient(timeout=120.0) as client:
         response = await client.post(url, json=payload)
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            try:
+                error_detail = response.json()
+                raise RuntimeError(f"N8N voiceover webhook failed with status {response.status_code}: {error_detail}") from exc
+            except Exception:
+                raise RuntimeError(f"N8N voiceover webhook failed with status {response.status_code}: {response.text}") from exc
         data = response.json()
 
     audio_duration_raw = data.get("audio_duration")
@@ -194,7 +201,14 @@ async def generate_scene_prompts(run_id: str, script: str, image_style: str | No
 
     async with httpx.AsyncClient(timeout=120.0) as client:
         response = await client.post(url, json=payload)
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            try:
+                error_detail = response.json()
+                raise RuntimeError(f"N8N prompts webhook failed with status {response.status_code}: {error_detail}") from exc
+            except Exception:
+                raise RuntimeError(f"N8N prompts webhook failed with status {response.status_code}: {response.text}") from exc
         data = response.json()
 
     prompts = data.get("prompts")
@@ -465,7 +479,10 @@ async def download_video(video_url: str, video_id: str) -> str:
 
     async with httpx.AsyncClient(timeout=300.0) as client:  # 5 minute timeout
         response = await client.get(video_url)
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise RuntimeError(f"Failed to download video from {video_url} with status {response.status_code}: {response.text[:500]}") from exc
         with open(video_path, "wb") as f:
             f.write(response.content)
 
@@ -632,7 +649,14 @@ async def start_video_upscaling(video_id: str, video_path: str, target_resolutio
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.post(url, json=payload, headers=headers)
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            try:
+                error_detail = response.json()
+                raise RuntimeError(f"ComfyUI job submission failed with status {response.status_code}: {error_detail}") from exc
+            except Exception:
+                raise RuntimeError(f"ComfyUI job submission failed with status {response.status_code}: {response.text}") from exc
         data = response.json()
         job_id = data.get("id")
         if not job_id:
@@ -657,7 +681,14 @@ async def poll_upscale_status(job_id: str) -> str:
     while time.time() - start_time < COMFYUI_TIMEOUT_SECONDS:
         async with httpx.AsyncClient(timeout=15.0) as client:
             response = await client.get(status_url, headers=headers)
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                try:
+                    error_detail = response.json()
+                    raise RuntimeError(f"ComfyUI status check failed with status {response.status_code}: {error_detail}") from exc
+                except Exception:
+                    raise RuntimeError(f"ComfyUI status check failed with status {response.status_code}: {response.text}") from exc
             data = response.json()
 
         status = data.get("status", "").upper()
