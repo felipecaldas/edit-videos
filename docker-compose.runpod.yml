@@ -24,6 +24,9 @@ services:
       - temporal
     networks:
       - tabario
+    extra_hosts:
+      - "birthdaypartyai.app:host-gateway"
+      - "www.birthdaypartyai.app:host-gateway"
 
   temporal-worker:
     build: .
@@ -46,6 +49,9 @@ services:
     command: ["python", "-m", "videomerge.temporal.worker"]
     networks:
       - tabario
+    extra_hosts:
+      - "birthdaypartyai.app:host-gateway"
+      - "www.birthdaypartyai.app:host-gateway"
 
   temporal:
     image: temporalio/auto-setup:1.21.0

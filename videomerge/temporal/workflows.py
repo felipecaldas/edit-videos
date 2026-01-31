@@ -334,20 +334,13 @@ class VideoUpscalingChildWorkflow:
                 start_video_upscaling, args=[req.video_id, req.video_path, req.target_resolution], **activity_defaults
             )
 
-            # 3. Poll for completion
-            upscaled_video_b64 = await workflow.execute_activity(
-                poll_upscale_status, args=[upscale_job_id], **activity_defaults
+            # 3. Poll for completion and save to disk (returns file path)
+            upscaled_video_path = await workflow.execute_activity(
+                poll_upscale_status, args=[upscale_job_id, req.run_id, req.video_id], **activity_defaults
             )
 
-            # Save upscaled video to shared directory (must be done via activity; workflow sandbox forbids I/O)
-            await workflow.execute_activity(
-                save_upscaled_video,
-                args=[req.run_id, req.video_id, upscaled_video_b64],
-                **activity_defaults,
-            )
-
-            workflow.logger.info(f"Upscaling workflow for video_id={req.video_id} completed successfully.")
-            return upscaled_video_b64
+            workflow.logger.info(f"Upscaling workflow for video_id={req.video_id} completed successfully. Saved to {upscaled_video_path}")
+            return upscaled_video_path
 
         except Exception as e:
             workflow.logger.error(f"Upscaling workflow for video_id={req.video_id} failed: {e}")

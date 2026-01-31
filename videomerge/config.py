@@ -50,13 +50,14 @@ def _load_comfyui_defaults() -> tuple[str, bool, int, float, str, str | None, st
     )
 
 
-def _load_misc_defaults() -> tuple[str, str | None, Path, str]:
+def _load_misc_defaults() -> tuple[str, str | None, str | None, Path, str]:
     """Load miscellaneous configuration values from the environment."""
     voiceover_url = os.getenv("VOICEOVER_SERVICE_URL", "http://192.168.68.51:8083")
+    voiceover_webhook_url = os.getenv("N8N_VOICEOVER_WEBHOOK_URL")
     voiceover_api_key = os.getenv("VOICEOVER_API_KEY")
     subtitle_path = Path(os.getenv("SUBTITLE_CONFIG_PATH", "subtitle_config.json"))
     temporal_url = os.getenv("TEMPORAL_SERVER_URL", "localhost:7233")
-    return voiceover_url, voiceover_api_key, subtitle_path, temporal_url
+    return voiceover_url, voiceover_webhook_url, voiceover_api_key, subtitle_path, temporal_url
 
 
 def _load_image_style_mapping() -> Dict[str, str]:
@@ -112,14 +113,15 @@ def _load_workflow_config(run_env: str) -> tuple[dict[str, str], Path, str, Path
     return workflows, workflows_base_path, default_i2v_workflow, workflow_i2v_path, default_i2v_workflow_name
 
 
-def _load_notifications_defaults() -> tuple[str, str | None]:
+def _load_notifications_defaults() -> tuple[str, str | None, str | None]:
     """Load webhook configuration values from the environment."""
     n8n_webhook = os.getenv(
         "VIDEO_COMPLETED_N8N_WEBHOOK_URL",
         "https://your-n8n-instance.com/webhook/job-complete",
     )
+    prompts_webhook_url = os.getenv("N8N_PROMPTS_WEBHOOK_URL")
     webhook_secret = os.getenv("WEBHOOK_SECRET")
-    return n8n_webhook, webhook_secret
+    return n8n_webhook, prompts_webhook_url, webhook_secret
 
 
 def _apply_config() -> None:
@@ -127,9 +129,10 @@ def _apply_config() -> None:
     global TMP_BASE, DATA_SHARED_BASE, TIKTOK_VIDEOS_ARCHIVE_FOLDER
     TMP_BASE, DATA_SHARED_BASE, TIKTOK_VIDEOS_ARCHIVE_FOLDER = _load_paths()
 
-    global VOICEOVER_SERVICE_URL, VOICEOVER_API_KEY, SUBTITLE_CONFIG_PATH, TEMPORAL_SERVER_URL
+    global VOICEOVER_SERVICE_URL, N8N_VOICEOVER_WEBHOOK_URL, VOICEOVER_API_KEY, SUBTITLE_CONFIG_PATH, TEMPORAL_SERVER_URL
     (
         VOICEOVER_SERVICE_URL,
+        N8N_VOICEOVER_WEBHOOK_URL,
         VOICEOVER_API_KEY,
         SUBTITLE_CONFIG_PATH,
         TEMPORAL_SERVER_URL,
@@ -174,9 +177,10 @@ def _apply_config() -> None:
     global IMAGE_STYLE_TO_WORKFLOW_MAPPING
     IMAGE_STYLE_TO_WORKFLOW_MAPPING = _load_image_style_mapping()
 
-    global VIDEO_COMPLETED_N8N_WEBHOOK_URL, WEBHOOK_SECRET
+    global VIDEO_COMPLETED_N8N_WEBHOOK_URL, N8N_PROMPTS_WEBHOOK_URL, WEBHOOK_SECRET
     (
         VIDEO_COMPLETED_N8N_WEBHOOK_URL,
+        N8N_PROMPTS_WEBHOOK_URL,
         WEBHOOK_SECRET,
     ) = _load_notifications_defaults()
 

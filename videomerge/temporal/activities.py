@@ -16,6 +16,8 @@ from videomerge.config import (
     DATA_SHARED_BASE,
     IMAGE_HEIGHT,
     IMAGE_WIDTH,
+    N8N_PROMPTS_WEBHOOK_URL,
+    N8N_VOICEOVER_WEBHOOK_URL,
     RUNPOD_API_KEY,
     RUNPOD_BASE_URL,
     RUNPOD_VIDEO_INSTANCE_ID,
@@ -113,7 +115,9 @@ async def generate_voiceover(run_id: str, script: str, language: str, elevenlabs
     run_dir.mkdir(parents=True, exist_ok=True)
     audio_path = run_dir / "voiceover.mp3"
 
-    url = "https://birthdaypartyai.app/n8n/webhook/96b6d82c-ee94-46aa-b38d-4c9e77d096b4"
+    url = N8N_VOICEOVER_WEBHOOK_URL
+    if not url:
+        raise RuntimeError("N8N_VOICEOVER_WEBHOOK_URL environment variable is not set")
     payload: Dict[str, Any] = {
         "script": script,
         "runId": run_id,
@@ -190,7 +194,9 @@ async def generate_scene_prompts(run_id: str, script: str, image_style: str | No
     if audio_duration is None:
         raise RuntimeError(f"audio_duration missing in voiceover metadata for run_id={run_id}")
 
-    url = "https://birthdaypartyai.app/n8n/webhook/1f8c887d-0247-4378-b855-934f780bdb0c"
+    url = N8N_PROMPTS_WEBHOOK_URL
+    if not url:
+        raise RuntimeError("N8N_PROMPTS_WEBHOOK_URL environment variable is not set")
     payload: Dict[str, Any] = {
         "script": script,
         "audio_duration": audio_duration,
@@ -667,8 +673,8 @@ async def start_video_upscaling(video_id: str, video_path: str, target_resolutio
 
 
 @activity.defn
-async def poll_upscale_status(job_id: str) -> str:
-    """Polls Runpod for upscaling job completion and returns base64 video."""
+async def poll_upscale_status(job_id: str, run_id: str, video_id: str) -> str:
+    """Polls Runpod for upscaling job completion, saves video to disk, and returns file path."""
     activity.heartbeat()
 
     status_url = f"{RUNPOD_BASE_URL}/v2/{RUNPOD_VIDEO_INSTANCE_ID}/status/{job_id}"
@@ -698,10 +704,23 @@ async def poll_upscale_status(job_id: str) -> str:
             outputs = data.get("output", {}).get("output", [])
             videos = outputs.get("videos", [])
             if videos:
-                video_data = videos[0].get("data")
-                if video_data:
-                    logger.info(f"[upscale] Upscaling completed successfully")
-                    return video_data
+                video_data_b64 = videos[0].get("data")
+                if video_data_b64:
+                    logger.info(f"[upscale] Upscaling completed, saving to disk")
+                    
+                    # Save video directly to disk to avoid Temporal payload size limit
+                    run_dir = DATA_SHARED_BASE / run_id
+                    run_dir.mkdir(parents=True, exist_ok=True)
+                    
+                    payload = _strip_base64_data_url(video_data_b64)
+                    video_data = base64.b64decode(payload)
+                    
+                    upscaled_path = run_dir / f"{video_id}_upscaled.mp4"
+                    with open(upscaled_path, "wb") as f:
+                        f.write(video_data)
+                    
+                    logger.info(f"[upscale] Saved upscaled video to {upscaled_path}")
+                    return str(upscaled_path)
             raise RuntimeError("Runpod job completed but no video output found")
 
         elif status in ("FAILED", "ERROR"):
