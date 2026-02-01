@@ -391,7 +391,7 @@ class VideoUpscalingStitchWorkflow:
             final_path = run_dir / "final_video.mp4"
             final_video_path = await workflow.execute_activity(
                 burn_subtitles_into_video,
-                args=[req.run_id, str(output_path), "pt", str(voiceover_path)],
+                args=[req.run_id, str(output_path), req.voice_language or "en", str(voiceover_path)],
                 start_to_close_timeout=timedelta(minutes=5),
                 retry_policy=retry_policy,
             )
@@ -461,6 +461,7 @@ class VideoUpscalingWorkflow:
                     run_id=req.run_id,
                     user_id=req.user_id,
                     workflow_id=req.workflow_id,
+                    voice_language=req.voice_language,
                 ),
                 id=f"upscale-stitch-{req.run_id}",
             )

@@ -55,6 +55,7 @@ class UpscaleStartRequest(BaseModel):
     user_id: str
     target_resolution: str
     workflow_id: str
+    voice_language: Optional[str] = "en"
 
 
 class UpscaleChildRequest(BaseModel):
@@ -70,3 +71,4 @@ class UpscaleStitchRequest(BaseModel):
     run_id: str
     user_id: str
     workflow_id: str
+    voice_language: Optional[str] = "en"
