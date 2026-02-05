@@ -6,12 +6,21 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 from videomerge.config import (
+    ACTIVITY_SHORT_TIMEOUT_MINUTES,
     DATA_SHARED_BASE,
+    DEFAULT_ACTIVITY_TIMEOUT_MINUTES,
     ENABLE_VOICEOVER_GEN,
+    GENERATE_SCENES_TIMEOUT_MINUTES,
     IMAGE_HEIGHT,
     IMAGE_STYLE_TO_WORKFLOW_MAPPING,
     IMAGE_WIDTH,
     IMAGE_WORKFLOWS,
+    SETUP_RUN_DIRECTORY_TIMEOUT_SECONDS,
+    TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES,
+    TEMPORAL_UPSCALE_GENERATION_TIMEOUT_MINUTES,
+    TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES,
+    STITCH_TIMEOUT_MINUTES,
+    SUBTITLES_TIMEOUT_MINUTES,
     WORKFLOWS_BASE_PATH,
 )
 from videomerge.models import OrchestrateStartRequest, PromptItem, UpscaleStartRequest, UpscaleChildRequest, UpscaleStitchRequest
@@ -62,7 +71,7 @@ class ProcessSceneWorkflow:
             )
         
         activity_defaults = {
-            "start_to_close_timeout": timedelta(minutes=15),
+            "start_to_close_timeout": timedelta(minutes=DEFAULT_ACTIVITY_TIMEOUT_MINUTES),
             "retry_policy": RetryPolicy(maximum_attempts=3),
         }
 
@@ -82,7 +91,8 @@ class ProcessSceneWorkflow:
                             image_height,
                             comfyui_workflow_name,
                         ],
-                        **activity_defaults,
+                        start_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
+                        retry_policy=activity_defaults["retry_policy"],
                     )
                 except Exception as e:
                     workflow.logger.error(f"Image generation failed for scene {index}: {e}")
@@ -106,7 +116,10 @@ class ProcessSceneWorkflow:
             if prompt.video_prompt:
                 try:
                     video_paths = await workflow.execute_activity(
-                        generate_video_from_image, args=[run_id, prompt.video_prompt, image_input, index], **activity_defaults
+                        generate_video_from_image,
+                        args=[run_id, prompt.video_prompt, image_input, index],
+                        start_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
+                        retry_policy=activity_defaults["retry_policy"],
                     )
                 except Exception as e:
                     workflow.logger.error(f"Video generation failed for scene {index}: {e}")
@@ -135,14 +148,17 @@ class VideoGenerationWorkflow:
             backoff_coefficient=2.0,
         )
         activity_defaults = {
-            "start_to_close_timeout": timedelta(minutes=15),
+            "start_to_close_timeout": timedelta(minutes=DEFAULT_ACTIVITY_TIMEOUT_MINUTES),
             "retry_policy": retry_policy,
         }
 
         try:
             # 1. Setup run directory and save manifest
             run_dir = await workflow.execute_activity(
-                setup_run_directory, args=[req.run_id, req.model_dump()], **activity_defaults
+                setup_run_directory,
+                args=[req.run_id, req.model_dump()],
+                start_to_close_timeout=timedelta(seconds=SETUP_RUN_DIRECTORY_TIMEOUT_SECONDS),
+                retry_policy=RetryPolicy(maximum_attempts=3),
             )
 
             # 2. Generate voiceover (if enabled)
@@ -151,7 +167,8 @@ class VideoGenerationWorkflow:
                 voiceover_path = await workflow.execute_activity(
                     generate_voiceover,
                     args=[req.run_id, req.script, req.language, req.elevenlabs_voice_id],
-                    **activity_defaults,
+                    start_to_close_timeout=timedelta(minutes=ACTIVITY_SHORT_TIMEOUT_MINUTES),
+                    retry_policy=retry_policy,
                 )
             else:
                 workflow.logger.info("Skipping voiceover generation as ENABLE_VOICEOVER_GEN is false.")
@@ -172,7 +189,8 @@ class VideoGenerationWorkflow:
             scene_prompts = await workflow.execute_activity(
                 generate_scene_prompts,
                 args=[req.run_id, req.script, image_style],
-                **activity_defaults,
+                start_to_close_timeout=timedelta(minutes=GENERATE_SCENES_TIMEOUT_MINUTES),
+                retry_policy=retry_policy,
             )
 
             image_width = int(req.image_width) if req.image_width is not None else int(IMAGE_WIDTH)
@@ -243,12 +261,18 @@ class VideoGenerationWorkflow:
 
             # 6. Stitch all video clips together with the voiceover
             stitched_video_path = await workflow.execute_activity(
-                stitch_videos, args=[req.run_id, video_paths, voiceover_path], **activity_defaults
+                stitch_videos,
+                args=[req.run_id, video_paths, voiceover_path],
+                start_to_close_timeout=timedelta(minutes=ACTIVITY_SHORT_TIMEOUT_MINUTES),
+                retry_policy=retry_policy,
             )
 
             # 7. Burn subtitles into the final video
             final_video_path = await workflow.execute_activity(
-                burn_subtitles_into_video, args=[req.run_id, stitched_video_path, req.language, voiceover_path], **activity_defaults
+                burn_subtitles_into_video,
+                args=[req.run_id, stitched_video_path, req.language, voiceover_path],
+                start_to_close_timeout=timedelta(minutes=ACTIVITY_SHORT_TIMEOUT_MINUTES),
+                retry_policy=retry_policy,
             )
 
             # Collect generated image filenames from prompts for webhook payload
@@ -274,7 +298,8 @@ class VideoGenerationWorkflow:
                     image_files,
                     voiceover_path,
                 ],
-                **activity_defaults,
+                start_to_close_timeout=timedelta(minutes=ACTIVITY_SHORT_TIMEOUT_MINUTES),
+                retry_policy=retry_policy,
             )
 
             workflow.logger.info(f"Workflow for run_id={req.run_id} completed successfully.")
@@ -300,7 +325,8 @@ class VideoGenerationWorkflow:
                     voiceover_path if "voiceover_path" in locals() else "",
                     str(e),
                 ],
-                **activity_defaults,
+                start_to_close_timeout=timedelta(minutes=ACTIVITY_SHORT_TIMEOUT_MINUTES),
+                retry_policy=retry_policy,
             )
             raise
 
@@ -319,24 +345,33 @@ class VideoUpscalingChildWorkflow:
             backoff_coefficient=2.0,
         )
         activity_defaults = {
-            "start_to_close_timeout": timedelta(minutes=15),
+            "start_to_close_timeout": timedelta(minutes=DEFAULT_ACTIVITY_TIMEOUT_MINUTES),
             "retry_policy": retry_policy,
         }
 
         try:
             # 1. Setup run directory and save manifest
             run_dir = await workflow.execute_activity(
-                setup_run_directory, args=[req.run_id, req.model_dump()], **activity_defaults
+                setup_run_directory,
+                args=[req.run_id, req.model_dump()],
+                start_to_close_timeout=timedelta(seconds=SETUP_RUN_DIRECTORY_TIMEOUT_SECONDS),
+                retry_policy=RetryPolicy(maximum_attempts=3),
             )
 
             # 2. Prepare and call Runpod upscaling
             upscale_job_id = await workflow.execute_activity(
-                start_video_upscaling, args=[req.video_id, req.video_path, req.target_resolution], **activity_defaults
+                start_video_upscaling,
+                args=[req.video_id, req.video_path, req.target_resolution],
+                start_to_close_timeout=timedelta(minutes=TEMPORAL_UPSCALE_GENERATION_TIMEOUT_MINUTES),
+                retry_policy=retry_policy,
             )
 
             # 3. Poll for completion and save to disk (returns file path)
             upscaled_video_path = await workflow.execute_activity(
-                poll_upscale_status, args=[upscale_job_id, req.run_id, req.video_id], **activity_defaults
+                poll_upscale_status,
+                args=[upscale_job_id, req.run_id, req.video_id],
+                start_to_close_timeout=timedelta(minutes=TEMPORAL_UPSCALE_GENERATION_TIMEOUT_MINUTES),
+                retry_policy=retry_policy,
             )
 
             workflow.logger.info(f"Upscaling workflow for video_id={req.video_id} completed successfully. Saved to {upscaled_video_path}")
@@ -361,7 +396,7 @@ class VideoUpscalingStitchWorkflow:
             backoff_coefficient=2.0,
         )
         activity_defaults = {
-            "start_to_close_timeout": timedelta(minutes=15),
+            "start_to_close_timeout": timedelta(minutes=DEFAULT_ACTIVITY_TIMEOUT_MINUTES),
             "retry_policy": retry_policy,
         }
 
@@ -383,7 +418,7 @@ class VideoUpscalingStitchWorkflow:
             await workflow.execute_activity(
                 stitch_videos,
                 args=[req.run_id, [str(p) for p in upscaled_files], str(voiceover_path)],
-                start_to_close_timeout=timedelta(minutes=7),
+                start_to_close_timeout=timedelta(minutes=STITCH_TIMEOUT_MINUTES),
                 retry_policy=retry_policy,
             )
 
@@ -392,7 +427,7 @@ class VideoUpscalingStitchWorkflow:
             final_video_path = await workflow.execute_activity(
                 burn_subtitles_into_video,
                 args=[req.run_id, str(output_path), req.voice_language or "en", str(voiceover_path)],
-                start_to_close_timeout=timedelta(minutes=5),
+                start_to_close_timeout=timedelta(minutes=SUBTITLES_TIMEOUT_MINUTES),
                 retry_policy=retry_policy,
             )
 
@@ -418,7 +453,7 @@ class VideoUpscalingWorkflow:
             backoff_coefficient=2.0,
         )
         activity_defaults = {
-            "start_to_close_timeout": timedelta(minutes=15),
+            "start_to_close_timeout": timedelta(minutes=DEFAULT_ACTIVITY_TIMEOUT_MINUTES),
             "retry_policy": retry_policy,
         }
 

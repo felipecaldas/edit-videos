@@ -12,6 +12,9 @@ import requests
 from videomerge.config import (
     COMFYUI_TIMEOUT_SECONDS,
     COMFYUI_POLL_INTERVAL_SECONDS,
+    RUNPOD_IMAGE_HTTP_TIMEOUT_SECONDS,
+    RUNPOD_VIDEO_HTTP_TIMEOUT_SECONDS,
+    RUNPOD_VIDEO_OUTPUT_HTTP_TIMEOUT_SECONDS,
     RUNPOD_API_KEY,
 )
 from videomerge.services.comfyui.base import ComfyUIClient, ClientType
@@ -132,7 +135,13 @@ class RunPodComfyUIClient(ComfyUIClient):
             headers = self._default_headers()
             logger.debug("[comfyui] RunPod T2I payload: %s", json.dumps(payload, indent=2))
             
-            resp = self._make_request("POST", url, json=payload, timeout=30, headers=headers)
+            resp = self._make_request(
+                "POST",
+                url,
+                json=payload,
+                timeout=RUNPOD_IMAGE_HTTP_TIMEOUT_SECONDS,
+                headers=headers,
+            )
             if not resp.ok:
                 try:
                     logger.error("[comfyui] RunPod /run error: status=%s body=%s", resp.status_code, resp.text)
@@ -229,7 +238,13 @@ class RunPodComfyUIClient(ComfyUIClient):
             headers = self._default_headers()
             logger.debug("[comfyui] RunPod I2V payload: %s", json.dumps(payload, indent=2))
             
-            resp = self._make_request("POST", url, json=payload, timeout=30, headers=headers)
+            resp = self._make_request(
+                "POST",
+                url,
+                json=payload,
+                timeout=RUNPOD_VIDEO_HTTP_TIMEOUT_SECONDS,
+                headers=headers,
+            )
             if not resp.ok:
                 try:
                     logger.error("[comfyui] RunPod /run error: status=%s body=%s", resp.status_code, resp.text)
@@ -266,7 +281,17 @@ class RunPodComfyUIClient(ComfyUIClient):
                 status_url = f"{self.base_url}/v2/{self.instance_id}/status/{prompt_id}"
                 logger.debug("[comfyui] Polling RunPod status at %s", status_url)
                 
-                resp = self._make_request("GET", status_url, timeout=15, headers=self._default_headers())
+                status_timeout = (
+                    RUNPOD_IMAGE_HTTP_TIMEOUT_SECONDS
+                    if self.client_type == ClientType.IMAGE
+                    else RUNPOD_VIDEO_HTTP_TIMEOUT_SECONDS
+                )
+                resp = self._make_request(
+                    "GET",
+                    status_url,
+                    timeout=status_timeout,
+                    headers=self._default_headers(),
+                )
                 resp.raise_for_status()
                 data = resp.json()
                 
@@ -390,7 +415,18 @@ class RunPodComfyUIClient(ComfyUIClient):
             logger.info("[comfyui] Downloading RunPod output %s from %s", hint, url)
             
             try:
-                r = self._make_request("GET", url, stream=True, timeout=60, headers=self._default_headers())
+                output_timeout = (
+                    RUNPOD_IMAGE_HTTP_TIMEOUT_SECONDS
+                    if self.client_type == ClientType.IMAGE
+                    else RUNPOD_VIDEO_OUTPUT_HTTP_TIMEOUT_SECONDS
+                )
+                r = self._make_request(
+                    "GET",
+                    url,
+                    stream=True,
+                    timeout=output_timeout,
+                    headers=self._default_headers(),
+                )
                 r.raise_for_status()
                 dest_dir.mkdir(parents=True, exist_ok=True)
                 content_type = r.headers.get("Content-Type", "application/octet-stream")
@@ -442,7 +478,17 @@ class RunPodComfyUIClient(ComfyUIClient):
         
         url = f"{self.base_url}/output/{hint}"
         try:
-            r = self._make_request("GET", url, timeout=60, headers=self._default_headers())
+            output_timeout = (
+                RUNPOD_IMAGE_HTTP_TIMEOUT_SECONDS
+                if self.client_type == ClientType.IMAGE
+                else RUNPOD_VIDEO_OUTPUT_HTTP_TIMEOUT_SECONDS
+            )
+            r = self._make_request(
+                "GET",
+                url,
+                timeout=output_timeout,
+                headers=self._default_headers(),
+            )
             r.raise_for_status()
             return hint, r.content
         except Exception as e:
@@ -455,7 +501,19 @@ class RunPodComfyUIClient(ComfyUIClient):
         files = {"file": (filename, content, "application/octet-stream")}
         data = {"overwrite": "true" if overwrite else "false"}
         logger.info("[comfyui] Uploading image to RunPod: %s", filename)
-        resp = self._make_request("POST", url, files=files, data=data, timeout=60, headers=self._default_headers())
+        upload_timeout = (
+            RUNPOD_IMAGE_HTTP_TIMEOUT_SECONDS
+            if self.client_type == ClientType.IMAGE
+            else RUNPOD_VIDEO_OUTPUT_HTTP_TIMEOUT_SECONDS
+        )
+        resp = self._make_request(
+            "POST",
+            url,
+            files=files,
+            data=data,
+            timeout=upload_timeout,
+            headers=self._default_headers(),
+        )
         if not resp.ok:
             try:
                 logger.error("[comfyui] RunPod upload error: status=%s body=%s", resp.status_code, resp.text)

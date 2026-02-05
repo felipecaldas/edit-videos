@@ -14,14 +14,22 @@ from videomerge.config import (
     COMFYUI_TIMEOUT_SECONDS,
     COMFY_ORG_API_KEY,
     DATA_SHARED_BASE,
+    IMAGE_JOB_TIMEOUT_SECONDS,
+    IMAGE_POLL_INTERVAL_SECONDS,
     IMAGE_HEIGHT,
     IMAGE_WIDTH,
     N8N_PROMPTS_WEBHOOK_URL,
     N8N_VOICEOVER_WEBHOOK_URL,
+    N8N_WEBHOOK_TIMEOUT_SECONDS,
+    RUNPOD_UPSCALE_HTTP_TIMEOUT_SECONDS,
     RUNPOD_API_KEY,
     RUNPOD_BASE_URL,
     RUNPOD_VIDEO_INSTANCE_ID,
     UPSCALE_BATCH_SIZE,
+    UPSCALE_JOB_TIMEOUT_SECONDS,
+    UPSCALE_POLL_INTERVAL_SECONDS,
+    VIDEO_JOB_TIMEOUT_SECONDS,
+    VIDEO_POLL_INTERVAL_SECONDS,
     VIDEO_COMPLETED_N8N_WEBHOOK_URL,
     WORKFLOW_I2V_PATH,
 )
@@ -127,7 +135,7 @@ async def generate_voiceover(run_id: str, script: str, language: str, elevenlabs
 
     logger.info(f"[voiceover] Calling N8N webhook for run_id={run_id}")
 
-    async with httpx.AsyncClient(timeout=120.0) as client:
+    async with httpx.AsyncClient(timeout=float(N8N_WEBHOOK_TIMEOUT_SECONDS)) as client:
         response = await client.post(url, json=payload)
         try:
             response.raise_for_status()
@@ -205,7 +213,7 @@ async def generate_scene_prompts(run_id: str, script: str, image_style: str | No
 
     logger.info(f"[prompts] Calling N8N prompts webhook for run_id={run_id}")
 
-    async with httpx.AsyncClient(timeout=120.0) as client:
+    async with httpx.AsyncClient(timeout=float(N8N_WEBHOOK_TIMEOUT_SECONDS)) as client:
         response = await client.post(url, json=payload)
         try:
             response.raise_for_status()
@@ -265,7 +273,12 @@ async def generate_image(
         image_width=width,
         image_height=height,
     )
-    filenames = await asyncio.to_thread(client.poll_until_complete, prompt_id, timeout_s=600, poll_interval_s=15)
+    filenames = await asyncio.to_thread(
+        client.poll_until_complete,
+        prompt_id,
+        timeout_s=int(IMAGE_JOB_TIMEOUT_SECONDS),
+        poll_interval_s=float(IMAGE_POLL_INTERVAL_SECONDS),
+    )
     duration = time.time() - start_time
 
     if length_bucket is not None:
@@ -334,7 +347,12 @@ async def generate_video_from_image(run_id: str, video_prompt: str, image_input:
         template_path=WORKFLOW_I2V_PATH,
         run_id=run_id,
     )
-    video_hints = await asyncio.to_thread(client.poll_until_complete, prompt_id, timeout_s=600, poll_interval_s=15)
+    video_hints = await asyncio.to_thread(
+        client.poll_until_complete,
+        prompt_id,
+        timeout_s=int(VIDEO_JOB_TIMEOUT_SECONDS),
+        poll_interval_s=float(VIDEO_POLL_INTERVAL_SECONDS),
+    )
     saved_files = await asyncio.to_thread(client.download_outputs, video_hints, run_dir)
     duration = time.time() - start_time
 
@@ -653,7 +671,7 @@ async def start_video_upscaling(video_id: str, video_path: str, target_resolutio
 
     logger.info(f"[upscale] Calling Runpod upscaling API for video_id={video_id}")
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(timeout=float(RUNPOD_UPSCALE_HTTP_TIMEOUT_SECONDS)) as client:
         response = await client.post(url, json=payload, headers=headers)
         try:
             response.raise_for_status()
@@ -684,8 +702,8 @@ async def poll_upscale_status(job_id: str, run_id: str, video_id: str) -> str:
     }
 
     start_time = time.time()
-    while time.time() - start_time < COMFYUI_TIMEOUT_SECONDS:
-        async with httpx.AsyncClient(timeout=15.0) as client:
+    while time.time() - start_time < UPSCALE_JOB_TIMEOUT_SECONDS:
+        async with httpx.AsyncClient(timeout=float(RUNPOD_UPSCALE_HTTP_TIMEOUT_SECONDS)) as client:
             response = await client.get(status_url, headers=headers)
             try:
                 response.raise_for_status()
@@ -728,10 +746,10 @@ async def poll_upscale_status(job_id: str, run_id: str, video_id: str) -> str:
             raise RuntimeError(f"Runpod upscaling failed: {error_msg}")
 
         elif status in ("IN_QUEUE", "RUNNING", "IN_PROGRESS"):
-            await asyncio.sleep(COMFYUI_POLL_INTERVAL_SECONDS)
+            await asyncio.sleep(UPSCALE_POLL_INTERVAL_SECONDS)
             continue
         else:
-            await asyncio.sleep(COMFYUI_POLL_INTERVAL_SECONDS)
+            await asyncio.sleep(UPSCALE_POLL_INTERVAL_SECONDS)
             continue
 
     raise TimeoutError(f"Timed out waiting for Runpod upscaling job {job_id}")

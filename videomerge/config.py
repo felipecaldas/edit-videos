@@ -50,14 +50,97 @@ def _load_comfyui_defaults() -> tuple[str, bool, int, float, str, str | None, st
     )
 
 
-def _load_misc_defaults() -> tuple[str, str | None, str | None, Path, str]:
+def _load_misc_defaults() -> tuple[
+    str,
+    str | None,
+    str | None,
+    Path,
+    str,
+    int,
+    int,
+    int,
+    int,
+    int,
+    int,
+    int,
+    int,
+    int,
+    int,
+    int,
+    int,
+    int,
+    int,
+    int,
+    float,
+    int,
+    float,
+    int,
+    float,
+]:
     """Load miscellaneous configuration values from the environment."""
     voiceover_url = os.getenv("VOICEOVER_SERVICE_URL", "http://192.168.68.51:8083")
     voiceover_webhook_url = os.getenv("N8N_VOICEOVER_WEBHOOK_URL")
     voiceover_api_key = os.getenv("VOICEOVER_API_KEY")
     subtitle_path = Path(os.getenv("SUBTITLE_CONFIG_PATH", "subtitle_config.json"))
     temporal_url = os.getenv("TEMPORAL_SERVER_URL", "localhost:7233")
-    return voiceover_url, voiceover_webhook_url, voiceover_api_key, subtitle_path, temporal_url
+    generate_scenes_timeout_minutes = int(os.getenv("GENERATE_SCENES_TIMEOUT_MINUTES", "5"))
+    default_activity_timeout_minutes = int(os.getenv("DEFAULT_ACTIVITY_TIMEOUT_MINUTES", "15"))
+    stitch_timeout_minutes = int(os.getenv("STITCH_TIMEOUT_MINUTES", "7"))
+    subtitles_timeout_minutes = int(os.getenv("SUBTITLES_TIMEOUT_MINUTES", "5"))
+    n8n_webhook_timeout_seconds = int(os.getenv("N8N_WEBHOOK_TIMEOUT_SECONDS", "300"))
+    setup_run_directory_timeout_seconds = int(os.getenv("SETUP_RUN_DIRECTORY_TIMEOUT_SECONDS", "5"))
+    activity_short_timeout_minutes = int(os.getenv("ACTIVITY_SHORT_TIMEOUT_MINUTES", "5"))
+
+    temporal_image_generation_timeout_minutes = int(
+        os.getenv("TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES", "15")
+    )
+    temporal_video_generation_timeout_minutes = int(
+        os.getenv("TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES", "15")
+    )
+    temporal_upscale_generation_timeout_minutes = int(
+        os.getenv("TEMPORAL_UPSCALE_GENERATION_TIMEOUT_MINUTES", "30")
+    )
+
+    runpod_image_http_timeout_seconds = int(os.getenv("RUNPOD_IMAGE_HTTP_TIMEOUT_SECONDS", "30"))
+    runpod_video_http_timeout_seconds = int(os.getenv("RUNPOD_VIDEO_HTTP_TIMEOUT_SECONDS", "30"))
+    runpod_video_output_http_timeout_seconds = int(
+        os.getenv("RUNPOD_VIDEO_OUTPUT_HTTP_TIMEOUT_SECONDS", "120")
+    )
+    runpod_upscale_http_timeout_seconds = int(os.getenv("RUNPOD_UPSCALE_HTTP_TIMEOUT_SECONDS", "30"))
+
+    image_job_timeout_seconds = int(os.getenv("IMAGE_JOB_TIMEOUT_SECONDS", "600"))
+    image_poll_interval_seconds = float(os.getenv("IMAGE_POLL_INTERVAL_SECONDS", "5"))
+    video_job_timeout_seconds = int(os.getenv("VIDEO_JOB_TIMEOUT_SECONDS", "600"))
+    video_poll_interval_seconds = float(os.getenv("VIDEO_POLL_INTERVAL_SECONDS", "5"))
+    upscale_job_timeout_seconds = int(os.getenv("UPSCALE_JOB_TIMEOUT_SECONDS", "1800"))
+    upscale_poll_interval_seconds = float(os.getenv("UPSCALE_POLL_INTERVAL_SECONDS", "5"))
+    return (
+        voiceover_url,
+        voiceover_webhook_url,
+        voiceover_api_key,
+        subtitle_path,
+        temporal_url,
+        generate_scenes_timeout_minutes,
+        default_activity_timeout_minutes,
+        stitch_timeout_minutes,
+        subtitles_timeout_minutes,
+        n8n_webhook_timeout_seconds,
+        setup_run_directory_timeout_seconds,
+        activity_short_timeout_minutes,
+        temporal_image_generation_timeout_minutes,
+        temporal_video_generation_timeout_minutes,
+        temporal_upscale_generation_timeout_minutes,
+        runpod_image_http_timeout_seconds,
+        runpod_video_http_timeout_seconds,
+        runpod_video_output_http_timeout_seconds,
+        runpod_upscale_http_timeout_seconds,
+        image_job_timeout_seconds,
+        image_poll_interval_seconds,
+        video_job_timeout_seconds,
+        video_poll_interval_seconds,
+        upscale_job_timeout_seconds,
+        upscale_poll_interval_seconds,
+    )
 
 
 def _load_image_style_mapping() -> Dict[str, str]:
@@ -130,12 +213,42 @@ def _apply_config() -> None:
     TMP_BASE, DATA_SHARED_BASE, TIKTOK_VIDEOS_ARCHIVE_FOLDER = _load_paths()
 
     global VOICEOVER_SERVICE_URL, N8N_VOICEOVER_WEBHOOK_URL, VOICEOVER_API_KEY, SUBTITLE_CONFIG_PATH, TEMPORAL_SERVER_URL
+    global GENERATE_SCENES_TIMEOUT_MINUTES, DEFAULT_ACTIVITY_TIMEOUT_MINUTES, STITCH_TIMEOUT_MINUTES
+    global SUBTITLES_TIMEOUT_MINUTES, N8N_WEBHOOK_TIMEOUT_SECONDS, SETUP_RUN_DIRECTORY_TIMEOUT_SECONDS
+    global ACTIVITY_SHORT_TIMEOUT_MINUTES
+    global TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES, TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES
+    global TEMPORAL_UPSCALE_GENERATION_TIMEOUT_MINUTES
+    global RUNPOD_IMAGE_HTTP_TIMEOUT_SECONDS, RUNPOD_VIDEO_HTTP_TIMEOUT_SECONDS
+    global RUNPOD_VIDEO_OUTPUT_HTTP_TIMEOUT_SECONDS, RUNPOD_UPSCALE_HTTP_TIMEOUT_SECONDS
+    global IMAGE_JOB_TIMEOUT_SECONDS, IMAGE_POLL_INTERVAL_SECONDS
+    global VIDEO_JOB_TIMEOUT_SECONDS, VIDEO_POLL_INTERVAL_SECONDS
+    global UPSCALE_JOB_TIMEOUT_SECONDS, UPSCALE_POLL_INTERVAL_SECONDS
     (
         VOICEOVER_SERVICE_URL,
         N8N_VOICEOVER_WEBHOOK_URL,
         VOICEOVER_API_KEY,
         SUBTITLE_CONFIG_PATH,
         TEMPORAL_SERVER_URL,
+        GENERATE_SCENES_TIMEOUT_MINUTES,
+        DEFAULT_ACTIVITY_TIMEOUT_MINUTES,
+        STITCH_TIMEOUT_MINUTES,
+        SUBTITLES_TIMEOUT_MINUTES,
+        N8N_WEBHOOK_TIMEOUT_SECONDS,
+        SETUP_RUN_DIRECTORY_TIMEOUT_SECONDS,
+        ACTIVITY_SHORT_TIMEOUT_MINUTES,
+        TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES,
+        TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES,
+        TEMPORAL_UPSCALE_GENERATION_TIMEOUT_MINUTES,
+        RUNPOD_IMAGE_HTTP_TIMEOUT_SECONDS,
+        RUNPOD_VIDEO_HTTP_TIMEOUT_SECONDS,
+        RUNPOD_VIDEO_OUTPUT_HTTP_TIMEOUT_SECONDS,
+        RUNPOD_UPSCALE_HTTP_TIMEOUT_SECONDS,
+        IMAGE_JOB_TIMEOUT_SECONDS,
+        IMAGE_POLL_INTERVAL_SECONDS,
+        VIDEO_JOB_TIMEOUT_SECONDS,
+        VIDEO_POLL_INTERVAL_SECONDS,
+        UPSCALE_JOB_TIMEOUT_SECONDS,
+        UPSCALE_POLL_INTERVAL_SECONDS,
     ) = _load_misc_defaults()
 
     global ENABLE_VOICEOVER_GEN
