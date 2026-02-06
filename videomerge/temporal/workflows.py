@@ -21,6 +21,8 @@ from videomerge.config import (
     TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES,
     STITCH_TIMEOUT_MINUTES,
     SUBTITLES_TIMEOUT_MINUTES,
+    SCENE_CHILD_WORKFLOW_CONCURRENCY,
+    UPSCALE_CHILD_WORKFLOW_CONCURRENCY,
     WORKFLOWS_BASE_PATH,
 )
 from videomerge.models import OrchestrateStartRequest, PromptItem, UpscaleStartRequest, UpscaleChildRequest, UpscaleStitchRequest
@@ -32,8 +34,12 @@ with workflow.unsafe.imports_passed_through():
         generate_voiceover,
         generate_scene_prompts,
         generate_image,
+        start_image_generation,
+        poll_image_generation,
         upload_image_for_video_generation,
         generate_video_from_image,
+        start_video_generation,
+        poll_video_generation,
         stitch_videos,
         burn_subtitles_into_video,
         send_completion_webhook,
@@ -80,8 +86,8 @@ class ProcessSceneWorkflow:
             image_hint = ""
             if prompt.image_prompt:
                 try:
-                    image_hint = await workflow.execute_activity(
-                        generate_image,
+                    image_job_id = await workflow.execute_activity(
+                        start_image_generation,
                         args=[
                             run_id,
                             prompt.image_prompt,
@@ -92,6 +98,15 @@ class ProcessSceneWorkflow:
                             comfyui_workflow_name,
                         ],
                         start_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
+                        retry_policy=activity_defaults["retry_policy"],
+                    )
+
+                    image_hint = await workflow.execute_activity(
+                        poll_image_generation,
+                        args=[image_job_id, run_id, index],
+                        schedule_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
+                        start_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
+                        heartbeat_timeout=timedelta(minutes=2),
                         retry_policy=activity_defaults["retry_policy"],
                     )
                 except Exception as e:
@@ -115,10 +130,19 @@ class ProcessSceneWorkflow:
             video_paths = []
             if prompt.video_prompt:
                 try:
-                    video_paths = await workflow.execute_activity(
-                        generate_video_from_image,
+                    video_job_id = await workflow.execute_activity(
+                        start_video_generation,
                         args=[run_id, prompt.video_prompt, image_input, index],
                         start_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
+                        retry_policy=activity_defaults["retry_policy"],
+                    )
+
+                    video_paths = await workflow.execute_activity(
+                        poll_video_generation,
+                        args=[video_job_id, run_id, index],
+                        schedule_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
+                        start_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
+                        heartbeat_timeout=timedelta(minutes=2),
                         retry_policy=activity_defaults["retry_policy"],
                     )
                 except Exception as e:
@@ -252,9 +276,15 @@ class VideoGenerationWorkflow:
 
             # Collect all video file paths from the child workflows
             video_paths = []
-            results = await asyncio.gather(*scene_processing_tasks)
-            for result_list in results:
-                video_paths.extend(result_list)
+
+            scene_concurrency = max(1, int(SCENE_CHILD_WORKFLOW_CONCURRENCY))
+            workflow.logger.info("Starting scene children with concurrency=%s", scene_concurrency)
+
+            for batch_start in range(0, len(scene_processing_tasks), scene_concurrency):
+                batch = scene_processing_tasks[batch_start : batch_start + scene_concurrency]
+                results = await asyncio.gather(*batch)
+                for result_list in results:
+                    video_paths.extend(result_list)
 
             if not video_paths:
                 raise RuntimeError("No video clips were generated.")
@@ -344,6 +374,14 @@ class VideoUpscalingChildWorkflow:
             initial_interval=timedelta(seconds=10),
             backoff_coefficient=2.0,
         )
+
+        # Polling an existing RunPod job is idempotent and safe to retry.
+        poll_retry_policy = RetryPolicy(
+            maximum_attempts=20,
+            initial_interval=timedelta(seconds=5),
+            backoff_coefficient=1.5,
+            maximum_interval=timedelta(minutes=2),
+        )
         activity_defaults = {
             "start_to_close_timeout": timedelta(minutes=DEFAULT_ACTIVITY_TIMEOUT_MINUTES),
             "retry_policy": retry_policy,
@@ -370,8 +408,11 @@ class VideoUpscalingChildWorkflow:
             upscaled_video_path = await workflow.execute_activity(
                 poll_upscale_status,
                 args=[upscale_job_id, req.run_id, req.video_id],
+                # Allow long queue delays while still treating single attempts as bounded.
+                schedule_to_close_timeout=timedelta(minutes=TEMPORAL_UPSCALE_GENERATION_TIMEOUT_MINUTES),
                 start_to_close_timeout=timedelta(minutes=TEMPORAL_UPSCALE_GENERATION_TIMEOUT_MINUTES),
-                retry_policy=retry_policy,
+                heartbeat_timeout=timedelta(minutes=2),
+                retry_policy=poll_retry_policy,
             )
 
             workflow.logger.info(f"Upscaling workflow for video_id={req.video_id} completed successfully. Saved to {upscaled_video_path}")
@@ -467,27 +508,33 @@ class VideoUpscalingWorkflow:
 
             workflow.logger.info(f"Found {len(video_files)} video files to upscale")
 
-            # Start child workflow for each video file in parallel
-            futures = []
-            for idx, video_file in enumerate(video_files):
-                video_path = str(video_file)
-                child_req = UpscaleChildRequest(
-                    video_path=video_path,
-                    video_id=Path(video_path).stem,  # filename without extension
-                    run_id=req.run_id,
-                    user_id=req.user_id,
-                    target_resolution=req.target_resolution,
-                    workflow_id=req.workflow_id,
-                )
+            concurrency = max(1, int(UPSCALE_CHILD_WORKFLOW_CONCURRENCY))
+            workflow.logger.info("Starting upscaling children with concurrency=%s", concurrency)
 
-                futures.append(workflow.execute_child_workflow(
-                    VideoUpscalingChildWorkflow.run,
-                    child_req,
-                    id=f"upscale-child-{req.run_id}-{idx}",
-                ))
+            # Start child workflows in batches to avoid overloading the RunPod queue.
+            for batch_start in range(0, len(video_files), concurrency):
+                batch = video_files[batch_start : batch_start + concurrency]
+                futures = []
+                for idx, video_file in enumerate(batch, start=batch_start):
+                    video_path = str(video_file)
+                    child_req = UpscaleChildRequest(
+                        video_path=video_path,
+                        video_id=Path(video_path).stem,  # filename without extension
+                        run_id=req.run_id,
+                        user_id=req.user_id,
+                        target_resolution=req.target_resolution,
+                        workflow_id=req.workflow_id,
+                    )
 
-            # Wait for all upscaling children to complete
-            await asyncio.gather(*futures)
+                    futures.append(
+                        workflow.execute_child_workflow(
+                            VideoUpscalingChildWorkflow.run,
+                            child_req,
+                            id=f"upscale-child-{req.run_id}-{idx}",
+                        )
+                    )
+
+                await asyncio.gather(*futures)
 
             # Start stitching workflow
             final_video_path = await workflow.execute_child_workflow(

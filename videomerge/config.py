@@ -76,6 +76,11 @@ def _load_misc_defaults() -> tuple[
     float,
     int,
     float,
+    int,
+    int,
+    int,
+    int | None,
+    int | None,
 ]:
     """Load miscellaneous configuration values from the environment."""
     voiceover_url = os.getenv("VOICEOVER_SERVICE_URL", "http://192.168.68.51:8083")
@@ -114,6 +119,18 @@ def _load_misc_defaults() -> tuple[
     video_poll_interval_seconds = float(os.getenv("VIDEO_POLL_INTERVAL_SECONDS", "5"))
     upscale_job_timeout_seconds = int(os.getenv("UPSCALE_JOB_TIMEOUT_SECONDS", "1800"))
     upscale_poll_interval_seconds = float(os.getenv("UPSCALE_POLL_INTERVAL_SECONDS", "5"))
+
+    upscale_child_workflow_concurrency = int(os.getenv("UPSCALE_CHILD_WORKFLOW_CONCURRENCY", "5"))
+    scene_child_workflow_concurrency = int(os.getenv("SCENE_CHILD_WORKFLOW_CONCURRENCY", "5"))
+
+    upscale_queue_timeout_seconds_raw = os.getenv("UPSCALE_QUEUE_TIMEOUT_SECONDS")
+    upscale_running_timeout_seconds_raw = os.getenv("UPSCALE_RUNNING_TIMEOUT_SECONDS")
+    upscale_queue_timeout_seconds = (
+        int(upscale_queue_timeout_seconds_raw) if upscale_queue_timeout_seconds_raw else None
+    )
+    upscale_running_timeout_seconds = (
+        int(upscale_running_timeout_seconds_raw) if upscale_running_timeout_seconds_raw else None
+    )
     return (
         voiceover_url,
         voiceover_webhook_url,
@@ -140,6 +157,10 @@ def _load_misc_defaults() -> tuple[
         video_poll_interval_seconds,
         upscale_job_timeout_seconds,
         upscale_poll_interval_seconds,
+        upscale_child_workflow_concurrency,
+        scene_child_workflow_concurrency,
+        upscale_queue_timeout_seconds,
+        upscale_running_timeout_seconds,
     )
 
 
@@ -223,6 +244,8 @@ def _apply_config() -> None:
     global IMAGE_JOB_TIMEOUT_SECONDS, IMAGE_POLL_INTERVAL_SECONDS
     global VIDEO_JOB_TIMEOUT_SECONDS, VIDEO_POLL_INTERVAL_SECONDS
     global UPSCALE_JOB_TIMEOUT_SECONDS, UPSCALE_POLL_INTERVAL_SECONDS
+    global UPSCALE_CHILD_WORKFLOW_CONCURRENCY, SCENE_CHILD_WORKFLOW_CONCURRENCY
+    global UPSCALE_QUEUE_TIMEOUT_SECONDS, UPSCALE_RUNNING_TIMEOUT_SECONDS
     (
         VOICEOVER_SERVICE_URL,
         N8N_VOICEOVER_WEBHOOK_URL,
@@ -249,6 +272,10 @@ def _apply_config() -> None:
         VIDEO_POLL_INTERVAL_SECONDS,
         UPSCALE_JOB_TIMEOUT_SECONDS,
         UPSCALE_POLL_INTERVAL_SECONDS,
+        UPSCALE_CHILD_WORKFLOW_CONCURRENCY,
+        SCENE_CHILD_WORKFLOW_CONCURRENCY,
+        UPSCALE_QUEUE_TIMEOUT_SECONDS,
+        UPSCALE_RUNNING_TIMEOUT_SECONDS,
     ) = _load_misc_defaults()
 
     global ENABLE_VOICEOVER_GEN

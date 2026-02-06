@@ -28,6 +28,8 @@ from videomerge.config import (
     UPSCALE_BATCH_SIZE,
     UPSCALE_JOB_TIMEOUT_SECONDS,
     UPSCALE_POLL_INTERVAL_SECONDS,
+    UPSCALE_QUEUE_TIMEOUT_SECONDS,
+    UPSCALE_RUNNING_TIMEOUT_SECONDS,
     VIDEO_JOB_TIMEOUT_SECONDS,
     VIDEO_POLL_INTERVAL_SECONDS,
     VIDEO_COMPLETED_N8N_WEBHOOK_URL,
@@ -67,6 +69,35 @@ logger = get_logger(__name__)
 _metrics_lock = asyncio.Lock()
 _active_runs: set[str] = set()
 _job_start_times: Dict[str, float] = {}
+
+
+async def _run_in_thread_with_heartbeats(
+    fn,
+    *args,
+    heartbeat_interval_s: float = 30.0,
+    **kwargs,
+) -> Any:
+    """Run a blocking function in a thread while periodically heartbeating.
+
+    This is used for long-running polling loops implemented in synchronous client
+    code (e.g., RunPod/ComfyUI polling) so the activity doesn't appear stuck.
+    """
+
+    async def _heartbeat_loop() -> None:
+        while True:
+            await asyncio.sleep(heartbeat_interval_s)
+            _safe_heartbeat()
+
+    _safe_heartbeat()
+    task = asyncio.create_task(_heartbeat_loop())
+    try:
+        return await asyncio.to_thread(fn, *args, **kwargs)
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
 
 def _safe_heartbeat() -> None:
@@ -273,11 +304,12 @@ async def generate_image(
         image_width=width,
         image_height=height,
     )
-    filenames = await asyncio.to_thread(
+    filenames = await _run_in_thread_with_heartbeats(
         client.poll_until_complete,
         prompt_id,
         timeout_s=int(IMAGE_JOB_TIMEOUT_SECONDS),
         poll_interval_s=float(IMAGE_POLL_INTERVAL_SECONDS),
+        heartbeat_interval_s=30.0,
     )
     duration = time.time() - start_time
 
@@ -347,11 +379,12 @@ async def generate_video_from_image(run_id: str, video_prompt: str, image_input:
         template_path=WORKFLOW_I2V_PATH,
         run_id=run_id,
     )
-    video_hints = await asyncio.to_thread(
+    video_hints = await _run_in_thread_with_heartbeats(
         client.poll_until_complete,
         prompt_id,
         timeout_s=int(VIDEO_JOB_TIMEOUT_SECONDS),
         poll_interval_s=float(VIDEO_POLL_INTERVAL_SECONDS),
+        heartbeat_interval_s=30.0,
     )
     saved_files = await asyncio.to_thread(client.download_outputs, video_hints, run_dir)
     duration = time.time() - start_time
@@ -373,6 +406,108 @@ async def generate_video_from_image(run_id: str, video_prompt: str, image_input:
         total_videos_generation_seconds.labels(length_bucket=length_bucket).observe(duration)
 
     logger.info(f"Video generated for prompt index {index}: {renamed_files}")
+    return [str(p) for p in renamed_files]
+
+
+@activity.defn
+async def start_image_generation(
+    run_id: str,
+    prompt_text: str,
+    workflow_path: str,
+    index: int,
+    image_width: int | None = None,
+    image_height: int | None = None,
+    comfyui_workflow_name: str | None = None,
+) -> str:
+    """Submit an image generation job and return the provider job id."""
+
+    activity.heartbeat()
+    logger.info(f"Submitting image generation for prompt index {index}")
+
+    workflow_path_obj = Path(workflow_path)
+    client = get_comfyui_client(ClientType.IMAGE, force_refresh=True)
+
+    width = int(image_width) if image_width is not None else int(IMAGE_WIDTH)
+    height = int(image_height) if image_height is not None else int(IMAGE_HEIGHT)
+    prompt_id = await asyncio.to_thread(
+        client.submit_text_to_image,
+        prompt_text,
+        template_path=workflow_path_obj,
+        comfyui_workflow_name=comfyui_workflow_name,
+        image_width=width,
+        image_height=height,
+    )
+    return prompt_id
+
+
+@activity.defn
+async def poll_image_generation(prompt_id: str, run_id: str, index: int) -> str:
+    """Poll for image completion and return the output hint."""
+
+    activity.heartbeat()
+    logger.info(f"Polling image generation for prompt index {index}")
+
+    client = get_comfyui_client(ClientType.IMAGE, force_refresh=True)
+    filenames = await _run_in_thread_with_heartbeats(
+        client.poll_until_complete,
+        prompt_id,
+        timeout_s=int(IMAGE_JOB_TIMEOUT_SECONDS),
+        poll_interval_s=float(IMAGE_POLL_INTERVAL_SECONDS),
+        heartbeat_interval_s=30.0,
+    )
+    if not filenames:
+        raise RuntimeError(f"Image generation failed for prompt index {index}: No output files.")
+    return filenames[0]
+
+
+@activity.defn
+async def start_video_generation(run_id: str, video_prompt: str, image_input: str, index: int) -> str:
+    """Submit a video generation job and return the provider job id."""
+
+    activity.heartbeat()
+    logger.info(f"Submitting video generation for prompt index {index}")
+
+    client = get_comfyui_client(ClientType.VIDEO, force_refresh=True)
+    prompt_id = await asyncio.to_thread(
+        client.submit_image_to_video,
+        video_prompt,
+        image_input,
+        template_path=WORKFLOW_I2V_PATH,
+        run_id=run_id,
+    )
+    return prompt_id
+
+
+@activity.defn
+async def poll_video_generation(prompt_id: str, run_id: str, index: int) -> List[str]:
+    """Poll for video completion, download outputs, and return saved file paths."""
+
+    activity.heartbeat()
+    run_dir = DATA_SHARED_BASE / run_id
+    logger.info(f"Polling video generation for prompt index {index}")
+
+    client = get_comfyui_client(ClientType.VIDEO, force_refresh=True)
+    video_hints = await _run_in_thread_with_heartbeats(
+        client.poll_until_complete,
+        prompt_id,
+        timeout_s=int(VIDEO_JOB_TIMEOUT_SECONDS),
+        poll_interval_s=float(VIDEO_POLL_INTERVAL_SECONDS),
+        heartbeat_interval_s=30.0,
+    )
+    saved_files = await asyncio.to_thread(client.download_outputs, video_hints, run_dir)
+
+    renamed_files = []
+    for p in saved_files:
+        original_name = p.name
+        if original_name.startswith("000_"):
+            uuid_part = original_name[4:]
+            new_name = f"{index:03d}_{uuid_part}"
+            new_path = p.parent / new_name
+            p.rename(new_path)
+            renamed_files.append(new_path)
+        else:
+            renamed_files.append(p)
+
     return [str(p) for p in renamed_files]
 
 
@@ -701,8 +836,15 @@ async def poll_upscale_status(job_id: str, run_id: str, video_id: str) -> str:
         "Content-Type": "application/json",
     }
 
+    queue_budget = UPSCALE_QUEUE_TIMEOUT_SECONDS
+    running_budget = UPSCALE_RUNNING_TIMEOUT_SECONDS
+
     start_time = time.time()
+    queue_start_time: float | None = None
+    running_start_time: float | None = None
+
     while time.time() - start_time < UPSCALE_JOB_TIMEOUT_SECONDS:
+        activity.heartbeat()
         async with httpx.AsyncClient(timeout=float(RUNPOD_UPSCALE_HTTP_TIMEOUT_SECONDS)) as client:
             response = await client.get(status_url, headers=headers)
             try:
@@ -746,6 +888,21 @@ async def poll_upscale_status(job_id: str, run_id: str, video_id: str) -> str:
             raise RuntimeError(f"Runpod upscaling failed: {error_msg}")
 
         elif status in ("IN_QUEUE", "RUNNING", "IN_PROGRESS"):
+            now = time.time()
+            if status == "IN_QUEUE":
+                queue_start_time = queue_start_time or now
+                if queue_budget is not None and (now - queue_start_time) > queue_budget:
+                    raise TimeoutError(
+                        f"Timed out waiting in Runpod queue for upscaling job {job_id} "
+                        f"after {int(now - queue_start_time)}s"
+                    )
+            else:
+                running_start_time = running_start_time or now
+                if running_budget is not None and (now - running_start_time) > running_budget:
+                    raise TimeoutError(
+                        f"Timed out waiting for Runpod upscaling job {job_id} to finish running "
+                        f"after {int(now - running_start_time)}s"
+                    )
             await asyncio.sleep(UPSCALE_POLL_INTERVAL_SECONDS)
             continue
         else:

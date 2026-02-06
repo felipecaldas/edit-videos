@@ -5,7 +5,16 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from temporalio.client import Client
 from temporalio.worker import Worker
 
-from videomerge.config import TEMPORAL_SERVER_URL
+from videomerge.config import (
+    TEMPORAL_SERVER_URL,
+    TEMPORAL_UPSCALE_GENERATION_TIMEOUT_MINUTES,
+    UPSCALE_JOB_TIMEOUT_SECONDS,
+    UPSCALE_POLL_INTERVAL_SECONDS,
+    VIDEO_JOB_TIMEOUT_SECONDS,
+    VIDEO_POLL_INTERVAL_SECONDS,
+    IMAGE_JOB_TIMEOUT_SECONDS,
+    IMAGE_POLL_INTERVAL_SECONDS,
+)
 from videomerge.services.metrics import registry
 from videomerge.temporal.workflows import VideoGenerationWorkflow, ProcessSceneWorkflow, VideoUpscalingWorkflow, VideoUpscalingChildWorkflow, VideoUpscalingStitchWorkflow
 from videomerge.temporal import activities
@@ -98,6 +107,19 @@ async def main() -> None:
     """Entry point for the Temporal worker."""
     metrics_server = await _start_metrics_server()
 
+    logger.info(
+        "Temporal worker config: upscale_activity_timeout_minutes=%s upscale_job_timeout_seconds=%s "
+        "upscale_poll_interval_seconds=%s image_job_timeout_seconds=%s image_poll_interval_seconds=%s "
+        "video_job_timeout_seconds=%s video_poll_interval_seconds=%s",
+        TEMPORAL_UPSCALE_GENERATION_TIMEOUT_MINUTES,
+        UPSCALE_JOB_TIMEOUT_SECONDS,
+        UPSCALE_POLL_INTERVAL_SECONDS,
+        IMAGE_JOB_TIMEOUT_SECONDS,
+        IMAGE_POLL_INTERVAL_SECONDS,
+        VIDEO_JOB_TIMEOUT_SECONDS,
+        VIDEO_POLL_INTERVAL_SECONDS,
+    )
+
     logger.info("Connecting to Temporal server at %s", TEMPORAL_SERVER_URL)
     client = await Client.connect(TEMPORAL_SERVER_URL)
 
@@ -111,8 +133,12 @@ async def main() -> None:
             activities.generate_voiceover,
             activities.generate_scene_prompts,
             activities.generate_image,
+            activities.start_image_generation,
+            activities.poll_image_generation,
             activities.upload_image_for_video_generation,
             activities.generate_video_from_image,
+            activities.start_video_generation,
+            activities.poll_video_generation,
             activities.stitch_videos,
             activities.burn_subtitles_into_video,
             activities.send_completion_webhook,
