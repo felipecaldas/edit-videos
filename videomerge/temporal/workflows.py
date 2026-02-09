@@ -15,16 +15,17 @@ from videomerge.config import (
     IMAGE_STYLE_TO_WORKFLOW_MAPPING,
     IMAGE_WIDTH,
     IMAGE_WORKFLOWS,
+    SCENE_CHILD_WORKFLOW_CONCURRENCY,
     SETUP_RUN_DIRECTORY_TIMEOUT_SECONDS,
-    TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES,
-    TEMPORAL_UPSCALE_GENERATION_TIMEOUT_MINUTES,
-    TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES,
     STITCH_TIMEOUT_MINUTES,
     SUBTITLES_TIMEOUT_MINUTES,
-    SCENE_CHILD_WORKFLOW_CONCURRENCY,
+    TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES,
+    TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES,
+    TEMPORAL_UPSCALE_GENERATION_TIMEOUT_MINUTES,
     UPSCALE_CHILD_WORKFLOW_CONCURRENCY,
     WORKFLOWS_BASE_PATH,
 )
+from videomerge.utils.video_dimensions import calculate_video_dimensions
 from videomerge.models import OrchestrateStartRequest, PromptItem, UpscaleStartRequest, UpscaleChildRequest, UpscaleStitchRequest
 
 # Import all activities from the activities module
@@ -65,7 +66,10 @@ class ProcessSceneWorkflow:
         index: int,
         image_width: int,
         image_height: int,
+        video_width: int,
+        video_height: int,
         comfyui_workflow_name: str | None = None,
+        image_style: str | None = None,
     ) -> list[str]:
         """Workflow to process a single scene (image -> video)."""
         # Log parent workflow info for correlation
@@ -96,6 +100,7 @@ class ProcessSceneWorkflow:
                             image_width,
                             image_height,
                             comfyui_workflow_name,
+                            image_style,
                         ],
                         start_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
                         retry_policy=activity_defaults["retry_policy"],
@@ -132,7 +137,7 @@ class ProcessSceneWorkflow:
                 try:
                     video_job_id = await workflow.execute_activity(
                         start_video_generation,
-                        args=[run_id, prompt.video_prompt, image_input, index],
+                        args=[run_id, prompt.video_prompt, image_input, index, video_width, video_height],
                         start_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
                         retry_policy=activity_defaults["retry_policy"],
                     )
@@ -210,15 +215,24 @@ class VideoGenerationWorkflow:
 
             # 3. Generate prompts for each scene via external service
             image_style = req.image_style or "default"
+            timeout_retry_policy = RetryPolicy(
+                maximum_attempts=3,
+                initial_interval=timedelta(seconds=10),
+                backoff_coefficient=2.0,
+                non_retryable_error_types=["RuntimeError"],
+            )
             scene_prompts = await workflow.execute_activity(
                 generate_scene_prompts,
                 args=[req.run_id, req.script, image_style],
                 start_to_close_timeout=timedelta(minutes=GENERATE_SCENES_TIMEOUT_MINUTES),
-                retry_policy=retry_policy,
+                retry_policy=timeout_retry_policy,
             )
 
             image_width = int(req.image_width) if req.image_width is not None else int(IMAGE_WIDTH)
             image_height = int(req.image_height) if req.image_height is not None else int(IMAGE_HEIGHT)
+            
+            # Calculate video dimensions from format and resolution
+            video_width, video_height = calculate_video_dimensions(req.video_format, req.target_resolution)
 
             # 4. Process each scene as a child workflow
             scene_processing_tasks = []
@@ -227,6 +241,9 @@ class VideoGenerationWorkflow:
 
             # Map image_style to comfyui_workflow_name using the YAML config
             comfyui_workflow_name: str | None = IMAGE_STYLE_TO_WORKFLOW_MAPPING.get(image_style)
+
+            # Resolve z_image_style: only applies when using the Z Image model
+            z_image_style: str | None = req.z_image_style if comfyui_workflow_name == "z-image-photo" else None
 
             # Get parent workflow info for child correlation
             parent_workflow_id = workflow.info().workflow_id
@@ -254,7 +271,10 @@ class VideoGenerationWorkflow:
                         i,
                         image_width,
                         image_height,
+                        video_width,
+                        video_height,
                         comfyui_workflow_name,
+                        z_image_style,
                     ],
                     id=child_id,
                     memo={

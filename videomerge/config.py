@@ -180,6 +180,7 @@ def _load_image_style_mapping() -> Dict[str, str]:
             "disney": "image_disneyizt_t2i",
             "crayon-drawing": "crayon-drawing",
             "anime": "T2I_ChromaAnimaAIO",
+            "z-image-photo": "z-image-photo",
         }
     except Exception as e:
         raise RuntimeError(f"Failed to load image style mapping: {e}")

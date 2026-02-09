@@ -45,6 +45,7 @@ class ComfyUIClient(ABC):
         client_id: Optional[str] = None,
         image_width: Optional[int] = None,
         image_height: Optional[int] = None,
+        image_style: Optional[str] = None,
     ) -> str:
         """Submit a text-to-image workflow and return the prompt_id."""
         pass

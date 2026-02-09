@@ -66,6 +66,13 @@ from videomerge.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+
+class ActivityTimeoutError(Exception):
+    """Raised when an activity fails due to an upstream HTTP timeout."""
+
+    pass
+
+
 _metrics_lock = asyncio.Lock()
 _active_runs: set[str] = set()
 _job_start_times: Dict[str, float] = {}
@@ -244,17 +251,22 @@ async def generate_scene_prompts(run_id: str, script: str, image_style: str | No
 
     logger.info(f"[prompts] Calling N8N prompts webhook for run_id={run_id}")
 
-    async with httpx.AsyncClient(timeout=float(N8N_WEBHOOK_TIMEOUT_SECONDS)) as client:
-        response = await client.post(url, json=payload)
-        try:
-            response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
+    try:
+        async with httpx.AsyncClient(timeout=float(N8N_WEBHOOK_TIMEOUT_SECONDS)) as client:
+            response = await client.post(url, json=payload)
             try:
-                error_detail = response.json()
-                raise RuntimeError(f"N8N prompts webhook failed with status {response.status_code}: {error_detail}") from exc
-            except Exception:
-                raise RuntimeError(f"N8N prompts webhook failed with status {response.status_code}: {response.text}") from exc
-        data = response.json()
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                try:
+                    error_detail = response.json()
+                    raise RuntimeError(f"N8N prompts webhook failed with status {response.status_code}: {error_detail}") from exc
+                except Exception:
+                    raise RuntimeError(f"N8N prompts webhook failed with status {response.status_code}: {response.text}") from exc
+            data = response.json()
+    except httpx.TimeoutException as exc:
+        raise ActivityTimeoutError(
+            f"N8N prompts webhook timed out after {N8N_WEBHOOK_TIMEOUT_SECONDS}s for run_id={run_id}"
+        ) from exc
 
     prompts = data.get("prompts")
     if not isinstance(prompts, list):
@@ -279,6 +291,7 @@ async def generate_image(
     image_width: int | None = None,
     image_height: int | None = None,
     comfyui_workflow_name: str | None = None,
+    image_style: str | None = None,
 ) -> str:
     """Generates a single image from a text prompt."""
     activity.heartbeat()
@@ -303,6 +316,7 @@ async def generate_image(
         comfyui_workflow_name=comfyui_workflow_name,
         image_width=width,
         image_height=height,
+        image_style=image_style,
     )
     filenames = await _run_in_thread_with_heartbeats(
         client.poll_until_complete,
@@ -418,6 +432,7 @@ async def start_image_generation(
     image_width: int | None = None,
     image_height: int | None = None,
     comfyui_workflow_name: str | None = None,
+    image_style: str | None = None,
 ) -> str:
     """Submit an image generation job and return the provider job id."""
 
@@ -436,6 +451,7 @@ async def start_image_generation(
         comfyui_workflow_name=comfyui_workflow_name,
         image_width=width,
         image_height=height,
+        image_style=image_style,
     )
     return prompt_id
 
@@ -461,7 +477,7 @@ async def poll_image_generation(prompt_id: str, run_id: str, index: int) -> str:
 
 
 @activity.defn
-async def start_video_generation(run_id: str, video_prompt: str, image_input: str, index: int) -> str:
+async def start_video_generation(run_id: str, video_prompt: str, image_input: str, index: int, video_width: int, video_height: int) -> str:
     """Submit a video generation job and return the provider job id."""
 
     activity.heartbeat()
@@ -474,6 +490,8 @@ async def start_video_generation(run_id: str, video_prompt: str, image_input: st
         image_input,
         template_path=WORKFLOW_I2V_PATH,
         run_id=run_id,
+        video_width=video_width,
+        video_height=video_height,
     )
     return prompt_id
 

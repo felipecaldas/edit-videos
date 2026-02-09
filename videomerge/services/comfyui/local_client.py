@@ -24,6 +24,7 @@ class LocalComfyUIClient(ComfyUIClient):
         client_id: Optional[str] = None,
         image_width: Optional[int] = None,
         image_height: Optional[int] = None,
+        image_style: Optional[str] = None,
     ) -> str:
         """Submit a text-to-image workflow to local ComfyUI."""
         client_id = client_id or str(uuid.uuid4())

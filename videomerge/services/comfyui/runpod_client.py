@@ -83,6 +83,7 @@ class RunPodComfyUIClient(ComfyUIClient):
         client_id: Optional[str] = None,
         image_width: Optional[int] = None,
         image_height: Optional[int] = None,
+        image_style: Optional[str] = None,
     ) -> str:
         """Submit a text-to-image workflow to RunPod serverless ComfyUI.
         
@@ -93,6 +94,7 @@ class RunPodComfyUIClient(ComfyUIClient):
             client_id: Optional client ID
             image_width: Image width in pixels
             image_height: Image height in pixels
+            image_style: Optional image style passed directly to the RunPod worker
             
         Returns:
             Job ID from RunPod
@@ -116,19 +118,22 @@ class RunPodComfyUIClient(ComfyUIClient):
             if not self.comfy_org_api_key:
                 logger.warning("[comfyui] COMFY_ORG_API_KEY is not configured; RunPod may reject the request")
 
-            payload = {
-                "input": {
-                    "prompt": prompt_text,
-                    "width": width,
-                    "height": height,
-                    "comfyui_workflow_name": comfyui_workflow_name,
-                    "comfy_org_api_key": self.comfy_org_api_key,
-                }
+            input_payload = {
+                "prompt": prompt_text,
+                "width": width,
+                "height": height,
+                "comfyui_workflow_name": comfyui_workflow_name,
+                "comfy_org_api_key": self.comfy_org_api_key,
             }
+
+            if image_style is not None:
+                input_payload["image_style"] = image_style
+
+            payload = {"input": input_payload}
             
             logger.info(
-                "[comfyui] Submitting text->image to RunPod: workflow=%s, size=%dx%d",
-                comfyui_workflow_name, width, height
+                "[comfyui] Submitting text->image to RunPod: workflow=%s, size=%dx%d, image_style=%s",
+                comfyui_workflow_name, width, height, image_style
             )
 
             url = f"{self.base_url}/v2/{self.instance_id}/run"

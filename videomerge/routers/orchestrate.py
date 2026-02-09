@@ -4,7 +4,7 @@ from temporalio.client import Client
 from temporalio.exceptions import WorkflowAlreadyStartedError
 from temporalio.common import WorkflowIDReusePolicy
 
-from videomerge.config import TEMPORAL_SERVER_URL
+from videomerge.config import IMAGE_STYLE_TO_WORKFLOW_MAPPING, TEMPORAL_SERVER_URL
 from videomerge.models import OrchestrateStartRequest
 from videomerge.temporal.workflows import VideoGenerationWorkflow
 from videomerge.services.metrics import jobs_enqueued_total
@@ -23,6 +23,24 @@ async def orchestrate_start(req: OrchestrateStartRequest):
         workflow_id,
         req.run_id,
     )
+
+    # Validate image_style maps to a known ComfyUI workflow before enqueuing
+    image_style = req.image_style or "default"
+    comfyui_workflow_name = IMAGE_STYLE_TO_WORKFLOW_MAPPING.get(image_style)
+    if not comfyui_workflow_name:
+        supported = sorted(IMAGE_STYLE_TO_WORKFLOW_MAPPING.keys())
+        logger.warning(
+            "Rejected orchestrate request run_id=%s: unknown image_style '%s'",
+            req.run_id,
+            image_style,
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unknown image_style '{image_style}'. "
+                f"Supported styles: {supported}"
+            ),
+        )
 
     # Ensure the workflow_id is propagated into the workflow request payload
     req.workflow_id = workflow_id
