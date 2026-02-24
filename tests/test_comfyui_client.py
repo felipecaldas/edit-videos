@@ -277,7 +277,8 @@ class TestRunPodComfyUIClient:
         }
         mock_request.return_value = mock_response
 
-        with pytest.raises(RuntimeError, match="RunPod job failed: Processing failed"):
+        from videomerge.exceptions import NonRetryableError
+        with pytest.raises(NonRetryableError, match="RunPod job failed: Processing failed"):
             self.client.poll_until_complete("runpod-job-id", timeout_s=60, poll_interval_s=1)
 
     @patch('videomerge.services.comfyui_client.time.sleep')
@@ -292,7 +293,8 @@ class TestRunPodComfyUIClient:
         }
         mock_request.return_value = mock_response
 
-        with pytest.raises(RuntimeError, match="RunPod job failed: Schema error"):
+        from videomerge.exceptions import NonRetryableError
+        with pytest.raises(NonRetryableError, match="RunPod job failed: Schema error"):
             self.client.poll_until_complete("runpod-job-id", timeout_s=60, poll_interval_s=1)
 
         mock_sleep.assert_not_called()

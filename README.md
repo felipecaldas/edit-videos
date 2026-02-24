@@ -392,6 +392,8 @@ This endpoint accepts a JSON payload with all the necessary information to creat
   ],
   "language": "English (US)",
   "image_style": "crayon_drawing",
+  "video_format": "9:16",
+  "target_resolution": "480p",
   "run_id": "unique-run-identifier"
 }
 ```
@@ -405,6 +407,14 @@ This endpoint accepts a JSON payload with all the necessary information to creat
   - **Unknown/invalid languages default to `"en-US"` for safety**
   Defaults to `"pt"`.
 - **`image_style`**: (Optional) A string specifying which ComfyUI workflow to use for text-to-image generation (e.g., `"crayon_drawing"`, `"default"`).
+- **`video_format`**: (Required) Video aspect ratio format. Supported values:
+  - `"9:16"` - Vertical video (portrait orientation)
+  - `"16:9"` - Horizontal video (landscape orientation)  
+  - `"1:1"` - Square video
+- **`target_resolution`**: (Required) Target video resolution. Supported values:
+  - `"480p"` - SD quality (e.g., 360x640 for 9:16, 854x480 for 16:9)
+  - `"720p"` - HD quality (e.g., 405x720 for 9:16, 1280x720 for 16:9)
+  - `"1080p"` - Full HD quality (e.g., 607x1080 for 9:16, 1920x1080 for 16:9)
 - **`run_id`**: A unique identifier for this specific job run.
 
 ### Workflow

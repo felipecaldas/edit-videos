@@ -308,6 +308,8 @@ def submit_image_to_video(
     template_path: Path,
     client_id: Optional[str] = None,
     run_id: Optional[str] = None,
+    video_width: Optional[int] = None,
+    video_height: Optional[int] = None,
 ) -> str:
     """Submit a ComfyUI image->video workflow and return the prompt_id.
     
@@ -317,54 +319,19 @@ def submit_image_to_video(
         template_path: Path to the workflow template
         client_id: Optional client ID
         run_id: Optional run ID for debugging purposes
+        video_width: Optional video width in pixels
+        video_height: Optional video height in pixels
     """
-    client_id = client_id or str(uuid.uuid4())
-    
-    # Load the template as a string and validate placeholders
-    workflow_str = _load_workflow_template(template_path)
-    if "{{ VIDEO_PROMPT }}" not in workflow_str:
-        raise ValueError(f"Workflow template '{template_path.name}' is missing '{{ VIDEO_PROMPT }}' placeholder.")
-    if "{{ INPUT_IMAGE }}" not in workflow_str:
-        raise ValueError(f"Workflow template '{template_path.name}' is missing '{{ INPUT_IMAGE }}' placeholder.")
-
-    # Escape and replace placeholders
-    escaped_prompt = json.dumps(prompt_text)[1:-1]
-    escaped_image = json.dumps(image_input)[1:-1]
-    final_workflow_str = workflow_str.replace("{{ VIDEO_PROMPT }}", escaped_prompt)
-    final_workflow_str = final_workflow_str.replace("{{ INPUT_IMAGE }}", escaped_image)
-
-    # Parse the final string into a JSON object
-    try:
-        workflow_json = json.loads(final_workflow_str)
-    except json.JSONDecodeError as e:
-        logger.error("[comfyui] Failed to parse I2V workflow JSON after injection: %s", e)
-        raise ValueError(f"Failed to parse I2V workflow JSON: {e}")
-
-    # The workflow might be wrapped in a 'prompt' key, or it might be the root object
-    if isinstance(workflow_json, dict) and isinstance(workflow_json.get("prompt"), dict):
-        workflow_payload = workflow_json["prompt"]
-    else:
-        workflow_payload = workflow_json
-
-    # Dimension check (optional, can be done on the parsed payload)
-    _warn_if_bad_dimensions(workflow_payload)
-
-    url = f"{COMFYUI_URL.rstrip('/')}/prompt"
-    payload = {"prompt": workflow_payload, "client_id": client_id}
-    logger.info("[comfyui] Submitting image->video prompt to %s (image=%s)", url, image_input)
-    resp = _make_comfyui_request("POST", url, json=payload, timeout=30, headers=_default_headers())
-    # If ComfyUI rejects the workflow (400), log the response body for diagnostics
-    if not resp.ok:
-        try:
-            logger.error("[comfyui] /prompt error: status=%s body=%s", resp.status_code, resp.text)
-        except Exception:
-            pass
-        resp.raise_for_status()
-    data = resp.json()
-    prompt_id = data.get("prompt_id") or data.get("promptId")
-    if not prompt_id:
-        raise ValueError(f"Unexpected response from ComfyUI: {data}")
-    return prompt_id
+    client = get_comfyui_client(ClientType.VIDEO)
+    return client.submit_image_to_video(
+        prompt_text,
+        image_input,
+        template_path=template_path,
+        client_id=client_id,
+        run_id=run_id,
+        video_width=video_width,
+        video_height=video_height,
+    )
 
 
 def download_outputs(file_hints: List[str], dest_dir: Path) -> List[Path]:

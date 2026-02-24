@@ -3,6 +3,8 @@ import base64
 import pytest
 from unittest.mock import Mock, patch, mock_open
 
+from videomerge.exceptions import NonRetryableError
+
 
 def _subprocess_result(stdout: str) -> Mock:
     result = Mock()
@@ -240,3 +242,49 @@ class TestPollUpscaleStatus:
 
         # Initial heartbeat + at least one per loop.
         assert heartbeat_mock.call_count >= 2
+
+    def test_poll_upscale_status_raises_non_retryable_on_failed(self, tmp_path):
+        """RunPod FAILED status should raise NonRetryableError immediately."""
+        try:
+            from videomerge.temporal import activities as activities_module
+        except ImportError as e:
+            pytest.skip(f"videomerge.temporal.activities import failed in this environment: {e}")
+
+        job_id = "job-fail"
+        run_id = "run-fail"
+        video_id = "clip-fail"
+
+        class _FakeResponse:
+            def raise_for_status(self) -> None:
+                return None
+
+            def json(self):
+                return {"status": "FAILED", "error": "image_style does not meet the constraints"}
+
+        class _FakeClient:
+            def __init__(self, *args, **kwargs):
+                return None
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def get(self, url, headers):
+                return _FakeResponse()
+
+        with (
+            patch.object(activities_module.activity, "heartbeat", autospec=True),
+            patch.object(activities_module, "DATA_SHARED_BASE", tmp_path),
+            patch.object(activities_module, "RUNPOD_BASE_URL", "https://api.runpod.ai"),
+            patch.object(activities_module, "RUNPOD_VIDEO_INSTANCE_ID", "instance-123"),
+            patch.object(activities_module, "RUNPOD_API_KEY", "test-key"),
+            patch.object(activities_module, "UPSCALE_JOB_TIMEOUT_SECONDS", 9999),
+            patch.object(activities_module, "UPSCALE_POLL_INTERVAL_SECONDS", 1),
+            patch.object(activities_module, "UPSCALE_QUEUE_TIMEOUT_SECONDS", None),
+            patch.object(activities_module, "UPSCALE_RUNNING_TIMEOUT_SECONDS", None),
+            patch.object(activities_module.httpx, "AsyncClient", _FakeClient),
+        ):
+            with pytest.raises(NonRetryableError, match="image_style does not meet the constraints"):
+                asyncio.run(activities_module.poll_upscale_status(job_id, run_id, video_id))

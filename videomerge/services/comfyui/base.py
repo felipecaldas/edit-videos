@@ -59,6 +59,8 @@ class ComfyUIClient(ABC):
         template_path: Path,
         client_id: Optional[str] = None,
         run_id: Optional[str] = None,
+        video_width: Optional[int] = None,
+        video_height: Optional[int] = None,
     ) -> str:
         """Submit an image-to-video workflow and return the prompt_id.
         
@@ -68,6 +70,8 @@ class ComfyUIClient(ABC):
             template_path: Path to the workflow template
             client_id: Optional client ID
             run_id: Optional run ID for debugging purposes
+            video_width: Optional video width in pixels
+            video_height: Optional video height in pixels
         """
         pass
 

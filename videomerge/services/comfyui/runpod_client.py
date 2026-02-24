@@ -10,6 +10,8 @@ from urllib.parse import urlparse
 import requests
 
 from videomerge.config import (
+    IMAGE_WIDTH,
+    IMAGE_HEIGHT,
     COMFYUI_TIMEOUT_SECONDS,
     COMFYUI_POLL_INTERVAL_SECONDS,
     RUNPOD_IMAGE_HTTP_TIMEOUT_SECONDS,
@@ -17,6 +19,7 @@ from videomerge.config import (
     RUNPOD_VIDEO_OUTPUT_HTTP_TIMEOUT_SECONDS,
     RUNPOD_API_KEY,
 )
+from videomerge.exceptions import NonRetryableError
 from videomerge.services.comfyui.base import ComfyUIClient, ClientType
 from videomerge.services.comfyui.utils import (
     extract_runpod_outputs,
@@ -179,6 +182,8 @@ class RunPodComfyUIClient(ComfyUIClient):
         client_id: Optional[str] = None,
         run_id: Optional[str] = None,
         comfyui_workflow_name: Optional[str] = None,
+        video_width: Optional[int] = None,
+        video_height: Optional[int] = None,
     ) -> str:
         """Submit an image-to-video workflow to RunPod serverless ComfyUI.
         
@@ -189,6 +194,8 @@ class RunPodComfyUIClient(ComfyUIClient):
             client_id: Optional client ID
             run_id: Optional run ID for debugging purposes
             comfyui_workflow_name: The workflow name to use (defaults to video_wan2_2_14B_i2v)
+            video_width: Optional video width in pixels (defaults to IMAGE_WIDTH from config)
+            video_height: Optional video height in pixels (defaults to IMAGE_HEIGHT from config)
             
         Returns:
             Job ID from RunPod
@@ -217,8 +224,8 @@ class RunPodComfyUIClient(ComfyUIClient):
             if not self.comfy_org_api_key:
                 logger.warning("[comfyui] COMFY_ORG_API_KEY is not configured; RunPod may reject the request")
 
-            width = 480
-            height = 640
+            width = video_width if video_width is not None else IMAGE_WIDTH
+            height = video_height if video_height is not None else IMAGE_HEIGHT
             output_resolution = max(width, height)
 
             payload = {
@@ -319,8 +326,8 @@ class RunPodComfyUIClient(ComfyUIClient):
                 elif status in ("FAILED", "ERROR"):
                     error_msg = data.get("error", "Unknown RunPod error")
                     logger.error("[comfyui] RunPod job FAILED for prompt_id=%s: %s", prompt_id, error_msg)
-                    logger.error("[comfyui] About to raise RuntimeError to stop temporal workflow")
-                    raise RuntimeError(f"RunPod job failed: {error_msg}")
+                    logger.error("[comfyui] Raising NonRetryableError to immediately fail the Temporal activity")
+                    raise NonRetryableError(f"RunPod job failed: {error_msg}")
                 elif status in ("IN_QUEUE", "RUNNING", "IN_PROGRESS"):
                     attempts += 1
                     logger.debug("[comfyui] RunPod job status=%s. attempt=%d, sleep %.1fs", status, attempts, poll_interval_s)

@@ -4,6 +4,25 @@ from pathlib import Path
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
+from temporalio.exceptions import ApplicationError
+
+
+def _root_cause_message(exc: BaseException) -> str:
+    """Walk the __cause__ chain and return the deepest non-empty message.
+
+    Temporal wraps activity/child-workflow errors in ``ActivityError`` or
+    ``ChildWorkflowError`` whose ``str()`` is a generic label like
+    "Activity task failed".  The real message (e.g. the RunPod validation
+    error) lives in the innermost ``__cause__``.
+    """
+    msg = str(exc)
+    current = exc
+    while current.__cause__ is not None:
+        current = current.__cause__
+        cause_msg = str(current)
+        if cause_msg:
+            msg = cause_msg
+    return msg
 
 from videomerge.config import (
     ACTIVITY_SHORT_TIMEOUT_MINUTES,
@@ -80,9 +99,15 @@ class ProcessSceneWorkflow:
                 f"workflow_id={parent_info.workflow_id}, run_id={parent_info.run_id}"
             )
         
+        # Retry transient failures but immediately fail on permanent errors
+        # (e.g. invalid image_style, RunPod validation failures).
+        scene_retry_policy = RetryPolicy(
+            maximum_attempts=3,
+            non_retryable_error_types=["NonRetryableError"],
+        )
         activity_defaults = {
             "start_to_close_timeout": timedelta(minutes=DEFAULT_ACTIVITY_TIMEOUT_MINUTES),
-            "retry_policy": RetryPolicy(maximum_attempts=3),
+            "retry_policy": scene_retry_policy,
         }
 
         try:
@@ -103,7 +128,7 @@ class ProcessSceneWorkflow:
                             image_style,
                         ],
                         start_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
-                        retry_policy=activity_defaults["retry_policy"],
+                        retry_policy=scene_retry_policy,
                     )
 
                     image_hint = await workflow.execute_activity(
@@ -112,11 +137,15 @@ class ProcessSceneWorkflow:
                         schedule_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
                         start_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
                         heartbeat_timeout=timedelta(minutes=2),
-                        retry_policy=activity_defaults["retry_policy"],
+                        retry_policy=scene_retry_policy,
                     )
                 except Exception as e:
-                    workflow.logger.error(f"Image generation failed for scene {index}: {e}")
-                    raise RuntimeError(f"Scene {index} image generation failed: {e}")
+                    detail = _root_cause_message(e)
+                    workflow.logger.error(f"Image generation failed for scene {index}: {detail}")
+                    raise ApplicationError(
+                        f"Scene {index} image generation failed: {detail}",
+                        non_retryable=True,
+                    )
 
             if not image_hint:
                 workflow.logger.warning(f"Skipping scene {index} as no image was generated.")
@@ -128,8 +157,12 @@ class ProcessSceneWorkflow:
                     upload_image_for_video_generation, args=[image_hint], **activity_defaults
                 )
             except Exception as e:
-                workflow.logger.error(f"Image upload failed for scene {index}: {e}")
-                raise RuntimeError(f"Scene {index} image upload failed: {e}")
+                detail = _root_cause_message(e)
+                workflow.logger.error(f"Image upload failed for scene {index}: {detail}")
+                raise ApplicationError(
+                    f"Scene {index} image upload failed: {detail}",
+                    non_retryable=True,
+                )
 
             # 3. Generate video from image
             video_paths = []
@@ -151,16 +184,25 @@ class ProcessSceneWorkflow:
                         retry_policy=activity_defaults["retry_policy"],
                     )
                 except Exception as e:
-                    workflow.logger.error(f"Video generation failed for scene {index}: {e}")
-                    raise RuntimeError(f"Scene {index} video generation failed: {e}")
+                    detail = _root_cause_message(e)
+                    workflow.logger.error(f"Video generation failed for scene {index}: {detail}")
+                    raise ApplicationError(
+                        f"Scene {index} video generation failed: {detail}",
+                        non_retryable=True,
+                    )
 
             workflow.logger.info(f"Scene {index} completed successfully, generated {len(video_paths)} video files")
             return video_paths
             
-        except Exception as e:
-            workflow.logger.error(f"Scene {index} workflow failed: {e}")
-            # Re-raise the exception to ensure the workflow is marked as FAILED
+        except ApplicationError:
             raise
+        except Exception as e:
+            detail = _root_cause_message(e)
+            workflow.logger.error(f"Scene {index} workflow failed: {detail}")
+            raise ApplicationError(
+                f"Scene {index} workflow failed: {detail}",
+                non_retryable=True,
+            )
 
 
 @workflow.defn
@@ -307,7 +349,10 @@ class VideoGenerationWorkflow:
                     video_paths.extend(result_list)
 
             if not video_paths:
-                raise RuntimeError("No video clips were generated.")
+                raise ApplicationError(
+                    "No video clips were generated.",
+                    non_retryable=True,
+                )
 
             # 6. Stitch all video clips together with the voiceover
             stitched_video_path = await workflow.execute_activity(
@@ -356,7 +401,8 @@ class VideoGenerationWorkflow:
             return final_video_path
 
         except Exception as e:
-            workflow.logger.error(f"Workflow for run_id={req.run_id} failed: {e}")
+            detail = _root_cause_message(e)
+            workflow.logger.error(f"Workflow for run_id={req.run_id} failed: {detail}")
             # Send failure webhook
             await workflow.execute_activity(
                 send_completion_webhook,
@@ -373,12 +419,17 @@ class VideoGenerationWorkflow:
                         if (p.get("image_prompt") if isinstance(p, dict) else getattr(p, "image_prompt", None))
                     ],
                     voiceover_path if "voiceover_path" in locals() else "",
-                    str(e),
+                    detail,
                 ],
                 start_to_close_timeout=timedelta(minutes=ACTIVITY_SHORT_TIMEOUT_MINUTES),
                 retry_policy=retry_policy,
             )
-            raise
+            if isinstance(e, ApplicationError):
+                raise
+            raise ApplicationError(
+                f"Workflow for run_id={req.run_id} failed: {detail}",
+                non_retryable=True,
+            ) from e
 
 
 @workflow.defn
@@ -395,12 +446,14 @@ class VideoUpscalingChildWorkflow:
             backoff_coefficient=2.0,
         )
 
-        # Polling an existing RunPod job is idempotent and safe to retry.
+        # Polling an existing RunPod job is idempotent and safe to retry,
+        # but permanent failures (e.g. FAILED status) should not be retried.
         poll_retry_policy = RetryPolicy(
             maximum_attempts=20,
             initial_interval=timedelta(seconds=5),
             backoff_coefficient=1.5,
             maximum_interval=timedelta(minutes=2),
+            non_retryable_error_types=["NonRetryableError"],
         )
         activity_defaults = {
             "start_to_close_timeout": timedelta(minutes=DEFAULT_ACTIVITY_TIMEOUT_MINUTES),
@@ -438,9 +491,15 @@ class VideoUpscalingChildWorkflow:
             workflow.logger.info(f"Upscaling workflow for video_id={req.video_id} completed successfully. Saved to {upscaled_video_path}")
             return upscaled_video_path
 
-        except Exception as e:
-            workflow.logger.error(f"Upscaling workflow for video_id={req.video_id} failed: {e}")
+        except ApplicationError:
             raise
+        except Exception as e:
+            detail = _root_cause_message(e)
+            workflow.logger.error(f"Upscaling workflow for video_id={req.video_id} failed: {detail}")
+            raise ApplicationError(
+                f"Upscaling workflow for video_id={req.video_id} failed: {detail}",
+                non_retryable=True,
+            ) from e
 
 
 @workflow.defn
@@ -495,9 +554,15 @@ class VideoUpscalingStitchWorkflow:
             workflow.logger.info(f"Upscaling stitch workflow for run_id={req.run_id} completed successfully.")
             return final_video_path
 
-        except Exception as e:
-            workflow.logger.error(f"Upscaling stitch workflow for run_id={req.run_id} failed: {e}")
+        except ApplicationError:
             raise
+        except Exception as e:
+            detail = _root_cause_message(e)
+            workflow.logger.error(f"Upscaling stitch workflow for run_id={req.run_id} failed: {detail}")
+            raise ApplicationError(
+                f"Upscaling stitch workflow for run_id={req.run_id} failed: {detail}",
+                non_retryable=True,
+            ) from e
 
 
 @workflow.defn
@@ -586,7 +651,8 @@ class VideoUpscalingWorkflow:
             return "completed"
 
         except Exception as e:
-            workflow.logger.error(f"Parent upscaling workflow for run_id={req.run_id} failed: {e}")
+            detail = _root_cause_message(e)
+            workflow.logger.error(f"Parent upscaling workflow for run_id={req.run_id} failed: {detail}")
             # Send failure webhook
             await workflow.execute_activity(
                 send_upscale_completion_webhook,
@@ -596,8 +662,13 @@ class VideoUpscalingWorkflow:
                     "failed",
                     req.workflow_id,
                     req.user_id,
-                    str(e),
+                    detail,
                 ],
                 **activity_defaults,
             )
-            raise
+            if isinstance(e, ApplicationError):
+                raise
+            raise ApplicationError(
+                f"Parent upscaling workflow for run_id={req.run_id} failed: {detail}",
+                non_retryable=True,
+            ) from e

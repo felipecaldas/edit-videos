@@ -85,6 +85,8 @@ class LocalComfyUIClient(ComfyUIClient):
         template_path: Path,
         client_id: Optional[str] = None,
         run_id: Optional[str] = None,
+        video_width: Optional[int] = None,
+        video_height: Optional[int] = None,
     ) -> str:
         """Submit an image-to-video workflow to local ComfyUI."""
         client_id = client_id or str(uuid.uuid4())

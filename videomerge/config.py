@@ -33,8 +33,8 @@ def _load_comfyui_defaults() -> tuple[str, bool, int, float, str, str | None, st
     run_env = os.getenv("RUN_ENV", "local").lower()
     image_instance_id = os.getenv("RUNPOD_IMAGE_INSTANCE_ID")
     video_instance_id = os.getenv("RUNPOD_VIDEO_INSTANCE_ID")
-    image_width = int(os.getenv("IMAGE_WIDTH", "480"))
-    image_height = int(os.getenv("IMAGE_HEIGHT", "480"))
+    image_width = int(os.getenv("IMAGE_WIDTH", "360"))
+    image_height = int(os.getenv("IMAGE_HEIGHT", "640"))
     upscale_batch_size = int(os.getenv("UPSCALE_BATCH_SIZE", "21"))
     return (
         comfyui_url,
@@ -81,6 +81,7 @@ def _load_misc_defaults() -> tuple[
     int,
     int | None,
     int | None,
+    float,
 ]:
     """Load miscellaneous configuration values from the environment."""
     voiceover_url = os.getenv("VOICEOVER_SERVICE_URL", "http://192.168.68.51:8083")
@@ -131,6 +132,7 @@ def _load_misc_defaults() -> tuple[
     upscale_running_timeout_seconds = (
         int(upscale_running_timeout_seconds_raw) if upscale_running_timeout_seconds_raw else None
     )
+    video_speed_factor = float(os.getenv("VIDEO_SPEED_FACTOR", "1.0"))
     return (
         voiceover_url,
         voiceover_webhook_url,
@@ -161,6 +163,7 @@ def _load_misc_defaults() -> tuple[
         scene_child_workflow_concurrency,
         upscale_queue_timeout_seconds,
         upscale_running_timeout_seconds,
+        video_speed_factor,
     )
 
 
@@ -247,6 +250,7 @@ def _apply_config() -> None:
     global UPSCALE_JOB_TIMEOUT_SECONDS, UPSCALE_POLL_INTERVAL_SECONDS
     global UPSCALE_CHILD_WORKFLOW_CONCURRENCY, SCENE_CHILD_WORKFLOW_CONCURRENCY
     global UPSCALE_QUEUE_TIMEOUT_SECONDS, UPSCALE_RUNNING_TIMEOUT_SECONDS
+    global VIDEO_SPEED_FACTOR
     (
         VOICEOVER_SERVICE_URL,
         N8N_VOICEOVER_WEBHOOK_URL,
@@ -277,6 +281,7 @@ def _apply_config() -> None:
         SCENE_CHILD_WORKFLOW_CONCURRENCY,
         UPSCALE_QUEUE_TIMEOUT_SECONDS,
         UPSCALE_RUNNING_TIMEOUT_SECONDS,
+        VIDEO_SPEED_FACTOR,
     ) = _load_misc_defaults()
 
     global ENABLE_VOICEOVER_GEN

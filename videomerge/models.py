@@ -1,5 +1,5 @@
 from typing import List, Optional, Union
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class PromptItem(BaseModel):
@@ -43,8 +43,10 @@ class OrchestrateStartRequest(BaseModel):
     language: str = "en"
     image_style: str
     z_image_style: Optional[str] = None
-    image_width: Optional[int] = None
-    image_height: Optional[int] = None
+    image_width: Optional[int] = Field(None, description="Optional image width in pixels for image generation. If not provided, uses default from config.")
+    image_height: Optional[int] = Field(None, description="Optional image height in pixels for image generation. If not provided, uses default from config.")
+    video_format: str = Field(..., description="Video aspect ratio format. Supported values: '9:16' (vertical), '16:9' (horizontal), '1:1' (square)")
+    target_resolution: str = Field(..., description="Target video resolution. Supported values: '480p', '720p', '1080p'")
     run_id: str
     elevenlabs_voice_id: str
     workflow_id: Optional[str] = None

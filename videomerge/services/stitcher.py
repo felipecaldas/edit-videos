@@ -133,12 +133,25 @@ def concat_videos(video_paths: Iterable[Path], output_path: Path) -> Path:
     return output_path
 
 
-def concat_videos_with_voiceover(video_paths: Iterable[Path], voiceover_path: Path, output_path: Path) -> Path:
+def concat_videos_with_voiceover(
+    video_paths: Iterable[Path],
+    voiceover_path: Path,
+    output_path: Path,
+    video_speed_factor: float = 1.0,
+) -> Path:
     """Concat the given video files and mix with the given voiceover into output_path using ffmpeg.
 
     Robust against non-seekable/network volumes by writing to a local temp file first
     (so ffmpeg can safely move the moov atom with +faststart), then moving to output.
     If we hit an "Error writing trailer" from ffmpeg, retry once without +faststart.
+
+    Args:
+        video_paths: Iterable of video clip paths to concatenate.
+        voiceover_path: Path to the voiceover audio file.
+        output_path: Destination path for the final stitched video.
+        video_speed_factor: Playback speed multiplier for the video stream
+            (e.g. 1.2 = 20 % faster). The voiceover is left untouched so
+            it acts as the timing reference via ``-shortest``.
     """
     video_paths = [Path(p) for p in video_paths]
     voiceover_path = Path(voiceover_path)
@@ -214,6 +227,14 @@ def concat_videos_with_voiceover(video_paths: Iterable[Path], voiceover_path: Pa
         for p in selected_paths:
             f.write(f"file '{Path(p).resolve().as_posix()}'\n")
 
+    apply_speed = video_speed_factor and video_speed_factor != 1.0
+    if apply_speed:
+        pts_factor = 1.0 / video_speed_factor
+        logger.info(
+            "[stitcher] Applying %.2fx video speed (setpts=%.6f*PTS)",
+            video_speed_factor, pts_factor,
+        )
+
     def _run_ffmpeg(dst: Path, with_faststart: bool) -> subprocess.CompletedProcess:
         cmd = [
             'ffmpeg', '-hide_banner', '-loglevel', 'error', '-y',
@@ -221,8 +242,15 @@ def concat_videos_with_voiceover(video_paths: Iterable[Path], voiceover_path: Pa
             '-i', str(concat_list),
             '-i', str(voiceover_path),
         ]
-        # When trimming to match the voiceover, avoid apad so audio remains the limiting stream.
-        if use_apad:
+        # Build filter_complex: optionally speed up video, always normalise audio.
+        if apply_speed:
+            video_filter = f"[0:v]setpts={pts_factor:.6f}*PTS[vid]"
+            if use_apad:
+                audio_filter = "[1:a]loudnorm=I=-14:TP=-1.5:LRA=7,apad[aud]"
+            else:
+                audio_filter = "[1:a]loudnorm=I=-14:TP=-1.5:LRA=7[aud]"
+            cmd += ['-filter_complex', f'{video_filter};{audio_filter}', '-map', '[vid]', '-map', '[aud]']
+        elif use_apad:
             cmd += ['-filter_complex', '[1:a]loudnorm=I=-14:TP=-1.5:LRA=7,apad[aud]', '-map', '0:v:0', '-map', '[aud]']
         else:
             cmd += ['-filter_complex', '[1:a]loudnorm=I=-14:TP=-1.5:LRA=7[aud]', '-map', '0:v:0', '-map', '[aud]']

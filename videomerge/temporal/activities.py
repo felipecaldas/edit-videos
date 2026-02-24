@@ -9,6 +9,8 @@ from typing import List, Dict, Any, Optional
 import httpx
 from temporalio import activity
 
+from videomerge.exceptions import NonRetryableError
+
 from videomerge.config import (
     COMFYUI_POLL_INTERVAL_SECONDS,
     COMFYUI_TIMEOUT_SECONDS,
@@ -343,7 +345,7 @@ async def upload_image_for_video_generation(image_hint: str) -> str:
     For Local: Uploads the image to ComfyUI input directory.
     
     Args:
-        image_hint: Either base64 image data (RunPod) or filename hint (local)
+        image_hint: Either base64 image data (RunPod), data URL, or local file path.
     
     Returns:
         For RunPod: Base64 image data URL (unchanged)
@@ -351,13 +353,30 @@ async def upload_image_for_video_generation(image_hint: str) -> str:
     """
     activity.heartbeat()
     
-    # Check if this is a RunPod base64 image
+    # Check if this is a RunPod base64 image data URL
     if image_hint.startswith("data:image/"):
         logger.info(f"[RunPod] Passing through base64 image data for video generation: {image_hint[:50]}...")
         
         # For RunPod, we don't need to upload - just return the base64 data
         # The video generation will handle it directly
         return image_hint
+    elif image_hint.startswith("/data/shared/") or "\\" in image_hint or "/" in image_hint:
+        # This is a local file path from poll_image_generation
+        logger.info(f"[Local] Reading image file for video generation: {image_hint}")
+        
+        # Check if ComfyUI configuration has changed
+        client = get_comfyui_client(ClientType.VIDEO, force_refresh=True)
+        
+        # Read the file directly
+        with open(image_hint, "rb") as f:
+            content = f.read()
+        filename = Path(image_hint).name
+        
+        uploaded_filename = await asyncio.to_thread(
+            client.upload_image_to_input, filename, content, overwrite=True
+        )
+        logger.info(f"[Local] Uploaded image {image_hint} as {uploaded_filename}")
+        return uploaded_filename
     else:
         # For local development, upload the image to ComfyUI
         logger.info(f"[Local] Uploading image {image_hint} to ComfyUI input directory.")
@@ -458,7 +477,7 @@ async def start_image_generation(
 
 @activity.defn
 async def poll_image_generation(prompt_id: str, run_id: str, index: int) -> str:
-    """Poll for image completion and return the output hint."""
+    """Poll for image completion, save to disk, and return the output filename."""
 
     activity.heartbeat()
     logger.info(f"Polling image generation for prompt index {index}")
@@ -473,7 +492,25 @@ async def poll_image_generation(prompt_id: str, run_id: str, index: int) -> str:
     )
     if not filenames:
         raise RuntimeError(f"Image generation failed for prompt index {index}: No output files.")
-    return filenames[0]
+
+    # Handle the first output file
+    first_hint = filenames[0]
+
+    # If it's a data URL (RunPod), save to disk to avoid Temporal payload size limit
+    if first_hint.startswith("data:"):
+        logger.info(f"[image] Saving base64 image data to disk for prompt index {index}")
+        run_dir = DATA_SHARED_BASE / run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+
+        filename, content = await asyncio.to_thread(client.fetch_output_bytes, first_hint)
+        image_path = run_dir / filename
+        image_path.write_bytes(content)
+
+        logger.info(f"[image] Saved image to {image_path}")
+        return str(image_path)
+    else:
+        # For local ComfyUI, the file is already saved, return the path
+        return first_hint
 
 
 @activity.defn
@@ -539,12 +576,15 @@ async def stitch_videos(run_id: str, video_paths: List[str], voiceover_path: str
 
     length_bucket = _load_length_bucket(run_id)
 
+    from videomerge.config import VIDEO_SPEED_FACTOR
+
     start_time = time.time()
     await asyncio.to_thread(
         concat_videos_with_voiceover,
         [Path(p) for p in video_paths],
         Path(voiceover_path),
         output_path,
+        video_speed_factor=VIDEO_SPEED_FACTOR,
     )
     duration = time.time() - start_time
 
@@ -903,7 +943,7 @@ async def poll_upscale_status(job_id: str, run_id: str, video_id: str) -> str:
 
         elif status in ("FAILED", "ERROR"):
             error_msg = data.get("error", "Unknown Runpod error")
-            raise RuntimeError(f"Runpod upscaling failed: {error_msg}")
+            raise NonRetryableError(f"Runpod upscaling failed: {error_msg}")
 
         elif status in ("IN_QUEUE", "RUNNING", "IN_PROGRESS"):
             now = time.time()
