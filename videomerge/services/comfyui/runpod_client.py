@@ -189,7 +189,7 @@ class RunPodComfyUIClient(ComfyUIClient):
         
         Args:
             prompt_text: The video generation prompt
-            image_data: Base64 image data URL (e.g., "data:image/png;base64,iVBORw0KGgo...")
+            image_data: Base64 image data URL (e.g., "data:image/png;base64,iVBORw0KGgo...") or local file path
             template_path: Deprecated for RunPod, kept for backward compatibility
             client_id: Optional client ID
             run_id: Optional run ID for debugging purposes
@@ -209,17 +209,31 @@ class RunPodComfyUIClient(ComfyUIClient):
         try:
             client_id = client_id or str(uuid4())
             
+            # If image_data is a local file path, read it and convert to base64
             if not image_data.startswith("data:image/"):
-                logger.error("[comfyui] Received filename instead of base64 image data - this indicates a workflow error for RunPod")
-                raise ValueError("Expected base64 image data URL, but received filename")
-            
-            logger.info("[comfyui] Using base64 image data for video generation: %s...", image_data[:50])
-            
-            if "#filename=" in image_data:
-                clean_image_data = image_data.split("#filename=")[0]
-                logger.debug("[comfyui] Stripped filename metadata from data URL for RunPod payload")
+                logger.info(f"[comfyui] Reading local image file for RunPod video generation: {image_data}")
+                import base64
+                import mimetypes
+                
+                with open(image_data, "rb") as f:
+                    content = f.read()
+                    
+                mime_type, _ = mimetypes.guess_type(image_data)
+                if not mime_type:
+                    mime_type = "image/png"
+                    
+                b64_data = base64.b64encode(content).decode("utf-8")
+                filename = Path(image_data).name
+                clean_image_data = f"data:{mime_type};base64,{b64_data}"
+                logger.debug(f"[comfyui] Converted local file {filename} to base64 data URL")
             else:
-                clean_image_data = image_data
+                logger.info("[comfyui] Using base64 image data for video generation: %s...", image_data[:50])
+                
+                if "#filename=" in image_data:
+                    clean_image_data = image_data.split("#filename=")[0]
+                    logger.debug("[comfyui] Stripped filename metadata from data URL for RunPod payload")
+                else:
+                    clean_image_data = image_data
 
             if not self.comfy_org_api_key:
                 logger.warning("[comfyui] COMFY_ORG_API_KEY is not configured; RunPod may reject the request")

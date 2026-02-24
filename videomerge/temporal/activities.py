@@ -341,14 +341,14 @@ async def generate_image(
 async def upload_image_for_video_generation(image_hint: str) -> str:
     """Process image for video generation.
     
-    For RunPod: Converts local file to base64 image data URL (no upload needed).
+    For RunPod: Returns the local file path. The client will handle reading and converting to base64.
     For Local: Uploads the image to ComfyUI input directory.
     
     Args:
-        image_hint: Either base64 image data (RunPod), data URL, or local file path.
+        image_hint: Either base64 image data, data URL, or local file path.
     
     Returns:
-        For RunPod: Base64 image data URL
+        For RunPod: Local file path or base64 data URL
         For Local: Uploaded filename in ComfyUI
     """
     activity.heartbeat()
@@ -361,20 +361,8 @@ async def upload_image_for_video_generation(image_hint: str) -> str:
         return image_hint
         
     if RUN_ENV == "runpod":
-        logger.info(f"[RunPod] Converting image file to base64 data URL: {image_hint}")
-        with open(image_hint, "rb") as f:
-            content = f.read()
-        import base64
-        import mimetypes
-        
-        mime_type, _ = mimetypes.guess_type(image_hint)
-        if not mime_type:
-            mime_type = "image/png"
-            
-        b64_data = base64.b64encode(content).decode("utf-8")
-        filename = Path(image_hint).name
-        data_url = f"data:{mime_type};base64,{b64_data}#filename={filename}"
-        return data_url
+        logger.info(f"[RunPod] Returning local file path for video generation client to read later: {image_hint}")
+        return image_hint
         
     # Local environment
     client = get_comfyui_client(ClientType.VIDEO, force_refresh=True)
