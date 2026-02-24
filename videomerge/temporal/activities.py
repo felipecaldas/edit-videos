@@ -341,31 +341,47 @@ async def generate_image(
 async def upload_image_for_video_generation(image_hint: str) -> str:
     """Process image for video generation.
     
-    For RunPod: Passes through base64 image data URL (no upload needed).
+    For RunPod: Converts local file to base64 image data URL (no upload needed).
     For Local: Uploads the image to ComfyUI input directory.
     
     Args:
         image_hint: Either base64 image data (RunPod), data URL, or local file path.
     
     Returns:
-        For RunPod: Base64 image data URL (unchanged)
+        For RunPod: Base64 image data URL
         For Local: Uploaded filename in ComfyUI
     """
     activity.heartbeat()
     
-    # Check if this is a RunPod base64 image data URL
+    from videomerge.config import RUN_ENV
+    
+    # Check if this is already a RunPod base64 image data URL
     if image_hint.startswith("data:image/"):
         logger.info(f"[RunPod] Passing through base64 image data for video generation: {image_hint[:50]}...")
-        
-        # For RunPod, we don't need to upload - just return the base64 data
-        # The video generation will handle it directly
         return image_hint
-    elif image_hint.startswith("/data/shared/") or "\\" in image_hint or "/" in image_hint:
+        
+    if RUN_ENV == "runpod":
+        logger.info(f"[RunPod] Converting image file to base64 data URL: {image_hint}")
+        with open(image_hint, "rb") as f:
+            content = f.read()
+        import base64
+        import mimetypes
+        
+        mime_type, _ = mimetypes.guess_type(image_hint)
+        if not mime_type:
+            mime_type = "image/png"
+            
+        b64_data = base64.b64encode(content).decode("utf-8")
+        filename = Path(image_hint).name
+        data_url = f"data:{mime_type};base64,{b64_data}#filename={filename}"
+        return data_url
+        
+    # Local environment
+    client = get_comfyui_client(ClientType.VIDEO, force_refresh=True)
+
+    if image_hint.startswith("/data/shared/") or "\\" in image_hint or "/" in image_hint:
         # This is a local file path from poll_image_generation
         logger.info(f"[Local] Reading image file for video generation: {image_hint}")
-        
-        # Check if ComfyUI configuration has changed
-        client = get_comfyui_client(ClientType.VIDEO, force_refresh=True)
         
         # Read the file directly
         with open(image_hint, "rb") as f:
@@ -379,10 +395,7 @@ async def upload_image_for_video_generation(image_hint: str) -> str:
         return uploaded_filename
     else:
         # For local development, upload the image to ComfyUI
-        logger.info(f"[Local] Uploading image {image_hint} to ComfyUI input directory.")
-        
-        # Check if ComfyUI configuration has changed
-        client = get_comfyui_client(ClientType.VIDEO, force_refresh=True)
+        logger.info(f"[Local] Fetching and uploading image {image_hint} to ComfyUI input directory.")
         
         filename, content = await asyncio.to_thread(client.fetch_output_bytes, image_hint)
         uploaded_filename = await asyncio.to_thread(

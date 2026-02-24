@@ -509,36 +509,10 @@ class RunPodComfyUIClient(ComfyUIClient):
 
     def upload_image_to_input(self, filename: str, content: bytes, overwrite: bool = True) -> str:
         """Upload image to RunPod for processing."""
-        url = f"{self.base_url}/upload"
-        files = {"file": (filename, content, "application/octet-stream")}
-        data = {"overwrite": "true" if overwrite else "false"}
-        logger.info("[comfyui] Uploading image to RunPod: %s", filename)
-        upload_timeout = (
-            RUNPOD_IMAGE_HTTP_TIMEOUT_SECONDS
-            if self.client_type == ClientType.IMAGE
-            else RUNPOD_VIDEO_OUTPUT_HTTP_TIMEOUT_SECONDS
+        raise NotImplementedError(
+            "upload_image_to_input is not supported for RunPod serverless ComfyUI. "
+            "Pass images as base64 data URLs in the run payload instead."
         )
-        resp = self._make_request(
-            "POST",
-            url,
-            files=files,
-            data=data,
-            timeout=upload_timeout,
-            headers=self._default_headers(),
-        )
-        if not resp.ok:
-            try:
-                logger.error("[comfyui] RunPod upload error: status=%s body=%s", resp.status_code, resp.text)
-            except Exception:
-                pass
-            resp.raise_for_status()
-        
-        try:
-            data = resp.json()
-            uploaded_name = data.get("name") or data.get("filename") or filename
-        except Exception:
-            uploaded_name = filename
-        return uploaded_name
 
     def update_instance_id(self, new_instance_id: str):
         """Update the instance ID for this client."""
