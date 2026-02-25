@@ -242,12 +242,18 @@ async def generate_scene_prompts(run_id: str, script: str, image_style: str | No
     if audio_duration is None:
         raise RuntimeError(f"audio_duration missing in voiceover metadata for run_id={run_id}")
 
+    from videomerge.config import VIDEO_SPEED_FACTOR
+    # N8N uses audio_duration to decide how many clips to generate.
+    # Scale by VIDEO_SPEED_FACTOR so enough source material is produced to
+    # cover the full voiceover after the video stream is sped up.
+    adjusted_audio_duration = float(audio_duration) * max(float(VIDEO_SPEED_FACTOR), 1.0)
+
     url = N8N_PROMPTS_WEBHOOK_URL
     if not url:
         raise RuntimeError("N8N_PROMPTS_WEBHOOK_URL environment variable is not set")
     payload: Dict[str, Any] = {
         "script": script,
-        "audio_duration": audio_duration,
+        "audio_duration": adjusted_audio_duration,
         "image_style": image_style,
     }
 

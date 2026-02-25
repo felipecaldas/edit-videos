@@ -18,7 +18,7 @@ from videomerge.utils.logging import get_logger
 logger = get_logger(__name__)
 
 
-def _compute_clip_plan(video_paths: List[Path], voiceover_duration: float) -> tuple[List[Path], float, bool]:
+def _compute_clip_plan(video_paths: List[Path], voiceover_duration: float, video_speed_factor: float = 1.0) -> tuple[List[Path], float, bool]:
     """
     Decide which clips to use to best match the voiceover duration.
     Returns (selected_video_paths, last_clip_trim_seconds, needs_trimming)
@@ -28,7 +28,15 @@ def _compute_clip_plan(video_paths: List[Path], voiceover_duration: float) -> tu
     - last_clip_trim_seconds: if > 0 and needs_trimming True, trim this many seconds from the start
       (0) to duration 'last_clip_trim_seconds' (i.e., target length for the last clip).
     - needs_trimming: whether we must trim the last clip to fit.
+
+    When video_speed_factor > 1.0 the video plays back faster, so the source clips must be
+    longer than the voiceover by that factor. The plan therefore targets
+    ``voiceover_duration * video_speed_factor`` seconds of source material.
     """
+    # Compute how many seconds of source video are needed so that after playback
+    # at video_speed_factor the output matches the voiceover duration.
+    target_source_duration = voiceover_duration * max(video_speed_factor, 1.0)
+
     durations: List[float] = []
     for p in video_paths:
         d = get_duration(p)
@@ -36,7 +44,7 @@ def _compute_clip_plan(video_paths: List[Path], voiceover_duration: float) -> tu
             raise RuntimeError(f"Could not determine duration for video: {p}")
         durations.append(d)
     total = sum(durations)
-    if voiceover_duration >= total:
+    if target_source_duration >= total:
         # No trimming needed; we may still pad audio as before.
         return list(video_paths), 0.0, False
 
@@ -44,12 +52,12 @@ def _compute_clip_plan(video_paths: List[Path], voiceover_duration: float) -> tu
     selected: List[Path] = []
     acc = 0.0
     for p, d in zip(video_paths, durations):
-        if acc + d < voiceover_duration - 1e-3:  # strictly fits
+        if acc + d < target_source_duration - 1e-3:  # strictly fits
             selected.append(p)
             acc += d
         else:
             # This clip is the one to trim (if any remainder exists)
-            remaining = max(0.0, voiceover_duration - acc)
+            remaining = max(0.0, target_source_duration - acc)
             if remaining > 1e-3:
                 selected.append(p)
                 return selected, remaining, True
@@ -173,16 +181,19 @@ def concat_videos_with_voiceover(
         vo_dur_val = get_duration(voiceover_path)
         if vo_dur_val is None:
             raise RuntimeError(f"Could not determine duration for voiceover: {voiceover_path}")
-        selected_paths, last_clip_target_len, needs_trim = _compute_clip_plan(video_paths, vo_dur_val)
-        # If we are trimming to voiceover length, do NOT pad audio; let audio define the end
-        total_vid = 0.0
-        for p in video_paths:
+        selected_paths, last_clip_target_len, needs_trim = _compute_clip_plan(video_paths, vo_dur_val, video_speed_factor)
+        # If we are trimming to voiceover length, do NOT pad audio; let audio define the end.
+        # Compare the effective post-speedup duration of selected clips against the voiceover.
+        selected_source_dur = 0.0
+        for p in selected_paths:
             d = get_duration(p)
             if d is None:
                 raise RuntimeError(f"Could not determine duration for video: {p}")
-            total_vid += d
-        if needs_trim or vo_dur_val < total_vid - 1e-3:
+            selected_source_dur += d
+        effective_video_dur = selected_source_dur / max(video_speed_factor, 1.0)
+        if needs_trim or effective_video_dur > vo_dur_val + 1e-3:
             use_apad = False
+        video_too_short = effective_video_dur < vo_dur_val - 1e-3
     except Exception as e:
         logger.warning("[stitcher] Failed to probe durations, falling back to original behavior: %s", e)
 
@@ -227,6 +238,10 @@ def concat_videos_with_voiceover(
         for p in selected_paths:
             f.write(f"file '{Path(p).resolve().as_posix()}'\n")
 
+    # video_too_short defaults to False if duration probing failed above
+    if 'video_too_short' not in dir():
+        video_too_short = False
+
     apply_speed = video_speed_factor and video_speed_factor != 1.0
     if apply_speed:
         pts_factor = 1.0 / video_speed_factor
@@ -242,22 +257,29 @@ def concat_videos_with_voiceover(
             '-i', str(concat_list),
             '-i', str(voiceover_path),
         ]
-        # Build filter_complex: optionally speed up video, always normalise audio.
-        if apply_speed:
-            video_filter = f"[0:v]setpts={pts_factor:.6f}*PTS[vid]"
-            if use_apad:
-                audio_filter = "[1:a]loudnorm=I=-14:TP=-1.5:LRA=7,apad[aud]"
+        # Build filter_complex: optionally speed up video, loop if video is shorter than audio,
+        # always normalise audio.
+        audio_filter = "[1:a]loudnorm=I=-14:TP=-1.5:LRA=7[aud]"
+        if video_too_short:
+            # Video is shorter than audio after speedup. Apply speed if needed, then let
+            # ffmpeg run until -t (voiceover duration) — it will hold the last frame
+            # automatically. No loop filter needed (avoids massive frame buffering).
+            if apply_speed:
+                video_filter = f"[0:v]setpts={pts_factor:.6f}*PTS[vid]"
+                cmd += ['-filter_complex', f'{video_filter};{audio_filter}', '-map', '[vid]', '-map', '[aud]']
             else:
-                audio_filter = "[1:a]loudnorm=I=-14:TP=-1.5:LRA=7[aud]"
+                cmd += ['-filter_complex', audio_filter, '-map', '0:v:0', '-map', '[aud]']
+            cmd += ['-t', f"{vo_dur_val:.3f}"]
+        elif apply_speed:
+            video_filter = f"[0:v]setpts={pts_factor:.6f}*PTS[vid]"
             cmd += ['-filter_complex', f'{video_filter};{audio_filter}', '-map', '[vid]', '-map', '[aud]']
-        elif use_apad:
-            cmd += ['-filter_complex', '[1:a]loudnorm=I=-14:TP=-1.5:LRA=7,apad[aud]', '-map', '0:v:0', '-map', '[aud]']
         else:
-            cmd += ['-filter_complex', '[1:a]loudnorm=I=-14:TP=-1.5:LRA=7[aud]', '-map', '0:v:0', '-map', '[aud]']
+            cmd += ['-filter_complex', audio_filter, '-map', '0:v:0', '-map', '[aud]']
+        if not video_too_short:
+            cmd += ['-shortest']
         cmd += [
             '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23',
             '-c:a', 'aac',
-            '-shortest',
         ]
         if with_faststart:
             cmd += ['-movflags', '+faststart']
