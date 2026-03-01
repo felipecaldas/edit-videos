@@ -122,7 +122,6 @@ def _load_misc_defaults() -> tuple[
     upscale_poll_interval_seconds = float(os.getenv("UPSCALE_POLL_INTERVAL_SECONDS", "5"))
 
     upscale_child_workflow_concurrency = int(os.getenv("UPSCALE_CHILD_WORKFLOW_CONCURRENCY", "5"))
-    scene_child_workflow_concurrency = int(os.getenv("SCENE_CHILD_WORKFLOW_CONCURRENCY", "5"))
 
     upscale_queue_timeout_seconds_raw = os.getenv("UPSCALE_QUEUE_TIMEOUT_SECONDS")
     upscale_running_timeout_seconds_raw = os.getenv("UPSCALE_RUNNING_TIMEOUT_SECONDS")
@@ -160,7 +159,6 @@ def _load_misc_defaults() -> tuple[
         upscale_job_timeout_seconds,
         upscale_poll_interval_seconds,
         upscale_child_workflow_concurrency,
-        scene_child_workflow_concurrency,
         upscale_queue_timeout_seconds,
         upscale_running_timeout_seconds,
         video_speed_factor,
@@ -248,7 +246,7 @@ def _apply_config() -> None:
     global IMAGE_JOB_TIMEOUT_SECONDS, IMAGE_POLL_INTERVAL_SECONDS
     global VIDEO_JOB_TIMEOUT_SECONDS, VIDEO_POLL_INTERVAL_SECONDS
     global UPSCALE_JOB_TIMEOUT_SECONDS, UPSCALE_POLL_INTERVAL_SECONDS
-    global UPSCALE_CHILD_WORKFLOW_CONCURRENCY, SCENE_CHILD_WORKFLOW_CONCURRENCY
+    global UPSCALE_CHILD_WORKFLOW_CONCURRENCY
     global UPSCALE_QUEUE_TIMEOUT_SECONDS, UPSCALE_RUNNING_TIMEOUT_SECONDS
     global VIDEO_SPEED_FACTOR
     (
@@ -278,7 +276,6 @@ def _apply_config() -> None:
         UPSCALE_JOB_TIMEOUT_SECONDS,
         UPSCALE_POLL_INTERVAL_SECONDS,
         UPSCALE_CHILD_WORKFLOW_CONCURRENCY,
-        SCENE_CHILD_WORKFLOW_CONCURRENCY,
         UPSCALE_QUEUE_TIMEOUT_SECONDS,
         UPSCALE_RUNNING_TIMEOUT_SECONDS,
         VIDEO_SPEED_FACTOR,

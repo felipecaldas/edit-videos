@@ -34,7 +34,6 @@ from videomerge.config import (
     IMAGE_STYLE_TO_WORKFLOW_MAPPING,
     IMAGE_WIDTH,
     IMAGE_WORKFLOWS,
-    SCENE_CHILD_WORKFLOW_CONCURRENCY,
     SETUP_RUN_DIRECTORY_TIMEOUT_SECONDS,
     STITCH_TIMEOUT_MINUTES,
     SUBTITLES_TIMEOUT_MINUTES,
@@ -337,16 +336,13 @@ class VideoGenerationWorkflow:
                 )
 
             # Collect all video file paths from the child workflows
+            # Start all child workflows immediately - RunPod will handle queuing
+            workflow.logger.info(f"Starting {len(scene_processing_tasks)} scene child workflows (RunPod will queue)")
+            
+            results = await asyncio.gather(*scene_processing_tasks)
             video_paths = []
-
-            scene_concurrency = max(1, int(SCENE_CHILD_WORKFLOW_CONCURRENCY))
-            workflow.logger.info("Starting scene children with concurrency=%s", scene_concurrency)
-
-            for batch_start in range(0, len(scene_processing_tasks), scene_concurrency):
-                batch = scene_processing_tasks[batch_start : batch_start + scene_concurrency]
-                results = await asyncio.gather(*batch)
-                for result_list in results:
-                    video_paths.extend(result_list)
+            for result_list in results:
+                video_paths.extend(result_list)
 
             if not video_paths:
                 raise ApplicationError(
