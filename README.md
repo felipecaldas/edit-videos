@@ -128,6 +128,54 @@ Returns service health.
 curl http://localhost:8086/health
 ```
 
+### 4) POST `/transcribe`
+Transcribe an MP3 file using Whisper speech recognition.
+
+- Content-Type: application/json
+- Body schema:
+```json
+{
+  "mp3_path": "/data/shared/audio.mp3",
+  "language": "English",
+  "model_size": "small"
+}
+```
+
+Parameters:
+- `mp3_path` (required): Path to MP3 file in `/data/shared` directory
+- `language` (optional): Language code (e.g., "English", "Portuguese", "en", "pt"). If not provided, Whisper will auto-detect
+- `model_size` (optional): Whisper model size - "tiny", "base", "small", "medium", "large-v2" (default: "small")
+
+Response:
+```json
+{
+  "text": "Transcribed text content",
+  "detected_language": "en",
+  "confidence": 0.95
+}
+```
+
+Example with specified language:
+```bash
+curl -X POST http://localhost:8086/transcribe \
+  -H "Content-Type: application/json" \
+  -d '{
+    "mp3_path": "/data/shared/voiceover.mp3",
+    "language": "English",
+    "model_size": "small"
+  }'
+```
+
+Example with auto-detection:
+```bash
+curl -X POST http://localhost:8086/transcribe \
+  -H "Content-Type: application/json" \
+  -d '{
+    "mp3_path": "/data/shared/voiceover.mp3",
+    "model_size": "small"
+  }'
+```
+
 ## How path handling works
 - URLs: Strings beginning with `http://` or `https://` are downloaded.
 - Paths: Anything else is treated as a filesystem path inside the container. If you pass Windows or Linux paths, ensure that the corresponding location is mounted into the container and use the container-visible path in requests (e.g., `/mnt/share/...`).

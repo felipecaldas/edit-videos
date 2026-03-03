@@ -99,6 +99,25 @@ def run_whisper_segments(input_path: Path, language: str = "pt", model_size: str
     return list(segments)
 
 
+def run_whisper_segments_with_info(input_path: Path, language: Optional[str] = None, model_size: str = "small"):
+    """Run Whisper transcription and return both segments and info for language detection."""
+    model = WhisperModel(model_size, device="cpu", compute_type="int8")
+    
+    # If language is None, Whisper will auto-detect
+    transcribe_kwargs = {
+        "audio": str(input_path),
+        "task": "transcribe",
+        "vad_filter": True,
+        "word_timestamps": True,
+    }
+    
+    if language:
+        transcribe_kwargs["language"] = language
+    
+    segments, info = model.transcribe(**transcribe_kwargs)
+    return list(segments), info
+
+
 def _clean_chunk_text(tokens: List[str], is_last_in_segment: bool) -> str:
     if not tokens:
         return ""

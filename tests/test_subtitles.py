@@ -5,11 +5,15 @@ from unittest.mock import Mock, patch, MagicMock
 from videomerge.services.subtitles import (
     map_language_to_whisper_code,
     run_whisper_segments,
+    run_whisper_segments_with_info,
     build_chunks_from_words,
     write_srt_from_chunks,
     _format_timestamp_srt,
     _clean_chunk_text,
 )
+from videomerge.models import TranscriptionRequest, TranscriptionResponse
+from videomerge.routers.subtitles import transcribe_mp3
+from fastapi import HTTPException
 
 
 class TestLanguageMapping:
@@ -23,20 +27,20 @@ class TestLanguageMapping:
 
     def test_english_variants_mapping(self):
         """Test English language variant mappings."""
-        assert map_language_to_whisper_code("English (US)") == "en-US"
-        assert map_language_to_whisper_code("english (us)") == "en-US"
-        assert map_language_to_whisper_code("English (AU)") == "en-AU"
-        assert map_language_to_whisper_code("English (CA)") == "en-CA"
-        assert map_language_to_whisper_code("English (UK)") == "en-GB"
+        assert map_language_to_whisper_code("English (US)") == "en"
+        assert map_language_to_whisper_code("english (us)") == "en"
+        assert map_language_to_whisper_code("English (AU)") == "en"
+        assert map_language_to_whisper_code("English (CA)") == "en"
+        assert map_language_to_whisper_code("English (UK)") == "en"
 
     def test_standard_codes_mapping(self):
         """Test standard language code mappings."""
         assert map_language_to_whisper_code("en") == "en"
         assert map_language_to_whisper_code("pt") == "pt"
-        assert map_language_to_whisper_code("en-US") == "en-US"
-        assert map_language_to_whisper_code("en-AU") == "en-AU"
-        assert map_language_to_whisper_code("en-CA") == "en-CA"
-        assert map_language_to_whisper_code("en-GB") == "en-GB"
+        assert map_language_to_whisper_code("en-US") == "en"
+        assert map_language_to_whisper_code("en-AU") == "en"
+        assert map_language_to_whisper_code("en-CA") == "en"
+        assert map_language_to_whisper_code("en-GB") == "en"
 
     def test_english_general_mapping(self):
         """Test general English mapping."""
@@ -44,15 +48,15 @@ class TestLanguageMapping:
         assert map_language_to_whisper_code("english") == "en"
 
     def test_unknown_language_fallback(self):
-        """Test that unknown languages default to en-US."""
-        assert map_language_to_whisper_code("UnknownLang") == "en-US"
-        assert map_language_to_whisper_code("fr") == "en-US"
-        assert map_language_to_whisper_code("") == "en-US"
+        """Test that unknown languages default to en."""
+        assert map_language_to_whisper_code("UnknownLang") == "en"
+        assert map_language_to_whisper_code("fr") == "en"
+        assert map_language_to_whisper_code("") == "en"
 
     def test_whitespace_handling(self):
         """Test that whitespace is properly stripped."""
         assert map_language_to_whisper_code("  Portuguese  ") == "pt"
-        assert map_language_to_whisper_code("\tEnglish (US)\n") == "en-US"
+        assert map_language_to_whisper_code("\tEnglish (US)\n") == "en"
 
 
 class TestTimestampFormatting:
@@ -234,3 +238,156 @@ class TestChunkBuilding:
         """Test chunk building with empty segments."""
         chunks = build_chunks_from_words([])
         assert chunks == []
+
+
+class TestTranscriptionEndpoint:
+    """Test the transcription endpoint."""
+
+    @patch('videomerge.routers.subtitles.run_whisper_segments_with_info')
+    @patch('pathlib.Path.exists')
+    @patch('pathlib.Path.is_file')
+    @patch('pathlib.Path.stat')
+    def test_transcribe_mp3_success_with_language(self, mock_stat, mock_is_file, mock_exists, mock_transcribe):
+        """Test successful transcription with specified language."""
+        # Setup mocks
+        mock_exists.return_value = True
+        mock_is_file.return_value = True
+        mock_stat.return_value = Mock(st_size=1000)
+        
+        # Mock Whisper response
+        mock_segment = Mock()
+        mock_segment.text = "Hello world"
+        mock_info = Mock()
+        mock_info.language = "en"
+        mock_info.language_probability = 0.95
+        mock_transcribe.return_value = ([mock_segment], mock_info)
+        
+        # Test request
+        req = TranscriptionRequest(
+            mp3_path="/data/shared/test.mp3",
+            language="English",
+            model_size="small"
+        )
+        
+        response = transcribe_mp3(req)
+        
+        assert isinstance(response, TranscriptionResponse)
+        assert response.text == "Hello world"
+        assert response.detected_language == "en"
+        assert response.confidence == 0.95
+        mock_transcribe.assert_called_once()
+
+    @patch('videomerge.routers.subtitles.run_whisper_segments_with_info')
+    @patch('pathlib.Path.exists')
+    @patch('pathlib.Path.is_file')
+    @patch('pathlib.Path.stat')
+    def test_transcribe_mp3_success_auto_detect(self, mock_stat, mock_is_file, mock_exists, mock_transcribe):
+        """Test successful transcription with auto-detected language."""
+        # Setup mocks
+        mock_exists.return_value = True
+        mock_is_file.return_value = True
+        mock_stat.return_value = Mock(st_size=1000)
+        
+        # Mock Whisper response
+        mock_segment = Mock()
+        mock_segment.text = "Olá mundo"
+        mock_info = Mock()
+        mock_info.language = "pt"
+        mock_info.language_probability = 0.88
+        mock_transcribe.return_value = ([mock_segment], mock_info)
+        
+        # Test request without language
+        req = TranscriptionRequest(
+            mp3_path="/data/shared/test.mp3",
+            model_size="small"
+        )
+        
+        response = transcribe_mp3(req)
+        
+        assert isinstance(response, TranscriptionResponse)
+        assert response.text == "Olá mundo"
+        assert response.detected_language == "pt"
+        assert response.confidence == 0.88
+        mock_transcribe.assert_called_once()
+
+    def test_transcribe_mp3_invalid_path(self):
+        """Test transcription with invalid path (not in /data/shared)."""
+        req = TranscriptionRequest(
+            mp3_path="/invalid/path/test.mp3"
+        )
+        
+        with pytest.raises(HTTPException) as exc_info:
+            transcribe_mp3(req)
+        
+        assert exc_info.value.status_code == 400
+        assert "must be located in /data/shared" in str(exc_info.value.detail)
+
+    @patch('pathlib.Path.exists')
+    def test_transcribe_mp3_file_not_found(self, mock_exists):
+        """Test transcription with non-existent file."""
+        mock_exists.return_value = False
+        
+        req = TranscriptionRequest(
+            mp3_path="/data/shared/notfound.mp3"
+        )
+        
+        with pytest.raises(HTTPException) as exc_info:
+            transcribe_mp3(req)
+        
+        assert exc_info.value.status_code == 404
+        assert "not found" in str(exc_info.value.detail)
+
+    @patch('pathlib.Path.exists')
+    @patch('pathlib.Path.is_file')
+    def test_transcribe_mp3_not_a_file(self, mock_is_file, mock_exists):
+        """Test transcription with path that is not a file."""
+        mock_exists.return_value = True
+        mock_is_file.return_value = False
+        
+        req = TranscriptionRequest(
+            mp3_path="/data/shared/not_a_file"
+        )
+        
+        with pytest.raises(HTTPException) as exc_info:
+            transcribe_mp3(req)
+        
+        assert exc_info.value.status_code == 400
+        assert "not a file" in str(exc_info.value.detail)
+
+    @patch('pathlib.Path.exists')
+    @patch('pathlib.Path.is_file')
+    @patch('pathlib.Path.stat')
+    def test_transcribe_mp3_wrong_extension(self, mock_stat, mock_is_file, mock_exists):
+        """Test transcription with non-MP3 file."""
+        mock_exists.return_value = True
+        mock_is_file.return_value = True
+        mock_stat.return_value = Mock(st_size=1000)
+        
+        req = TranscriptionRequest(
+            mp3_path="/data/shared/test.wav"
+        )
+        
+        with pytest.raises(HTTPException) as exc_info:
+            transcribe_mp3(req)
+        
+        assert exc_info.value.status_code == 400
+        assert ".mp3 extension" in str(exc_info.value.detail)
+
+    @patch('pathlib.Path.exists')
+    @patch('pathlib.Path.is_file')
+    @patch('pathlib.Path.stat')
+    def test_transcribe_mp3_empty_file(self, mock_stat, mock_is_file, mock_exists):
+        """Test transcription with empty file."""
+        mock_exists.return_value = True
+        mock_is_file.return_value = True
+        mock_stat.return_value = Mock(st_size=0)
+        
+        req = TranscriptionRequest(
+            mp3_path="/data/shared/empty.mp3"
+        )
+        
+        with pytest.raises(HTTPException) as exc_info:
+            transcribe_mp3(req)
+        
+        assert exc_info.value.status_code == 400
+        assert "empty" in str(exc_info.value.detail)

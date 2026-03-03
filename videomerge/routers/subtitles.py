@@ -12,13 +12,17 @@ from videomerge.models import (
     SubtitlesRequest,
     StitchWithSubsRequest,
     FolderStitchWithSubsRequest,
+    TranscriptionRequest,
+    TranscriptionResponse,
 )
 from videomerge.services.downloads import obtain_source_to_path
 from videomerge.services.subtitles import (
     run_whisper_segments,
+    run_whisper_segments_with_info,
     build_chunks_from_words,
     write_srt_from_chunks,
     burn_subtitles,
+    map_language_to_whisper_code,
 )
 from videomerge.services.stitcher import (
     concat_videos_with_voiceover,
@@ -213,3 +217,79 @@ async def stitch_with_subtitles(req: Union[StitchWithSubsRequest, FolderStitchWi
     except Exception as e:
         logger.exception("[stitch+subs] Unexpected error: %s", e)
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+
+
+@router.post("/transcribe", response_model=TranscriptionResponse)
+async def transcribe_mp3(req: TranscriptionRequest):
+    """Transcribe an MP3 file using Whisper.
+    
+    - Accepts a path to an MP3 file in /data/shared
+    - If language is provided, uses it for transcription
+    - If language is not provided, Whisper will auto-detect the language
+    - Returns transcribed text and detected language info
+    """
+    logger.info("[transcribe] Starting transcription for: %s", req.mp3_path)
+    
+    # Validate the MP3 path is in /data/shared
+    mp3_path = Path(req.mp3_path)
+    if not str(mp3_path).startswith("/data/shared/"):
+        raise HTTPException(status_code=400, detail="MP3 file must be located in /data/shared directory")
+    
+    # Check if file exists and is accessible
+    if not mp3_path.exists():
+        raise HTTPException(status_code=404, detail=f"MP3 file not found: {req.mp3_path}")
+    
+    if not mp3_path.is_file():
+        raise HTTPException(status_code=400, detail=f"Path is not a file: {req.mp3_path}")
+    
+    # Check if it's an MP3 file by extension and basic validation
+    if mp3_path.suffix.lower() != '.mp3':
+        raise HTTPException(status_code=400, detail="File must have .mp3 extension")
+    
+    if mp3_path.stat().st_size == 0:
+        raise HTTPException(status_code=400, detail="MP3 file is empty")
+    
+    try:
+        # Prepare language parameter
+        whisper_language = None
+        if req.language:
+            whisper_language = map_language_to_whisper_code(req.language)
+            logger.info("[transcribe] Using specified language: %s -> %s", req.language, whisper_language)
+        else:
+            logger.info("[transcribe] No language specified, Whisper will auto-detect")
+        
+        # Run Whisper transcription
+        logger.info("[transcribe] Running Whisper with model size: %s", req.model_size)
+        segments, info = run_whisper_segments_with_info(
+            mp3_path, 
+            language=whisper_language, 
+            model_size=req.model_size
+        )
+        
+        # Combine all segment text
+        transcribed_text = " ".join(segment.text.strip() for segment in segments if segment.text.strip())
+        
+        # Prepare response
+        response = TranscriptionResponse(text=transcribed_text)
+        
+        # Add language detection info if available
+        if info:
+            # Whisper info contains language and probability when auto-detected
+            detected_lang = getattr(info, 'language', None)
+            lang_prob = getattr(info, 'language_probability', None)
+            
+            if detected_lang:
+                response.detected_language = detected_lang
+                if lang_prob:
+                    response.confidence = float(lang_prob)
+                    
+                logger.info("[transcribe] Detected language: %s (confidence: %.2f)", detected_lang, lang_prob or 0.0)
+        
+        logger.info("[transcribe] Transcription completed. Text length: %d chars", len(transcribed_text))
+        return response
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("[transcribe] Transcription failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")

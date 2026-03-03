@@ -75,3 +75,15 @@ class UpscaleStitchRequest(BaseModel):
     user_id: str
     workflow_id: str
     voice_language: Optional[str] = "en"
+
+
+class TranscriptionRequest(BaseModel):
+    mp3_path: str = Field(..., description="Path to MP3 file in /data/shared")
+    language: Optional[str] = Field(None, description="Optional language code (e.g., 'en', 'pt'). If not provided, Whisper will auto-detect")
+    model_size: Optional[str] = Field("small", description="Whisper model size: tiny, base, small, medium, large-v2")
+
+
+class TranscriptionResponse(BaseModel):
+    text: str = Field(..., description="Transcribed text")
+    detected_language: Optional[str] = Field(None, description="Detected language code (if auto-detected)")
+    confidence: Optional[float] = Field(None, description="Language detection confidence (if available)")
