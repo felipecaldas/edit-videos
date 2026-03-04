@@ -40,7 +40,6 @@ from videomerge.config import (
     TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES,
     TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES,
     TEMPORAL_UPSCALE_GENERATION_TIMEOUT_MINUTES,
-    UPSCALE_CHILD_WORKFLOW_CONCURRENCY,
     WORKFLOWS_BASE_PATH,
 )
 from videomerge.utils.video_dimensions import calculate_video_dimensions
@@ -588,34 +587,31 @@ class VideoUpscalingWorkflow:
             )
 
             workflow.logger.info(f"Found {len(video_files)} video files to upscale")
+            
+            # Start all upscaling child workflows immediately - RunPod will handle queuing
+            workflow.logger.info(f"Starting {len(video_files)} upscaling child workflows (RunPod will queue)")
+            
+            futures = []
+            for idx, video_file in enumerate(video_files):
+                video_path = str(video_file)
+                child_req = UpscaleChildRequest(
+                    video_path=video_path,
+                    video_id=Path(video_path).stem,  # filename without extension
+                    run_id=req.run_id,
+                    user_id=req.user_id,
+                    target_resolution=req.target_resolution,
+                    workflow_id=req.workflow_id,
+                )
 
-            concurrency = max(1, int(UPSCALE_CHILD_WORKFLOW_CONCURRENCY))
-            workflow.logger.info("Starting upscaling children with concurrency=%s", concurrency)
-
-            # Start child workflows in batches to avoid overloading the RunPod queue.
-            for batch_start in range(0, len(video_files), concurrency):
-                batch = video_files[batch_start : batch_start + concurrency]
-                futures = []
-                for idx, video_file in enumerate(batch, start=batch_start):
-                    video_path = str(video_file)
-                    child_req = UpscaleChildRequest(
-                        video_path=video_path,
-                        video_id=Path(video_path).stem,  # filename without extension
-                        run_id=req.run_id,
-                        user_id=req.user_id,
-                        target_resolution=req.target_resolution,
-                        workflow_id=req.workflow_id,
+                futures.append(
+                    workflow.execute_child_workflow(
+                        VideoUpscalingChildWorkflow.run,
+                        child_req,
+                        id=f"upscale-child-{req.run_id}-{idx}",
                     )
+                )
 
-                    futures.append(
-                        workflow.execute_child_workflow(
-                            VideoUpscalingChildWorkflow.run,
-                            child_req,
-                            id=f"upscale-child-{req.run_id}-{idx}",
-                        )
-                    )
-
-                await asyncio.gather(*futures)
+            await asyncio.gather(*futures)
 
             # Start stitching workflow
             final_video_path = await workflow.execute_child_workflow(
