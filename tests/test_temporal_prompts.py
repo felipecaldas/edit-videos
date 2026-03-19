@@ -303,11 +303,10 @@ async def test_image_generation_workflow_persists_ordered_images(tmp_path: Path)
         failure_reason: str | None = None,
     ) -> None:
         recorded["completion"] = {
+            "job_id": workflow_id or run_id,
             "run_id": run_id,
-            "user_id": user_id,
             "status": status,
             "image_files": list(image_files),
-            "workflow_id": workflow_id,
             "failure_reason": failure_reason,
         }
 
@@ -348,5 +347,7 @@ async def test_image_generation_workflow_persists_ordered_images(tmp_path: Path)
     assert recorded["scene_prompts"] == [{"image_prompt": "scene-1-image"}, {"image_prompt": "scene-2-image"}]
     assert recorded["saved_images"] == [("hint-0", "image_001.png"), ("hint-1", "image_002.png")]
     assert recorded["completion"]["status"] == "completed"
+    assert recorded["completion"]["job_id"] == "workflow-images-1"
+    assert recorded["completion"]["run_id"] == "run-images-1"
     assert recorded["completion"]["image_files"] == ["image_001.png", "image_002.png"]
     assert image_files == ["image_001.png", "image_002.png"]

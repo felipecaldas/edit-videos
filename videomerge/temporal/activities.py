@@ -352,8 +352,16 @@ async def generate_image_scene_prompts(
 
 
 @activity.defn
-async def persist_image_output(run_id: str, user_id: str, image_hint: str, index: int) -> str:
-    """Persist a generated image using a deterministic sequence filename and upload it to Supabase."""
+async def persist_image_output(run_id: str, user_id: str, image_hint: str, index: int, user_access_token: str) -> str:
+    """Persist a generated image using a deterministic sequence filename and upload it to Supabase.
+    
+    Args:
+        run_id: Unique run identifier
+        user_id: User identifier for storage path
+        image_hint: URL or path to the generated image
+        index: Sequential index for filename
+        user_access_token: Supabase user JWT for authenticated storage upload
+    """
     activity.heartbeat()
     run_dir = DATA_SHARED_BASE / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -361,11 +369,14 @@ async def persist_image_output(run_id: str, user_id: str, image_hint: str, index
     sequence_number = index + 1
     file_name = f"image_{sequence_number:03d}.png"
     destination_path = run_dir / file_name
-    client = get_comfyui_client(ClientType.IMAGE, force_refresh=True)
 
-    if image_hint.startswith("data:"):
-        _, content = await asyncio.to_thread(client.fetch_output_bytes, image_hint)
+    if image_hint.startswith("http://") or image_hint.startswith("https://"):
+        async with aiohttp.ClientSession() as session:
+            async with session.get(image_hint) as resp:
+                resp.raise_for_status()
+                content = await resp.read()
     else:
+        client = get_comfyui_client()
         hint_path = Path(image_hint)
         if hint_path.exists():
             content = hint_path.read_bytes()
@@ -373,8 +384,13 @@ async def persist_image_output(run_id: str, user_id: str, image_hint: str, index
             _, content = await asyncio.to_thread(client.fetch_output_bytes, image_hint)
 
     destination_path.write_bytes(content)
+    
+    # Create a client instance with user JWT for authenticated upload
+    from videomerge.services.supabase_client import SupabaseStorageClient
+    authenticated_client = SupabaseStorageClient(user_jwt=user_access_token)
+    
     await asyncio.to_thread(
-        supabase_storage_client.upload_file,
+        authenticated_client.upload_file,
         user_id,
         run_id,
         file_name,
@@ -399,20 +415,17 @@ async def send_image_generation_webhook(
 
     payload: Dict[str, Any] = {
         "run_id": run_id,
-        "user_id": user_id,
         "status": status,
         "image_files": image_files,
-        "storage_path": f"storage/{user_id}/{run_id}",
+        "output_dir": str(DATA_SHARED_BASE / run_id),
     }
     if workflow_id:
         payload["workflow_id"] = workflow_id
-    if failure_reason:
-        payload["failure_reason"] = failure_reason
 
     if not IMAGE_GENERATION_N8N_WEBHOOK_URL:
         raise RuntimeError("IMAGE_GENERATION_N8N_WEBHOOK_URL environment variable is not set")
 
-    event_type = "image_generation_completed" if status == "completed" else "image_generation_failed"
+    event_type = "job_completed" if status == "completed" else "job_failed"
     logger.info(f"Sending '{event_type}' webhook for run_id={run_id}")
     await webhook_manager.send_webhook(IMAGE_GENERATION_N8N_WEBHOOK_URL, payload, event_type)
 

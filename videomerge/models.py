@@ -69,6 +69,10 @@ class ImageGenerationStartRequest(BaseModel):
     )
     run_id: Optional[str] = None
     workflow_id: Optional[str] = None
+    user_access_token: str = Field(
+        ...,
+        description="Supabase user JWT access token for authenticated storage uploads (respects RLS policies)",
+    )
 
 
 class UpscaleStartRequest(BaseModel):

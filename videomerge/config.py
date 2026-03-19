@@ -228,12 +228,13 @@ def _load_notifications_defaults() -> tuple[str, str | None, str | None]:
     return n8n_webhook, prompts_webhook_url, webhook_secret
 
 
-def _load_supabase_defaults() -> tuple[str | None, str | None, str | None]:
+def _load_supabase_defaults() -> tuple[str | None, str | None, str | None, str | None]:
     """Load Supabase configuration values from the environment."""
     supabase_url = os.getenv("SUPABASE_URL")
     supabase_anon_key = os.getenv("SUPABASE_ANON_KEY")
+    supabase_storage_bucket = os.getenv("SUPABASE_STORAGE_BUCKET", "storage")
     image_generation_webhook_url = os.getenv("IMAGE_GENERATION_N8N_WEBHOOK_URL")
-    return supabase_url, supabase_anon_key, image_generation_webhook_url
+    return supabase_url, supabase_anon_key, supabase_storage_bucket, image_generation_webhook_url
 
 
 def _apply_config() -> None:
@@ -331,10 +332,11 @@ def _apply_config() -> None:
         WEBHOOK_SECRET,
     ) = _load_notifications_defaults()
 
-    global SUPABASE_URL, SUPABASE_ANON_KEY, IMAGE_GENERATION_N8N_WEBHOOK_URL
+    global SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_STORAGE_BUCKET, IMAGE_GENERATION_N8N_WEBHOOK_URL
     (
         SUPABASE_URL,
         SUPABASE_ANON_KEY,
+        SUPABASE_STORAGE_BUCKET,
         IMAGE_GENERATION_N8N_WEBHOOK_URL,
     ) = _load_supabase_defaults()
 

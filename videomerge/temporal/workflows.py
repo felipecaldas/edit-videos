@@ -484,6 +484,7 @@ class ImageGenerationWorkflow:
             comfyui_workflow_name = IMAGE_STYLE_TO_WORKFLOW_MAPPING.get(image_style)
             style_override = req.z_image_style if comfyui_workflow_name == "z-image-photo" else None
 
+            image_prompts: list[tuple[int, str]] = []
             for index, prompt in enumerate(scene_prompts):
                 image_prompt = prompt.get("image_prompt") if isinstance(prompt, dict) else getattr(prompt, "image_prompt", None)
                 if not image_prompt:
@@ -491,8 +492,10 @@ class ImageGenerationWorkflow:
                         f"Scene {index} is missing an image_prompt",
                         non_retryable=True,
                     )
+                image_prompts.append((index, image_prompt))
 
-                image_job_id = await workflow.execute_activity(
+            image_job_tasks = [
+                workflow.start_activity(
                     start_image_generation,
                     args=[
                         req.run_id,
@@ -507,8 +510,12 @@ class ImageGenerationWorkflow:
                     start_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
                     retry_policy=image_retry_policy,
                 )
+                for index, image_prompt in image_prompts
+            ]
+            image_job_ids = await asyncio.gather(*image_job_tasks)
 
-                image_hint = await workflow.execute_activity(
+            image_hint_tasks = [
+                workflow.start_activity(
                     poll_image_generation,
                     args=[image_job_id, req.run_id, index],
                     schedule_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
@@ -516,14 +523,20 @@ class ImageGenerationWorkflow:
                     heartbeat_timeout=timedelta(minutes=2),
                     retry_policy=image_retry_policy,
                 )
+                for (index, _), image_job_id in zip(image_prompts, image_job_ids, strict=True)
+            ]
+            image_hints = await asyncio.gather(*image_hint_tasks)
 
-                saved_file_name = await workflow.execute_activity(
+            persist_tasks = [
+                workflow.start_activity(
                     persist_image_output,
-                    args=[req.run_id, req.user_id, image_hint, index],
+                    args=[req.run_id, req.user_id, image_hint, index, req.user_access_token],
                     start_to_close_timeout=timedelta(minutes=DEFAULT_ACTIVITY_TIMEOUT_MINUTES),
                     retry_policy=retry_policy,
                 )
-                saved_images.append(saved_file_name)
+                for (index, _), image_hint in zip(image_prompts, image_hints, strict=True)
+            ]
+            saved_images = await asyncio.gather(*persist_tasks)
 
             await workflow.execute_activity(
                 send_image_generation_webhook,

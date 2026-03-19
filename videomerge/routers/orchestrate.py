@@ -4,7 +4,7 @@ from temporalio.client import Client
 from temporalio.exceptions import WorkflowAlreadyStartedError
 from temporalio.common import WorkflowIDReusePolicy
 
-from videomerge.config import IMAGE_STYLE_TO_WORKFLOW_MAPPING, TEMPORAL_SERVER_URL
+from videomerge.config import IMAGE_STYLE_TO_WORKFLOW_MAPPING, SUPABASE_ANON_KEY, SUPABASE_URL, TEMPORAL_SERVER_URL
 from videomerge.models import ImageGenerationStartRequest, OrchestrateStartRequest
 from videomerge.temporal.workflows import ImageGenerationWorkflow, VideoGenerationWorkflow
 from videomerge.services.metrics import jobs_enqueued_total
@@ -119,6 +119,26 @@ async def orchestrate_generate_images(req: ImageGenerationStartRequest):
                 f"Unknown image_style '{image_style}'. "
                 f"Supported styles: {supported}"
             ),
+        )
+
+    if not SUPABASE_URL or not SUPABASE_ANON_KEY:
+        logger.error(
+            "Rejected image-generation request run_id=%s: Supabase configuration is missing",
+            req.run_id,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Image generation storage is not configured. SUPABASE_URL and SUPABASE_ANON_KEY must be set.",
+        )
+    
+    if not req.user_access_token:
+        logger.error(
+            "Rejected image-generation request run_id=%s: user_access_token is missing",
+            req.run_id,
+        )
+        raise HTTPException(
+            status_code=400,
+            detail="user_access_token is required for authenticated storage uploads.",
         )
 
     req.workflow_id = workflow_id
