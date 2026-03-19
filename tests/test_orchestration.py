@@ -1,7 +1,8 @@
 import pytest
 from unittest.mock import Mock, patch, MagicMock
 
-from videomerge.models import OrchestrateStartRequest
+from videomerge.models import ImageGenerationStartRequest, OrchestrateStartRequest
+from videomerge.services.supabase_client import SupabaseStorageClient
 from videomerge.services.worker import Worker
 
 
@@ -89,3 +90,67 @@ class TestWorkerLanguageIntegration:
         from videomerge.services.subtitles import map_language_to_whisper_code
         whisper_code = map_language_to_whisper_code(language)
         assert whisper_code == "en-US"
+
+
+class TestImageGenerationStartRequest:
+    """Test the ImageGenerationStartRequest model."""
+
+    def test_image_generation_request_defaults(self):
+        """Test that image generation request applies expected defaults."""
+        request = ImageGenerationStartRequest(
+            user_id="user-123",
+            script="Generate a short image sequence",
+        )
+
+        assert request.user_id == "user-123"
+        assert request.script == "Generate a short image sequence"
+        assert request.language == "en"
+        assert request.image_style == "default"
+        assert request.run_id is None
+        assert request.workflow_id is None
+
+
+class TestSupabaseStorageClient:
+    """Test Supabase storage client helpers."""
+
+    def test_upload_file_returns_object_path(self):
+        """Upload should target the expected object path and return it."""
+        bucket = MagicMock()
+        storage = MagicMock()
+        storage.from_.return_value = bucket
+        client = MagicMock()
+        client.storage = storage
+
+        supabase_client = SupabaseStorageClient(url="https://example.supabase.co", anon_key="anon-key")
+        supabase_client._client = client
+
+        object_path = supabase_client.upload_file(
+            user_id="user-1",
+            run_id="abc123",
+            file_name="image_001.png",
+            file_bytes=b"png-bytes",
+        )
+
+        bucket.upload.assert_called_once_with(
+            path="user-1/abc123/image_001.png",
+            file=b"png-bytes",
+            file_options={"content-type": "image/png", "upsert": "true"},
+        )
+        assert object_path == "user-1/abc123/image_001.png"
+
+    def test_list_files_returns_sorted_file_names(self):
+        """List should return sorted file names from the configured prefix."""
+        bucket = MagicMock()
+        bucket.list.return_value = [{"name": "image_002.png"}, {"name": "image_001.png"}]
+        storage = MagicMock()
+        storage.from_.return_value = bucket
+        client = MagicMock()
+        client.storage = storage
+
+        supabase_client = SupabaseStorageClient(url="https://example.supabase.co", anon_key="anon-key")
+        supabase_client._client = client
+
+        file_names = supabase_client.list_files(user_id="user-1", run_id="abc123")
+
+        bucket.list.assert_called_once_with(path="user-1/abc123")
+        assert file_names == ["image_001.png", "image_002.png"]

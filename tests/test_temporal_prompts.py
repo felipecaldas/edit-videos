@@ -4,9 +4,9 @@ from typing import Any, Dict, List
 
 import pytest
 
-from videomerge.models import OrchestrateStartRequest
+from videomerge.models import ImageGenerationStartRequest, OrchestrateStartRequest
 from videomerge.temporal import activities as temporal_activities
-from videomerge.temporal.workflows import VideoGenerationWorkflow
+from videomerge.temporal.workflows import ImageGenerationWorkflow, VideoGenerationWorkflow
 from temporalio.client import Client
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
@@ -248,3 +248,105 @@ async def test_video_generation_workflow_uses_generated_prompts(tmp_path: Path) 
     assert completion["image_files"] == ["scene-1-image", "scene-2-image"]
     # Final video path returned by workflow should match completion payload
     assert completion["final_video_path"] == final_video_path
+
+
+@pytest.mark.asyncio
+async def test_image_generation_workflow_persists_ordered_images(tmp_path: Path) -> None:
+    """ImageGenerationWorkflow should preserve scene order and report uploaded image names."""
+
+    recorded: Dict[str, Any] = {}
+
+    async def setup_run_directory(run_id: str, payload: Dict[str, Any]) -> str:
+        run_dir = tmp_path / run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+        return str(run_dir)
+
+    async def generate_image_scene_prompts(
+        run_id: str,
+        script: str,
+        language: str,
+        image_style: str | None = None,
+    ) -> List[Dict[str, Any]]:
+        prompts: List[Dict[str, Any]] = [
+            {"image_prompt": "scene-1-image"},
+            {"image_prompt": "scene-2-image"},
+        ]
+        recorded["scene_prompts"] = prompts
+        return prompts
+
+    async def start_image_generation(
+        run_id: str,
+        prompt_text: str,
+        workflow_path: str,
+        index: int,
+        image_width: int | None = None,
+        image_height: int | None = None,
+        comfyui_workflow_name: str | None = None,
+        image_style: str | None = None,
+    ) -> str:
+        return f"job-{index}"
+
+    async def poll_image_generation(prompt_id: str, run_id: str, index: int) -> str:
+        return f"hint-{index}"
+
+    async def persist_image_output(run_id: str, user_id: str, image_hint: str, index: int) -> str:
+        file_name = f"image_{index + 1:03d}.png"
+        recorded.setdefault("saved_images", []).append((image_hint, file_name))
+        return file_name
+
+    async def send_image_generation_webhook(
+        run_id: str,
+        user_id: str,
+        status: str,
+        image_files: List[str],
+        workflow_id: str | None = None,
+        failure_reason: str | None = None,
+    ) -> None:
+        recorded["completion"] = {
+            "run_id": run_id,
+            "user_id": user_id,
+            "status": status,
+            "image_files": list(image_files),
+            "workflow_id": workflow_id,
+            "failure_reason": failure_reason,
+        }
+
+    async with WorkflowEnvironment.start_time_skipping() as env:
+        client: Client = await env.new_client()
+
+        worker = Worker(
+            client,
+            task_queue="test-image-generation",
+            workflows=[ImageGenerationWorkflow],
+            activities=[
+                setup_run_directory,
+                generate_image_scene_prompts,
+                start_image_generation,
+                poll_image_generation,
+                persist_image_output,
+                send_image_generation_webhook,
+            ],
+        )
+
+        async with worker:
+            req = ImageGenerationStartRequest(
+                user_id="user-1",
+                script="Test script",
+                language="en",
+                image_style="default",
+                run_id="run-images-1",
+                workflow_id="workflow-images-1",
+            )
+
+            image_files = await client.execute_workflow(
+                ImageGenerationWorkflow.run,
+                req,
+                id="test-image-generation-workflow",
+                task_queue="test-image-generation",
+            )
+
+    assert recorded["scene_prompts"] == [{"image_prompt": "scene-1-image"}, {"image_prompt": "scene-2-image"}]
+    assert recorded["saved_images"] == [("hint-0", "image_001.png"), ("hint-1", "image_002.png")]
+    assert recorded["completion"]["status"] == "completed"
+    assert recorded["completion"]["image_files"] == ["image_001.png", "image_002.png"]
+    assert image_files == ["image_001.png", "image_002.png"]

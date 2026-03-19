@@ -53,6 +53,24 @@ class OrchestrateStartRequest(BaseModel):
     enable_image_gen: Optional[bool] = None
 
 
+class ImageGenerationStartRequest(BaseModel):
+    user_id: str
+    script: str
+    language: str = "en"
+    image_style: str = "default"
+    z_image_style: Optional[str] = None
+    image_width: Optional[int] = Field(
+        None,
+        description="Optional image width in pixels for image generation. If not provided, uses default from config.",
+    )
+    image_height: Optional[int] = Field(
+        None,
+        description="Optional image height in pixels for image generation. If not provided, uses default from config.",
+    )
+    run_id: Optional[str] = None
+    workflow_id: Optional[str] = None
+
+
 class UpscaleStartRequest(BaseModel):
     run_id: str
     user_id: str

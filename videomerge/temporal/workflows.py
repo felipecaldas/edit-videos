@@ -43,7 +43,14 @@ from videomerge.config import (
     WORKFLOWS_BASE_PATH,
 )
 from videomerge.utils.video_dimensions import calculate_video_dimensions
-from videomerge.models import OrchestrateStartRequest, PromptItem, UpscaleStartRequest, UpscaleChildRequest, UpscaleStitchRequest
+from videomerge.models import (
+    OrchestrateStartRequest,
+    PromptItem,
+    UpscaleStartRequest,
+    UpscaleChildRequest,
+    UpscaleStitchRequest,
+    ImageGenerationStartRequest,
+)
 
 # Import all activities from the activities module
 with workflow.unsafe.imports_passed_through():
@@ -51,9 +58,12 @@ with workflow.unsafe.imports_passed_through():
         setup_run_directory,
         generate_voiceover,
         generate_scene_prompts,
+        generate_image_scene_prompts,
         generate_image,
+        persist_image_output,
         start_image_generation,
         poll_image_generation,
+        send_image_generation_webhook,
         upload_image_for_video_generation,
         generate_video_from_image,
         start_video_generation,
@@ -423,6 +433,119 @@ class VideoGenerationWorkflow:
                 raise
             raise ApplicationError(
                 f"Workflow for run_id={req.run_id} failed: {detail}",
+                non_retryable=True,
+            ) from e
+
+
+@workflow.defn
+class ImageGenerationWorkflow:
+    @workflow.run
+    async def run(self, req: ImageGenerationStartRequest) -> list[str]:
+        """Generate ordered scene images and upload them to Supabase."""
+        workflow.logger.info(f"Starting image generation workflow for run_id={req.run_id}")
+
+        retry_policy = RetryPolicy(
+            maximum_attempts=1,
+            initial_interval=timedelta(seconds=10),
+            backoff_coefficient=2.0,
+        )
+        prompt_retry_policy = RetryPolicy(
+            maximum_attempts=3,
+            initial_interval=timedelta(seconds=10),
+            backoff_coefficient=2.0,
+            non_retryable_error_types=["RuntimeError"],
+        )
+        image_retry_policy = RetryPolicy(
+            maximum_attempts=3,
+            non_retryable_error_types=["NonRetryableError"],
+        )
+
+        saved_images: list[str] = []
+        try:
+            await workflow.execute_activity(
+                setup_run_directory,
+                args=[req.run_id, req.model_dump()],
+                start_to_close_timeout=timedelta(seconds=SETUP_RUN_DIRECTORY_TIMEOUT_SECONDS),
+                retry_policy=RetryPolicy(maximum_attempts=3),
+            )
+
+            image_style = req.image_style or "default"
+            scene_prompts = await workflow.execute_activity(
+                generate_image_scene_prompts,
+                args=[req.run_id, req.script, req.language, image_style],
+                start_to_close_timeout=timedelta(minutes=GENERATE_SCENES_TIMEOUT_MINUTES),
+                retry_policy=prompt_retry_policy,
+            )
+
+            image_width = int(req.image_width) if req.image_width is not None else int(IMAGE_WIDTH)
+            image_height = int(req.image_height) if req.image_height is not None else int(IMAGE_HEIGHT)
+            workflow_filename = IMAGE_WORKFLOWS.get(image_style, IMAGE_WORKFLOWS["default"])
+            workflow_path = f"{WORKFLOWS_BASE_PATH}/{workflow_filename}"
+            comfyui_workflow_name = IMAGE_STYLE_TO_WORKFLOW_MAPPING.get(image_style)
+            style_override = req.z_image_style if comfyui_workflow_name == "z-image-photo" else None
+
+            for index, prompt in enumerate(scene_prompts):
+                image_prompt = prompt.get("image_prompt") if isinstance(prompt, dict) else getattr(prompt, "image_prompt", None)
+                if not image_prompt:
+                    raise ApplicationError(
+                        f"Scene {index} is missing an image_prompt",
+                        non_retryable=True,
+                    )
+
+                image_job_id = await workflow.execute_activity(
+                    start_image_generation,
+                    args=[
+                        req.run_id,
+                        image_prompt,
+                        workflow_path,
+                        index,
+                        image_width,
+                        image_height,
+                        comfyui_workflow_name,
+                        style_override,
+                    ],
+                    start_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
+                    retry_policy=image_retry_policy,
+                )
+
+                image_hint = await workflow.execute_activity(
+                    poll_image_generation,
+                    args=[image_job_id, req.run_id, index],
+                    schedule_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
+                    start_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
+                    heartbeat_timeout=timedelta(minutes=2),
+                    retry_policy=image_retry_policy,
+                )
+
+                saved_file_name = await workflow.execute_activity(
+                    persist_image_output,
+                    args=[req.run_id, req.user_id, image_hint, index],
+                    start_to_close_timeout=timedelta(minutes=DEFAULT_ACTIVITY_TIMEOUT_MINUTES),
+                    retry_policy=retry_policy,
+                )
+                saved_images.append(saved_file_name)
+
+            await workflow.execute_activity(
+                send_image_generation_webhook,
+                args=[req.run_id, req.user_id, "completed", saved_images, req.workflow_id, None],
+                start_to_close_timeout=timedelta(minutes=ACTIVITY_SHORT_TIMEOUT_MINUTES),
+                retry_policy=retry_policy,
+            )
+            return saved_images
+
+        except Exception as e:
+            detail = _root_cause_message(e)
+            workflow.logger.error(f"Image generation workflow for run_id={req.run_id} failed: {detail}")
+            await workflow.execute_activity(
+                send_image_generation_webhook,
+                args=[req.run_id, req.user_id, "failed", saved_images, req.workflow_id, detail],
+                start_to_close_timeout=timedelta(minutes=ACTIVITY_SHORT_TIMEOUT_MINUTES),
+                retry_policy=retry_policy,
+            )
+            if isinstance(e, ApplicationError):
+                raise
+            raise ApplicationError(
+                f"Image generation workflow for run_id={req.run_id} failed: {detail}",
                 non_retryable=True,
             ) from e
 

@@ -16,6 +16,7 @@ from videomerge.config import (
     COMFYUI_TIMEOUT_SECONDS,
     COMFY_ORG_API_KEY,
     DATA_SHARED_BASE,
+    IMAGE_GENERATION_N8N_WEBHOOK_URL,
     IMAGE_JOB_TIMEOUT_SECONDS,
     IMAGE_POLL_INTERVAL_SECONDS,
     IMAGE_HEIGHT,
@@ -62,6 +63,7 @@ from videomerge.services.comfyui_wrapper import (
     submit_image_to_video,
 )
 from videomerge.services.stitcher import concat_videos_with_voiceover, generate_and_burn_subtitles
+from videomerge.services.supabase_client import supabase_storage_client
 from videomerge.services.voiceover import synthesize_voice
 from videomerge.services.webhook_manager import webhook_manager
 from videomerge.utils.logging import get_logger
@@ -288,6 +290,151 @@ async def generate_scene_prompts(run_id: str, script: str, image_style: str | No
         logger.warning(f"[prompts] Failed to write scene prompts for run_id={run_id}: {exc}")
 
     return prompts
+
+
+@activity.defn
+async def generate_image_scene_prompts(
+    run_id: str,
+    script: str,
+    language: str,
+    image_style: str | None = None,
+) -> List[Dict[str, Any]]:
+    """Generate scene prompts for image-only orchestration and persist the full response."""
+    _safe_heartbeat()
+    run_dir = DATA_SHARED_BASE / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    url = N8N_PROMPTS_WEBHOOK_URL
+    if not url:
+        raise RuntimeError("N8N_PROMPTS_WEBHOOK_URL environment variable is not set")
+
+    payload: Dict[str, Any] = {
+        "script": script,
+        "language": language,
+        "image_style": image_style,
+    }
+
+    logger.info(f"[image-prompts] Calling Create Scenes webhook for run_id={run_id}")
+
+    try:
+        async with httpx.AsyncClient(timeout=float(N8N_WEBHOOK_TIMEOUT_SECONDS)) as client:
+            response = await client.post(url, json=payload)
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                try:
+                    error_detail = response.json()
+                    raise RuntimeError(
+                        f"Create Scenes webhook failed with status {response.status_code}: {error_detail}"
+                    ) from exc
+                except Exception:
+                    raise RuntimeError(
+                        f"Create Scenes webhook failed with status {response.status_code}: {response.text}"
+                    ) from exc
+            data = response.json()
+    except httpx.TimeoutException as exc:
+        raise ActivityTimeoutError(
+            f"Create Scenes webhook timed out after {N8N_WEBHOOK_TIMEOUT_SECONDS}s for run_id={run_id}"
+        ) from exc
+
+    prompts = data.get("prompts")
+    if not isinstance(prompts, list):
+        raise RuntimeError(f"Create Scenes webhook returned invalid payload for run_id={run_id}: {data}")
+
+    scenes_response_path = run_dir / "scenes_response.json"
+    try:
+        scenes_response_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        logger.info(f"[image-prompts] Saved scenes response for run_id={run_id} to {scenes_response_path}")
+    except Exception as exc:
+        logger.warning(f"[image-prompts] Failed to write scenes response for run_id={run_id}: {exc}")
+
+    return prompts
+
+
+@activity.defn
+async def persist_image_output(run_id: str, user_id: str, image_hint: str, index: int) -> str:
+    """Persist a generated image using a deterministic sequence filename and upload it to Supabase."""
+    activity.heartbeat()
+    run_dir = DATA_SHARED_BASE / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    sequence_number = index + 1
+    file_name = f"image_{sequence_number:03d}.png"
+    destination_path = run_dir / file_name
+    client = get_comfyui_client(ClientType.IMAGE, force_refresh=True)
+
+    if image_hint.startswith("data:"):
+        _, content = await asyncio.to_thread(client.fetch_output_bytes, image_hint)
+    else:
+        hint_path = Path(image_hint)
+        if hint_path.exists():
+            content = hint_path.read_bytes()
+        else:
+            _, content = await asyncio.to_thread(client.fetch_output_bytes, image_hint)
+
+    destination_path.write_bytes(content)
+    await asyncio.to_thread(
+        supabase_storage_client.upload_file,
+        user_id,
+        run_id,
+        file_name,
+        content,
+        "image/png",
+    )
+    logger.info(f"[image] Persisted image {file_name} for run_id={run_id}")
+    return file_name
+
+
+@activity.defn
+async def send_image_generation_webhook(
+    run_id: str,
+    user_id: str,
+    status: str,
+    image_files: List[str],
+    workflow_id: Optional[str] = None,
+    failure_reason: Optional[str] = None,
+) -> None:
+    """Send an image-generation completion or failure webhook."""
+    activity.heartbeat()
+
+    payload: Dict[str, Any] = {
+        "run_id": run_id,
+        "user_id": user_id,
+        "status": status,
+        "image_files": image_files,
+        "storage_path": f"storage/{user_id}/{run_id}",
+    }
+    if workflow_id:
+        payload["workflow_id"] = workflow_id
+    if failure_reason:
+        payload["failure_reason"] = failure_reason
+
+    if not IMAGE_GENERATION_N8N_WEBHOOK_URL:
+        raise RuntimeError("IMAGE_GENERATION_N8N_WEBHOOK_URL environment variable is not set")
+
+    event_type = "image_generation_completed" if status == "completed" else "image_generation_failed"
+    logger.info(f"Sending '{event_type}' webhook for run_id={run_id}")
+    await webhook_manager.send_webhook(IMAGE_GENERATION_N8N_WEBHOOK_URL, payload, event_type)
+
+    duration_observed = False
+    async with _metrics_lock:
+        start_ts = _job_start_times.pop(run_id, None)
+        if run_id in _active_runs:
+            _active_runs.remove(run_id)
+        worker_active.set(len(_active_runs))
+        if start_ts is not None:
+            duration = max(0.0, time.time() - start_ts)
+            job_total_seconds.observe(duration)
+            duration_observed = True
+
+    if status == "completed":
+        jobs_completed_total.inc()
+    else:
+        reason_label = failure_reason or "unknown"
+        jobs_failed_total.labels(reason=reason_label).inc()
+
+    if not duration_observed:
+        logger.debug(f"[metrics] No start timestamp recorded for run_id={run_id}; skipping job_total_seconds")
 
 
 @activity.defn
