@@ -65,14 +65,14 @@ sequenceDiagram
         Note over TW,N: ✅ Send completion webhook
         TW->>T: Schedule Activity 'send_image_generation_webhook'
         T->>TW: Execute activity
-        TW->>N: POST {IMAGE_GENERATION_N8N_WEBHOOK_URL}<br/>{workflow_id, run_id, user_id, status: "completed", image_files, storage_path}
+        TW->>N: POST https://birthdaypartyai.app/n8n/webhook/359a79b9-4159-4a2e-a5d3-4c000afb07a3<br/>{event: "job_completed", data: {job_id, status: "completed", image_files, run_id}}
         N->>F: Notify frontend with ordered image list
     else Workflow Failure
         Note over TW,N: ❌ Send failure webhook
         TW-->>TW: Workflow catches exception
         TW->>T: Schedule Activity 'send_image_generation_webhook'
         T->>TW: Execute activity
-        TW->>N: POST {IMAGE_GENERATION_N8N_WEBHOOK_URL}<br/>{workflow_id, run_id, user_id, status: "failed", image_files, failure_reason}
+        TW->>N: POST https://birthdaypartyai.app/n8n/webhook/359a79b9-4159-4a2e-a5d3-4c000afb07a3<br/>{event: "job_failed", data: {job_id, status: "failed", image_files, run_id, failure_reason}}
         N->>F: Notify frontend of failure
     end
 
@@ -84,7 +84,7 @@ sequenceDiagram
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/orchestrate/generate-images` | POST | Create new image generation job and return `workflow_id` + `run_id` immediately |
-| `{IMAGE_GENERATION_N8N_WEBHOOK_URL}` | POST | N8N receives image-generation completion/failure notifications |
+| `https://birthdaypartyai.app/n8n/webhook/359a79b9-4159-4a2e-a5d3-4c000afb07a3` | POST | N8N receives image-generation completion/failure notifications |
 
 ## Data Flow
 
@@ -116,8 +116,8 @@ sequenceDiagram
    - The same file is uploaded to Supabase Storage under `storage/{user_id}/{run_id}/`.
 
 4. **Async frontend notification**
-   - On success, the workflow sends an ordered list of image filenames to N8N.
-   - On failure, the workflow sends the failure reason and any images already persisted.
+   - On success, the workflow sends `event: job_completed` with `data.job_id`, `data.status`, `data.image_files`, and `data.run_id`.
+   - On failure, the workflow sends `event: job_failed` and includes `failure_reason` alongside any already persisted `image_files`.
 
 ## Key Participants
 

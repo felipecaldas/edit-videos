@@ -289,7 +289,7 @@ async def test_image_generation_workflow_persists_ordered_images(tmp_path: Path)
     async def poll_image_generation(prompt_id: str, run_id: str, index: int) -> str:
         return f"hint-{index}"
 
-    async def persist_image_output(run_id: str, user_id: str, image_hint: str, index: int) -> str:
+    async def persist_image_output(run_id: str, user_id: str, image_hint: str, index: int, user_access_token: str) -> str:
         file_name = f"image_{index + 1:03d}.png"
         recorded.setdefault("saved_images", []).append((image_hint, file_name))
         return file_name
@@ -299,14 +299,16 @@ async def test_image_generation_workflow_persists_ordered_images(tmp_path: Path)
         user_id: str,
         status: str,
         image_files: List[str],
-        workflow_id: str | None = None,
+        image_prompts: List[str],
+        workflow_id: str,
         failure_reason: str | None = None,
     ) -> None:
         recorded["completion"] = {
-            "job_id": workflow_id or run_id,
             "run_id": run_id,
+            "workflow_id": workflow_id,
             "status": status,
             "image_files": list(image_files),
+            "image_prompts": list(image_prompts),
             "failure_reason": failure_reason,
         }
 
@@ -335,6 +337,7 @@ async def test_image_generation_workflow_persists_ordered_images(tmp_path: Path)
                 image_style="default",
                 run_id="run-images-1",
                 workflow_id="workflow-images-1",
+                user_access_token="jwt-token",
             )
 
             image_files = await client.execute_workflow(
@@ -347,7 +350,8 @@ async def test_image_generation_workflow_persists_ordered_images(tmp_path: Path)
     assert recorded["scene_prompts"] == [{"image_prompt": "scene-1-image"}, {"image_prompt": "scene-2-image"}]
     assert recorded["saved_images"] == [("hint-0", "image_001.png"), ("hint-1", "image_002.png")]
     assert recorded["completion"]["status"] == "completed"
-    assert recorded["completion"]["job_id"] == "workflow-images-1"
     assert recorded["completion"]["run_id"] == "run-images-1"
+    assert recorded["completion"]["workflow_id"] == "workflow-images-1"
     assert recorded["completion"]["image_files"] == ["image_001.png", "image_002.png"]
+    assert recorded["completion"]["image_prompts"] == ["scene-1-image", "scene-2-image"]
     assert image_files == ["image_001.png", "image_002.png"]

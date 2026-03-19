@@ -407,20 +407,24 @@ async def send_image_generation_webhook(
     user_id: str,
     status: str,
     image_files: List[str],
-    workflow_id: Optional[str] = None,
+    image_prompts: List[str],
+    workflow_id: str,
     failure_reason: Optional[str] = None,
 ) -> None:
     """Send an image-generation completion or failure webhook."""
     activity.heartbeat()
 
+    if not workflow_id:
+        raise RuntimeError(f"workflow_id is required for image generation webhook run_id={run_id}")
+
     payload: Dict[str, Any] = {
         "run_id": run_id,
+        "workflow_id": workflow_id,
         "status": status,
         "image_files": image_files,
+        "image_prompts": image_prompts,
         "output_dir": str(DATA_SHARED_BASE / run_id),
     }
-    if workflow_id:
-        payload["workflow_id"] = workflow_id
 
     if not IMAGE_GENERATION_N8N_WEBHOOK_URL:
         raise RuntimeError("IMAGE_GENERATION_N8N_WEBHOOK_URL environment variable is not set")
