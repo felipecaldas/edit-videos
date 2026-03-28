@@ -50,6 +50,7 @@ from videomerge.models import (
     UpscaleChildRequest,
     UpscaleStitchRequest,
     ImageGenerationStartRequest,
+    StoryboardVideoGenerationRequest,
 )
 
 # Import all activities from the activities module
@@ -59,8 +60,10 @@ with workflow.unsafe.imports_passed_through():
         generate_voiceover,
         generate_scene_prompts,
         generate_image_scene_prompts,
+        load_storyboard_scene_inputs,
         generate_image,
         persist_image_output,
+        upload_final_video_output,
         start_image_generation,
         poll_image_generation,
         send_image_generation_webhook,
@@ -560,6 +563,167 @@ class ImageGenerationWorkflow:
                 raise
             raise ApplicationError(
                 f"Image generation workflow for run_id={req.run_id} failed: {detail}",
+                non_retryable=True,
+            ) from e
+
+
+@workflow.defn
+class StoryBoardVideoGeneration:
+    @workflow.run
+    async def run(self, req: StoryboardVideoGenerationRequest) -> str:
+        """Generate ordered storyboard-based video clips and publish the final video."""
+        workflow.logger.info(f"Starting storyboard video generation workflow for run_id={req.run_id}")
+
+        retry_policy = RetryPolicy(
+            maximum_attempts=1,
+            initial_interval=timedelta(seconds=10),
+            backoff_coefficient=2.0,
+        )
+        prompt_retry_policy = RetryPolicy(
+            maximum_attempts=3,
+            initial_interval=timedelta(seconds=10),
+            backoff_coefficient=2.0,
+            non_retryable_error_types=["RuntimeError"],
+        )
+        activity_defaults = {
+            "start_to_close_timeout": timedelta(minutes=DEFAULT_ACTIVITY_TIMEOUT_MINUTES),
+            "retry_policy": retry_policy,
+        }
+
+        video_paths: list[str] = []
+        try:
+            run_dir = await workflow.execute_activity(
+                setup_run_directory,
+                args=[req.run_id, req.model_dump()],
+                start_to_close_timeout=timedelta(seconds=SETUP_RUN_DIRECTORY_TIMEOUT_SECONDS),
+                retry_policy=RetryPolicy(maximum_attempts=3),
+            )
+
+            voiceover_path = await workflow.execute_activity(
+                generate_voiceover,
+                args=[req.run_id, req.script, req.language, req.elevenlabs_voice_id],
+                start_to_close_timeout=timedelta(minutes=ACTIVITY_SHORT_TIMEOUT_MINUTES),
+                retry_policy=retry_policy,
+            )
+
+            scene_inputs = await workflow.execute_activity(
+                load_storyboard_scene_inputs,
+                args=[req.run_id],
+                start_to_close_timeout=timedelta(minutes=ACTIVITY_SHORT_TIMEOUT_MINUTES),
+                retry_policy=prompt_retry_policy,
+            )
+
+            video_width, video_height = calculate_video_dimensions(req.video_format, req.target_resolution)
+
+            start_tasks = []
+            for scene_input in scene_inputs:
+                start_tasks.append(
+                    workflow.start_activity(
+                        start_video_generation,
+                        args=[
+                            req.run_id,
+                            scene_input["video_prompt"],
+                            scene_input["image_path"],
+                            int(scene_input["index"]),
+                            video_width,
+                            video_height,
+                        ],
+                        start_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
+                        retry_policy=retry_policy,
+                    )
+                )
+
+            video_job_ids = await asyncio.gather(*start_tasks)
+
+            poll_tasks = [
+                workflow.start_activity(
+                    poll_video_generation,
+                    args=[video_job_id, req.run_id, int(scene_input["index"])],
+                    schedule_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
+                    start_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
+                    heartbeat_timeout=timedelta(minutes=2),
+                    retry_policy=retry_policy,
+                )
+                for scene_input, video_job_id in zip(scene_inputs, video_job_ids, strict=True)
+            ]
+            raw_video_paths = await asyncio.gather(*poll_tasks)
+
+            for scene_input, result_list in zip(scene_inputs, raw_video_paths, strict=True):
+                if not result_list:
+                    raise ApplicationError(
+                        f"No video output generated for scene {scene_input['index']}",
+                        non_retryable=True,
+                    )
+                video_paths.append(result_list[0])
+
+            stitched_video_path = await workflow.execute_activity(
+                stitch_videos,
+                args=[req.run_id, video_paths, voiceover_path],
+                start_to_close_timeout=timedelta(minutes=ACTIVITY_SHORT_TIMEOUT_MINUTES),
+                retry_policy=retry_policy,
+            )
+
+            final_video_path = await workflow.execute_activity(
+                burn_subtitles_into_video,
+                args=[req.run_id, stitched_video_path, req.language, voiceover_path],
+                start_to_close_timeout=timedelta(minutes=ACTIVITY_SHORT_TIMEOUT_MINUTES),
+                retry_policy=retry_policy,
+            )
+
+            uploaded_object_path = await workflow.execute_activity(
+                upload_final_video_output,
+                args=[req.run_id, req.user_id, final_video_path, req.user_access_token],
+                start_to_close_timeout=timedelta(minutes=DEFAULT_ACTIVITY_TIMEOUT_MINUTES),
+                retry_policy=retry_policy,
+            )
+
+            await workflow.execute_activity(
+                send_completion_webhook,
+                args=[
+                    req.run_id,
+                    "completed",
+                    final_video_path,
+                    req.workflow_id,
+                    run_dir,
+                    video_paths,
+                    [],
+                    voiceover_path,
+                    None,
+                    uploaded_object_path,
+                ],
+                **activity_defaults,
+            )
+
+            workflow.logger.info(
+                "Storyboard video generation completed for run_id=%s with final_video=%s uploaded_object=%s",
+                req.run_id,
+                final_video_path,
+                uploaded_object_path,
+            )
+            return final_video_path
+
+        except Exception as e:
+            detail = _root_cause_message(e)
+            workflow.logger.error(f"Storyboard video generation workflow for run_id={req.run_id} failed: {detail}")
+            await workflow.execute_activity(
+                send_completion_webhook,
+                args=[
+                    req.run_id,
+                    "failed",
+                    "",
+                    req.workflow_id,
+                    locals().get("run_dir", ""),
+                    video_paths,
+                    [],
+                    locals().get("voiceover_path", ""),
+                    detail,
+                ],
+                **activity_defaults,
+            )
+            if isinstance(e, ApplicationError):
+                raise
+            raise ApplicationError(
+                f"Storyboard video generation workflow for run_id={req.run_id} failed: {detail}",
                 non_retryable=True,
             ) from e
 

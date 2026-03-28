@@ -16,7 +16,7 @@ from videomerge.config import (
     IMAGE_POLL_INTERVAL_SECONDS,
 )
 from videomerge.services.metrics import registry
-from videomerge.temporal.workflows import ImageGenerationWorkflow, VideoGenerationWorkflow, ProcessSceneWorkflow, VideoUpscalingWorkflow, VideoUpscalingChildWorkflow, VideoUpscalingStitchWorkflow
+from videomerge.temporal.workflows import ImageGenerationWorkflow, ProcessSceneWorkflow, StoryBoardVideoGeneration, VideoGenerationWorkflow, VideoUpscalingChildWorkflow, VideoUpscalingStitchWorkflow, VideoUpscalingWorkflow
 from videomerge.temporal import activities
 from videomerge.utils.logging import get_logger
 
@@ -127,16 +127,18 @@ async def main() -> None:
     worker_gen = Worker(
         client,
         task_queue="video-generation-task-queue",
-        workflows=[VideoGenerationWorkflow, ImageGenerationWorkflow, ProcessSceneWorkflow],
+        workflows=[VideoGenerationWorkflow, ImageGenerationWorkflow, ProcessSceneWorkflow, StoryBoardVideoGeneration],
         activities=[
             activities.setup_run_directory,
             activities.generate_voiceover,
             activities.generate_scene_prompts,
             activities.generate_image_scene_prompts,
+            activities.load_storyboard_scene_inputs,
             activities.generate_image,
             activities.start_image_generation,
             activities.poll_image_generation,
             activities.persist_image_output,
+            activities.upload_final_video_output,
             activities.send_image_generation_webhook,
             activities.upload_image_for_video_generation,
             activities.generate_video_from_image,

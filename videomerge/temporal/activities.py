@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
+import aiohttp
 import httpx
 from temporalio import activity
 
@@ -352,6 +353,61 @@ async def generate_image_scene_prompts(
 
 
 @activity.defn
+async def load_storyboard_scene_inputs(run_id: str) -> List[Dict[str, Any]]:
+    """Load ordered storyboard scene prompts and image paths from the shared run directory."""
+    activity.heartbeat()
+    run_dir = DATA_SHARED_BASE / run_id
+    prompts_path = run_dir / "scene_prompts.json"
+
+    if not prompts_path.exists():
+        message = f"scene_prompts.json not found for run_id={run_id} at {prompts_path}"
+        logger.error(message)
+        raise RuntimeError(message)
+
+    try:
+        prompts = json.loads(prompts_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        message = f"Invalid scene_prompts.json for run_id={run_id}: {exc}"
+        logger.error(message)
+        raise RuntimeError(message) from exc
+
+    if not isinstance(prompts, list):
+        message = f"scene_prompts.json must contain a list for run_id={run_id}"
+        logger.error(message)
+        raise RuntimeError(message)
+
+    scene_inputs: List[Dict[str, Any]] = []
+    for sequence_number, prompt in enumerate(prompts, start=1):
+        if not isinstance(prompt, dict):
+            message = f"Scene prompt at index={sequence_number - 1} is not an object for run_id={run_id}"
+            logger.error(message)
+            raise RuntimeError(message)
+
+        video_prompt = prompt.get("video_prompt")
+        if not video_prompt:
+            message = f"Scene prompt at index={sequence_number - 1} is missing video_prompt for run_id={run_id}"
+            logger.error(message)
+            raise RuntimeError(message)
+
+        image_path = run_dir / f"image_{sequence_number:03d}.png"
+        if not image_path.exists():
+            message = f"Storyboard image not found for run_id={run_id}: {image_path}"
+            logger.error(message)
+            raise RuntimeError(message)
+
+        scene_inputs.append(
+            {
+                "index": sequence_number - 1,
+                "image_path": str(image_path),
+                "video_prompt": str(video_prompt),
+            }
+        )
+
+    logger.info("Loaded %s storyboard scene inputs for run_id=%s", len(scene_inputs), run_id)
+    return scene_inputs
+
+
+@activity.defn
 async def persist_image_output(run_id: str, user_id: str, image_hint: str, index: int, user_access_token: str) -> str:
     """Persist a generated image using a deterministic sequence filename and upload it to Supabase.
     
@@ -399,6 +455,33 @@ async def persist_image_output(run_id: str, user_id: str, image_hint: str, index
     )
     logger.info(f"[image] Persisted image {file_name} for run_id={run_id}")
     return file_name
+
+
+@activity.defn
+async def upload_final_video_output(
+    run_id: str,
+    user_id: str,
+    final_video_path: str,
+    user_access_token: str,
+) -> str:
+    """Upload the final stitched video to Supabase storage."""
+    activity.heartbeat()
+    final_path = Path(final_video_path)
+    if not final_path.exists() or final_path.stat().st_size == 0:
+        raise RuntimeError(f"Final video file does not exist or is empty: {final_video_path}")
+    
+    from videomerge.services.supabase_client import SupabaseStorageClient
+
+    authenticated_client = SupabaseStorageClient(user_jwt=user_access_token)
+    object_path = await asyncio.to_thread(
+        authenticated_client.upload_local_file,
+        user_id,
+        run_id,
+        final_path,
+        "video/mp4",
+    )
+    logger.info("[video] Uploaded final video for run_id=%s to object_path=%s", run_id, object_path)
+    return object_path
 
 
 @activity.defn
@@ -804,6 +887,7 @@ async def send_completion_webhook(
     image_files: Optional[List[str]] = None,
     voiceover_path: Optional[str] = None,
     failure_reason: Optional[str] = None,
+    uploaded_video_object_path: Optional[str] = None,
 ):
     """Sends a webhook notification to N8N upon completion."""
     activity.heartbeat()
@@ -825,6 +909,8 @@ async def send_completion_webhook(
         payload["image_files"] = image_files
     if voiceover_path:
         payload["voiceover_path"] = voiceover_path
+    if uploaded_video_object_path:
+        payload["uploaded_video_object_path"] = uploaded_video_object_path
 
     event_type = "job_completed" if status == "completed" else "job_failed"
     logger.info(f"Sending '{event_type}' webhook for run_id={run_id}")
