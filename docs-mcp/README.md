@@ -43,7 +43,13 @@ The current catalog infers categories from the `docs/api` path:
 
 ## Run Locally
 
-Install dependencies first, then run the server over stdio:
+Install the docs MCP dependencies separately from the main application requirements:
+
+```powershell
+python -m pip install -r .\docs-mcp\requirements.txt
+```
+
+Then run the server over stdio:
 
 ```powershell
 python .\docs-mcp\run.py
