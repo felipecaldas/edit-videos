@@ -349,6 +349,13 @@ async def generate_image_scene_prompts(
     except Exception as exc:
         logger.warning(f"[image-prompts] Failed to write scenes response for run_id={run_id}: {exc}")
 
+    prompts_path = run_dir / "scene_prompts.json"
+    try:
+        prompts_path.write_text(json.dumps(prompts, ensure_ascii=False, indent=2), encoding="utf-8")
+        logger.info(f"[image-prompts] Saved scene prompts for run_id={run_id} to {prompts_path}")
+    except Exception as exc:
+        logger.warning(f"[image-prompts] Failed to write scene prompts for run_id={run_id}: {exc}")
+
     return prompts
 
 
