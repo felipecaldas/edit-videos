@@ -27,6 +27,7 @@ services:
       - "/mnt/tp-share/n8n-shared:/data/shared"
       - .:/app
     environment:
+      - PYTHONPATH=/app
       - RUN_ENV=local
       - TZ=Australia/Melbourne
       - VOICEOVER_SERVICE_URL=http://192.168.68.51:8083

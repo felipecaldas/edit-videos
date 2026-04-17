@@ -35,6 +35,7 @@ services:
       - "/mnt/tp-share/n8n-shared:/data/shared"
       - .:/app
     environment:
+      - PYTHONPATH=/app
       - RUN_ENV=${RUN_ENV}
       - TZ=Australia/Melbourne
       - DATA_SHARED_BASE=/data/shared
@@ -73,7 +74,7 @@ services:
       - tabario
 
   temporal-ui:
-    image: temporalio/ui:2.42.1
+    image: temporalio/ui:2.48.3
     ports:
       - "8087:8080"
     environment:
