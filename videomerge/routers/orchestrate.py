@@ -33,6 +33,19 @@ def aspect_ratio_to_video_format(aspect_ratio: str) -> str:
     return "9:16"
 
 
+def _resolve_handoff_flag(req) -> bool:
+    """Resolve the effective handoff_to_compositor flag for a request.
+
+    When ``handoff_to_compositor`` is explicitly ``True`` or ``False``, that
+    value is returned as-is.  When it is ``None`` (default), the flag is
+    auto-computed as ``True`` only when ``brief``, ``platform``, and
+    ``client_id`` are all present.
+    """
+    if req.handoff_to_compositor is not None:
+        return req.handoff_to_compositor
+    return bool(req.brief and req.platform and req.client_id)
+
+
 def _derive_run_id(video_idea_id: Optional[str], platform: Optional[str]) -> str:
     """Derive run_id from video_idea_id and platform."""
     if not video_idea_id:
@@ -119,11 +132,17 @@ async def orchestrate_start(req: OrchestrateStartRequest):
             ),
         )
 
+    # Validate handoff: client_id required when handoff is enabled
+    if _resolve_handoff_flag(req) and not req.client_id:
+        raise HTTPException(
+            status_code=400,
+            detail="client_id is required when handoff_to_compositor is enabled.",
+        )
+
     # Ensure the workflow_id is propagated into the workflow request payload
     req.workflow_id = workflow_id
 
     jobs_enqueued_total.inc()
-
 
     client = await Client.connect(TEMPORAL_SERVER_URL)
     try:
@@ -351,6 +370,13 @@ async def orchestrate_generate_videos(req: StoryboardVideoGenerationRequest):
         raise HTTPException(
             status_code=400,
             detail="user_access_token is required for authenticated storage uploads.",
+        )
+
+    # Validate handoff: client_id required when handoff is enabled
+    if _resolve_handoff_flag(req) and not req.client_id:
+        raise HTTPException(
+            status_code=400,
+            detail="client_id is required when handoff_to_compositor is enabled.",
         )
 
     req.workflow_id = workflow_id

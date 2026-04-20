@@ -115,6 +115,8 @@ If these files are missing, the workflow will fail.
 | `brief` | object | V-CaaS flow | Top-level brief object with per-platform execution briefs |
 | `platform` | string | V-CaaS flow | Platform identifier selecting one `PlatformBriefModel` from `brief.platform_briefs` |
 | `video_idea_id` | string | V-CaaS flow without `run_id` | Supabase `video_ideas.id`, used to derive `run_id` and echoed in webhooks |
+| `client_id` | string | When `handoff_to_compositor` is `true` (or auto-computed `true`) | Supabase `clients.id`. Required for the compositor handoff path. |
+| `handoff_to_compositor` | boolean \| null | No | Controls whether finished clips are forwarded to `tabario-video-compositor`. When `null` (default), auto-computes to `true` if `brief + platform + client_id` are all present. Explicitly set to `false` to disable handoff even in brief-aware runs. |
 
 ## Derivation Rules (V-CaaS Flow)
 
@@ -153,6 +155,7 @@ When `brief` and `platform` are both present:
 | 400 | Missing `user_access_token` | `{"detail": "user_access_token is required for authenticated storage uploads."}` |
 | 400 | V-CaaS flow missing `video_idea_id` when `run_id` omitted | `{"detail": "video_idea_id is required when run_id is not supplied in brief-aware flow."}` |
 | 400 | Platform not found in `brief.platform_briefs` | `{"detail": "Platform 'TikTok' not found in brief.platform_briefs. Available platforms: ['LinkedIn', 'Instagram']"}` |
+| 400 | Handoff enabled but `client_id` missing | `{"detail": "client_id is required when handoff_to_compositor is enabled."}` |
 | 409 | Workflow already running | `{"detail": "A storyboard video generation job is already in progress for this user."}` |
 | 500 | Supabase not configured | `{"detail": "Final video storage is not configured. SUPABASE_URL and SUPABASE_ANON_KEY must be set."}` |
 | 500 | Temporal workflow start failure | `{"detail": "Failed to start storyboard video workflow: <error>"}` |
@@ -166,6 +169,8 @@ When `brief` and `platform` are both present:
 - Generated video clips remain in `/data/shared/{run_id}` and are **not** uploaded to Supabase
 - Only the final stitched video is uploaded to Supabase
 - The completion webhook includes both `final_video_path` (local) and `uploaded_video_object_path` (Supabase)
+- `client_id` is **required** whenever `handoff_to_compositor` resolves to `true` (explicit or auto-computed)
+- `handoff_to_compositor` auto-computes to `true` when `brief + platform + client_id` are all present; pass `false` explicitly to opt out
 
 ## Workflow Behavior
 

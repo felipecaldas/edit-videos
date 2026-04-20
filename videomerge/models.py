@@ -212,6 +212,19 @@ class OrchestrateStartRequest(BaseModel):
     brief: Optional[Brief] = Field(None, description="V-CaaS brief object. When present together with 'platform', the router/workflow switches to the brief-aware flow and skips the N8N prompts webhook.")
     platform: Optional[str] = Field(None, description="Platform identifier selecting one PlatformBriefModel from brief.platform_briefs (e.g. 'LinkedIn').", examples=["LinkedIn"])
     video_idea_id: Optional[str] = Field(None, description="Supabase video_ideas.id, echoed in completion webhooks for correlation with the source idea.", examples=["fe1004f1-9a5d-4b9f-8e0a-5c7f9b3e6c11"])
+    client_id: Optional[str] = Field(
+        None,
+        description="Supabase clients.id. Required when handoff_to_compositor is True (or auto-computed True).",
+        examples=["client-42"],
+    )
+    handoff_to_compositor: Optional[bool] = Field(
+        None,
+        description=(
+            "Controls whether the workflow hands off the finished clips to tabario-video-compositor. "
+            "When None (default), auto-computes to True if brief + platform + client_id are all present, "
+            "otherwise False. Explicitly set to False to disable handoff even in brief-aware runs."
+        ),
+    )
 
 
 class ImageGenerationStartRequest(BaseModel):
@@ -289,6 +302,19 @@ class StoryboardVideoGenerationRequest(BaseModel):
     brief: Optional[Brief] = Field(None, description="V-CaaS brief object. When present together with 'platform', voiceover script is built from concatenated spoken_line values and per-scene clip length is derived from scenes[].duration_seconds.")
     platform: Optional[str] = Field(None, description="Platform identifier selecting one PlatformBriefModel from brief.platform_briefs (e.g. 'LinkedIn').", examples=["LinkedIn"])
     video_idea_id: Optional[str] = Field(None, description="Supabase video_ideas.id, echoed in completion webhooks for correlation with the source idea.", examples=["fe1004f1-9a5d-4b9f-8e0a-5c7f9b3e6c11"])
+    client_id: Optional[str] = Field(
+        None,
+        description="Supabase clients.id. Required when handoff_to_compositor is True (or auto-computed True).",
+        examples=["client-42"],
+    )
+    handoff_to_compositor: Optional[bool] = Field(
+        None,
+        description=(
+            "Controls whether the workflow hands off the finished clips to tabario-video-compositor. "
+            "When None (default), auto-computes to True if brief + platform + client_id are all present, "
+            "otherwise False. Explicitly set to False to disable handoff even in brief-aware runs."
+        ),
+    )
 
 
 class UpscaleStartRequest(BaseModel):
