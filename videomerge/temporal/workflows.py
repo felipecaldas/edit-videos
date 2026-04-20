@@ -400,6 +400,10 @@ class VideoGenerationWorkflow:
                     video_paths,
                     image_files,
                     voiceover_path,
+                    None,  # failure_reason
+                    None,  # uploaded_video_object_path
+                    req.video_idea_id,
+                    req.platform,
                 ],
                 start_to_close_timeout=timedelta(minutes=ACTIVITY_SHORT_TIMEOUT_MINUTES),
                 retry_policy=retry_policy,
@@ -428,6 +432,9 @@ class VideoGenerationWorkflow:
                     ],
                     voiceover_path if "voiceover_path" in locals() else "",
                     detail,
+                    None,  # uploaded_video_object_path
+                    req.video_idea_id,
+                    req.platform,
                 ],
                 start_to_close_timeout=timedelta(minutes=ACTIVITY_SHORT_TIMEOUT_MINUTES),
                 retry_policy=retry_policy,
@@ -544,7 +551,17 @@ class ImageGenerationWorkflow:
 
             await workflow.execute_activity(
                 send_image_generation_webhook,
-                args=[req.run_id, req.user_id, "completed", saved_images, ordered_image_prompts, req.workflow_id, None],
+                args=[
+                    req.run_id,
+                    req.user_id,
+                    "completed",
+                    saved_images,
+                    ordered_image_prompts,
+                    req.workflow_id,
+                    None,  # failure_reason
+                    req.video_idea_id,
+                    req.platform,
+                ],
                 start_to_close_timeout=timedelta(minutes=ACTIVITY_SHORT_TIMEOUT_MINUTES),
                 retry_policy=retry_policy,
             )
@@ -555,7 +572,17 @@ class ImageGenerationWorkflow:
             workflow.logger.error(f"Image generation workflow for run_id={req.run_id} failed: {detail}")
             await workflow.execute_activity(
                 send_image_generation_webhook,
-                args=[req.run_id, req.user_id, "failed", saved_images, ordered_image_prompts if 'ordered_image_prompts' in locals() else [], req.workflow_id, detail],
+                args=[
+                    req.run_id,
+                    req.user_id,
+                    "failed",
+                    saved_images,
+                    ordered_image_prompts if "ordered_image_prompts" in locals() else [],
+                    req.workflow_id,
+                    detail,
+                    req.video_idea_id,
+                    req.platform,
+                ],
                 start_to_close_timeout=timedelta(minutes=ACTIVITY_SHORT_TIMEOUT_MINUTES),
                 retry_policy=retry_policy,
             )
@@ -690,6 +717,8 @@ class StoryBoardVideoGeneration:
                     voiceover_path,
                     None,
                     uploaded_object_path,
+                    req.video_idea_id,
+                    req.platform,
                 ],
                 **activity_defaults,
             )
@@ -717,6 +746,9 @@ class StoryBoardVideoGeneration:
                     [],
                     locals().get("voiceover_path", ""),
                     detail,
+                    None,  # uploaded_video_object_path
+                    req.video_idea_id,
+                    req.platform,
                 ],
                 **activity_defaults,
             )

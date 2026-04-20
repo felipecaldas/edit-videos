@@ -25,6 +25,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application package and config
 COPY videomerge ./videomerge
+COPY tests ./tests
+COPY pytest.ini ./pytest.ini
 COPY subtitle_config.json ./subtitle_config.json
 
 # Create temp directory for file processing

@@ -33,7 +33,6 @@ services:
     working_dir: /app
     volumes:
       - "/mnt/tp-share/n8n-shared:/data/shared"
-      - .:/app
     environment:
       - PYTHONPATH=/app
       - RUN_ENV=${RUN_ENV}
@@ -44,6 +43,7 @@ services:
       - RUNPOD_VIDEO_INSTANCE_ID=${RUNPOD_VIDEO_INSTANCE_ID}
       - TIKTOK_VIDEOS_ARCHIVE_FOLDER=/data/shared/archived
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - TEMPORAL_SERVER_URL=${TEMPORAL_SERVER_URL}
     restart: unless-stopped
     depends_on:
       - temporal

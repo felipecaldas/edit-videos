@@ -26,6 +26,19 @@ def mock_image_style_mapping(monkeypatch):
     )
 
 
+@pytest.fixture(autouse=True)
+def mock_supabase_config(monkeypatch):
+    """Mock Supabase config to allow tests to run without actual Supabase."""
+    monkeypatch.setattr(
+        "videomerge.routers.orchestrate.SUPABASE_URL",
+        "https://test.supabase.co",
+    )
+    monkeypatch.setattr(
+        "videomerge.routers.orchestrate.SUPABASE_ANON_KEY",
+        "test-key",
+    )
+
+
 class TestAspectRatioToVideoFormat:
     """Test the aspect_ratio_to_video_format helper function."""
 

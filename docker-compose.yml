@@ -8,7 +8,6 @@ services:
       - "8086:8000"
     volumes:
       - "/mnt/tp-share/n8n-shared:/data/shared"
-      - .:/app
     environment:
       - TZ=Australia/Melbourne
       - VOICEOVER_SERVICE_URL=http://192.168.68.51:8083

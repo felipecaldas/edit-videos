@@ -360,6 +360,30 @@ async def generate_image_scene_prompts(
 
 
 @activity.defn
+async def persist_scene_prompts(run_id: str, prompts: List[Dict[str, Any]]) -> None:
+    """Persist scene_prompts.json to the run directory.
+
+    This activity is used when prompts were built from a V-CaaS brief
+    (rather than fetched from the N8N webhook).
+
+    Args:
+        run_id: The run identifier.
+        prompts: List of prompt dictionaries to write to scene_prompts.json.
+    """
+    activity.heartbeat()
+    run_dir = DATA_SHARED_BASE / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    prompts_path = run_dir / "scene_prompts.json"
+    try:
+        prompts_path.write_text(json.dumps(prompts, ensure_ascii=False, indent=2), encoding="utf-8")
+        logger.info(f"[scene-prompts] Persisted scene_prompts.json for run_id={run_id}")
+    except Exception as exc:
+        logger.error(f"[scene-prompts] Failed to write scene_prompts.json for run_id={run_id}: {exc}")
+        raise
+
+
+@activity.defn
 async def load_storyboard_scene_inputs(run_id: str) -> List[Dict[str, Any]]:
     """Load ordered storyboard scene prompts and image paths from the shared run directory."""
     activity.heartbeat()
@@ -500,8 +524,22 @@ async def send_image_generation_webhook(
     image_prompts: List[str],
     workflow_id: str,
     failure_reason: Optional[str] = None,
+    video_idea_id: Optional[str] = None,
+    platform: Optional[str] = None,
 ) -> None:
-    """Send an image-generation completion or failure webhook."""
+    """Send an image-generation completion or failure webhook.
+    
+    Args:
+        run_id: The run identifier.
+        user_id: The user identifier.
+        status: Completion status ("completed" or "failed").
+        image_files: List of generated image file paths.
+        image_prompts: List of image prompts used.
+        workflow_id: The Temporal workflow ID.
+        failure_reason: Optional failure reason for failed status.
+        video_idea_id: Optional Supabase video_ideas.id for V-CaaS correlation.
+        platform: Optional platform identifier for V-CaaS correlation.
+    """
     activity.heartbeat()
 
     if not workflow_id:
@@ -515,6 +553,11 @@ async def send_image_generation_webhook(
         "image_prompts": image_prompts,
         "output_dir": str(DATA_SHARED_BASE / run_id),
     }
+
+    if video_idea_id is not None:
+        payload["video_idea_id"] = video_idea_id
+    if platform is not None:
+        payload["platform"] = platform
 
     if not IMAGE_GENERATION_N8N_WEBHOOK_URL:
         raise RuntimeError("IMAGE_GENERATION_N8N_WEBHOOK_URL environment variable is not set")
@@ -775,8 +818,26 @@ async def poll_image_generation(prompt_id: str, run_id: str, index: int) -> str:
 
 
 @activity.defn
-async def start_video_generation(run_id: str, video_prompt: str, image_input: str, index: int, video_width: int, video_height: int) -> str:
-    """Submit a video generation job and return the provider job id."""
+async def start_video_generation(
+    run_id: str,
+    video_prompt: str,
+    image_input: str,
+    index: int,
+    video_width: int,
+    video_height: int,
+    length: Optional[int] = None,
+) -> str:
+    """Submit a video generation job and return the provider job id.
+
+    Args:
+        run_id: The run identifier.
+        video_prompt: The video generation prompt text.
+        image_input: Path to the input image or base64 data URL.
+        index: Scene index for file naming.
+        video_width: Video width in pixels.
+        video_height: Video height in pixels.
+        length: Optional number of frames for video generation (default 81).
+    """
 
     activity.heartbeat()
     logger.info(f"Submitting video generation for prompt index {index}")
@@ -790,6 +851,7 @@ async def start_video_generation(run_id: str, video_prompt: str, image_input: st
         run_id=run_id,
         video_width=video_width,
         video_height=video_height,
+        length=length,
     )
     return prompt_id
 
@@ -895,8 +957,25 @@ async def send_completion_webhook(
     voiceover_path: Optional[str] = None,
     failure_reason: Optional[str] = None,
     uploaded_video_object_path: Optional[str] = None,
+    video_idea_id: Optional[str] = None,
+    platform: Optional[str] = None,
 ):
-    """Sends a webhook notification to N8N upon completion."""
+    """Sends a webhook notification to N8N upon completion.
+    
+    Args:
+        run_id: The run identifier.
+        status: Completion status ("completed" or "failed").
+        final_video_path: Path to the final video file.
+        workflow_id: Optional Temporal workflow ID.
+        run_dir: Optional output directory path.
+        video_files: Optional list of video file paths.
+        image_files: Optional list of image file paths.
+        voiceover_path: Optional voiceover file path.
+        failure_reason: Optional failure reason for failed status.
+        uploaded_video_object_path: Optional Supabase storage path.
+        video_idea_id: Optional Supabase video_ideas.id for V-CaaS correlation.
+        platform: Optional platform identifier for V-CaaS correlation.
+    """
     activity.heartbeat()
 
     payload: Dict[str, Any] = {
@@ -918,6 +997,10 @@ async def send_completion_webhook(
         payload["voiceover_path"] = voiceover_path
     if uploaded_video_object_path:
         payload["uploaded_video_object_path"] = uploaded_video_object_path
+    if video_idea_id is not None:
+        payload["video_idea_id"] = video_idea_id
+    if platform is not None:
+        payload["platform"] = platform
 
     event_type = "job_completed" if status == "completed" else "job_failed"
     logger.info(f"Sending '{event_type}' webhook for run_id={run_id}")

@@ -184,6 +184,7 @@ class RunPodComfyUIClient(ComfyUIClient):
         comfyui_workflow_name: Optional[str] = None,
         video_width: Optional[int] = None,
         video_height: Optional[int] = None,
+        length: Optional[int] = None,
     ) -> str:
         """Submit an image-to-video workflow to RunPod serverless ComfyUI.
         
@@ -196,6 +197,7 @@ class RunPodComfyUIClient(ComfyUIClient):
             comfyui_workflow_name: The workflow name to use (defaults to video_wan2_2_14B_i2v)
             video_width: Optional video width in pixels (defaults to IMAGE_WIDTH from config)
             video_height: Optional video height in pixels (defaults to IMAGE_HEIGHT from config)
+            length: Optional number of frames (defaults to 81)
             
         Returns:
             Job ID from RunPod
@@ -241,6 +243,7 @@ class RunPodComfyUIClient(ComfyUIClient):
             width = video_width if video_width is not None else IMAGE_WIDTH
             height = video_height if video_height is not None else IMAGE_HEIGHT
             output_resolution = max(width, height)
+            video_length = length if length is not None else 81
 
             payload = {
                 "input": {
@@ -248,7 +251,7 @@ class RunPodComfyUIClient(ComfyUIClient):
                     "image": clean_image_data,
                     "width": width,
                     "height": height,
-                    "length": 81,
+                    "length": video_length,
                     "output_resolution": output_resolution,
                     "comfyui_workflow_name": workflow_name,
                     "comfy_org_api_key": self.comfy_org_api_key,
@@ -257,7 +260,7 @@ class RunPodComfyUIClient(ComfyUIClient):
             
             logger.info(
                 "[comfyui] Submitting image->video to RunPod: workflow=%s, size=%dx%d, length=%d",
-                workflow_name, width, height, 81
+                workflow_name, width, height, video_length
             )
 
             url = f"{self.base_url}/v2/{self.instance_id}/run"
