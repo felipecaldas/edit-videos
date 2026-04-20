@@ -16,6 +16,7 @@ services:
       - UVICORN_LOG_LEVEL=${UVICORN_LOG_LEVEL:-info}
       - VIDEO_COMPLETED_N8N_WEBHOOK_URL=${VIDEO_COMPLETED_N8N_WEBHOOK_URL}
       - TEMPORAL_SERVER_URL=${TEMPORAL_SERVER_URL}
+      - TABARIO_VIDEO_COMPOSITOR_URL=${TABARIO_VIDEO_COMPOSITOR_URL:-}
     ports:
       - "8086:8000"
     volumes:
@@ -44,6 +45,7 @@ services:
       - TIKTOK_VIDEOS_ARCHIVE_FOLDER=/data/shared/archived
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - TEMPORAL_SERVER_URL=${TEMPORAL_SERVER_URL}
+      - TABARIO_VIDEO_COMPOSITOR_URL=${TABARIO_VIDEO_COMPOSITOR_URL:-}
     restart: unless-stopped
     depends_on:
       - temporal
