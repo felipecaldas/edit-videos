@@ -19,6 +19,18 @@ Each entry should include:
 - `potentially-breaking`
 - `documentation-only`
 
+## 2026-04-20
+
+### Brief-aware V-CaaS request models (TAB-6)
+
+- **Date**: 2026-04-20
+- **Scope**: Request models for `/orchestrate/start`, `/orchestrate/generate-images`, `/orchestrate/generate-videos`
+- **Compatibility**: backward-compatible
+- **Summary**: Introduced `SceneBrief`, `VisualDirection`, `PlatformBriefModel`, and `Brief` models. Extended `OrchestrateStartRequest`, `ImageGenerationStartRequest`, and `StoryboardVideoGenerationRequest` with optional `brief`, `platform`, and `video_idea_id` fields. Added `style` as an alias key for `image_style` (via `AliasChoices`) for N8N payload compatibility. Softened `elevenlabs_voice_id`, `video_format`, `target_resolution`, `language`, and `run_id` to be optional where previously required, with router-derived defaults planned in TAB-7.
+- **Affected Docs**:
+  - `docs/api/data-contracts/request-models.md`
+- **Migration Notes**: Legacy payloads continue to validate unchanged. Clients adopting the V-CaaS flow must send `brief` + `platform` together; omitting either falls back to the legacy flow.
+
 ## 2026-03-28
 
 ### API documentation baseline established

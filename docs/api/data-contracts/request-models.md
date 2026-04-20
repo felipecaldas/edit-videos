@@ -98,6 +98,84 @@ Extends `FolderStitchRequest` for subtitle generation.
 }
 ```
 
+## V-CaaS Brief Models
+
+The following models are shared by all three `/orchestrate/*` request bodies and are used to trigger the brief-aware (V-CaaS) flow. They are **all optional** on the request bodies — omitting them produces the legacy behavior.
+
+### `SceneBrief`
+
+A single scene inside a platform brief. One `SceneBrief` corresponds to one generated image-to-video clip.
+
+```json
+{
+  "scene_number": 1,
+  "spoken_line": "Every founder has that moment.",
+  "caption_text": "The moment everything changes.",
+  "duration_seconds": 2.0,
+  "visual_description": "A founder at a desk at night, lit by the glow of a laptop."
+}
+```
+
+All fields are required when a `SceneBrief` is supplied.
+
+### `VisualDirection`
+
+Shared visual-direction cues applied across all platform briefs. All fields are optional strings.
+
+```json
+{
+  "mood": "optimistic",
+  "color_feel": "warm pastels",
+  "shot_style": "clean studio",
+  "branding_elements": "Tabario wordmark lower-third"
+}
+```
+
+### `PlatformBriefModel`
+
+Per-platform execution brief. `scenes` drive per-scene clip length and voiceover concatenation.
+
+```json
+{
+  "platform": "LinkedIn",
+  "hook": "Optional platform-specific opening hook.",
+  "tone": "confident, conversational",
+  "aspect_ratio": "1:1",
+  "scenes": [
+    {
+      "scene_number": 1,
+      "spoken_line": "...",
+      "caption_text": "...",
+      "duration_seconds": 2.0,
+      "visual_description": "..."
+    }
+  ],
+  "call_to_action": "Optional CTA string.",
+  "platform_notes": "Optional platform-specific guidance or constraints."
+}
+```
+
+- `platform` is required; all other fields optional.
+- `scenes` defaults to an empty list when omitted.
+- `aspect_ratio` supports `1:1`, `9:16`, `16:9`.
+
+### `Brief`
+
+Top-level brief carrying cross-platform narrative plus per-platform execution briefs. All fields optional.
+
+```json
+{
+  "hook": "Cross-platform narrative hook.",
+  "title": "Working title for the video idea.",
+  "narrative_structure": "problem-solution-CTA",
+  "music_sound_mood": "upbeat acoustic",
+  "visual_direction": { "mood": "optimistic", "color_feel": "warm pastels", "shot_style": "clean studio", "branding_elements": "wordmark" },
+  "platform_briefs": [
+    { "platform": "LinkedIn", "scenes": [] }
+  ]
+}
+```
+
 ## `OrchestrateStartRequest`
 
 Used by `POST /orchestrate/start` and `VideoGenerationWorkflow`.
@@ -123,7 +201,10 @@ Used by `POST /orchestrate/start` and `VideoGenerationWorkflow`.
   "run_id": "run-abc123",
   "elevenlabs_voice_id": "21m00Tcm4TlvDq8ikWAM",
   "workflow_id": "optional-client-id",
-  "enable_image_gen": true
+  "enable_image_gen": true,
+  "brief": null,
+  "platform": null,
+  "video_idea_id": null
 }
 ```
 
@@ -132,18 +213,29 @@ Used by `POST /orchestrate/start` and `VideoGenerationWorkflow`.
 - `user_id`
 - `script`
 - `caption`
-- `image_style`
-- `video_format`
-- `target_resolution`
-- `run_id`
-- `elevenlabs_voice_id`
+
+### Optional Fields (with router-derived defaults)
+
+- `language` — defaults to `"en"`
+- `image_style` — accepts the alias key `"style"` for N8N compatibility; router falls back to `"default"` when both are omitted
+- `video_format` — router derives from `brief.platform_briefs[*].aspect_ratio` in the brief-aware flow, or from env default
+- `target_resolution` — router falls back to env default
+- `run_id` — router derives from `video_idea_id` + `platform` in the brief-aware flow
+- `elevenlabs_voice_id` — router falls back to env default
+- `prompts`, `workflow_id`, `enable_image_gen`, `z_image_style`, `image_width`, `image_height` — unchanged
+
+### V-CaaS Brief-Aware Fields
+
+- `brief` — optional `Brief` object; when present together with `platform`, the router/workflow skips the N8N prompts webhook and builds prompts directly from `brief.platform_briefs[*].scenes[]`
+- `platform` — optional platform identifier that selects one `PlatformBriefModel` from `brief.platform_briefs`
+- `video_idea_id` — optional Supabase `video_ideas.id` echoed back in completion webhooks
 
 ### Important Rules
 
-- `prompts` is optional; when omitted, prompts are generated automatically
-- `workflow_id` is optional; backend may generate one
+- `prompts` is optional; when omitted in the legacy flow, prompts are generated automatically
 - `video_format` supports `9:16`, `16:9`, `1:1`
 - `target_resolution` supports `480p`, `720p`, `1080p`
+- Legacy payloads (no `brief` / `platform`) continue to validate unchanged
 
 ## `ImageGenerationStartRequest`
 
@@ -159,7 +251,10 @@ Used by `POST /orchestrate/generate-images` and `ImageGenerationWorkflow`.
   "image_height": 640,
   "run_id": "abc123",
   "workflow_id": "optional-client-id",
-  "user_access_token": "eyJhbGciOi..."
+  "user_access_token": "eyJhbGciOi...",
+  "brief": null,
+  "platform": null,
+  "video_idea_id": null
 }
 ```
 
@@ -169,11 +264,18 @@ Used by `POST /orchestrate/generate-images` and `ImageGenerationWorkflow`.
 - `script`
 - `user_access_token`
 
+### Optional Fields
+
+- `language` — defaults to `"en"`
+- `image_style` — defaults to `"default"`; accepts the alias key `"style"` for N8N compatibility
+- `run_id` — router derives from script + language (legacy) or from `video_idea_id` + `platform` (brief-aware)
+- `workflow_id` — backend may generate one
+- `brief`, `platform`, `video_idea_id` — V-CaaS brief-aware fields; see `OrchestrateStartRequest` for semantics
+
 ### Important Rules
 
-- `run_id` may be omitted and derived by the backend
-- `workflow_id` may be omitted and generated by the backend
 - `user_access_token` is required for Supabase uploads
+- Legacy payloads continue to validate unchanged
 
 ## `StoryboardVideoGenerationRequest`
 
@@ -189,14 +291,34 @@ Used by `POST /orchestrate/generate-videos` and `StoryBoardVideoGeneration`.
   "user_access_token": "eyJhbGciOi...",
   "elevenlabs_voice_id": "21m00Tcm4TlvDq8ikWAM",
   "video_format": "9:16",
-  "target_resolution": "720p"
+  "target_resolution": "720p",
+  "brief": null,
+  "platform": null,
+  "video_idea_id": null
 }
 ```
 
+### Required Fields
+
+- `user_id`
+- `script`
+- `user_access_token`
+
+### Optional Fields (with router-derived defaults)
+
+- `language` — defaults to `"en"`
+- `run_id` — router derives from `video_idea_id` + `platform` in the brief-aware flow
+- `workflow_id` — backend may generate one
+- `elevenlabs_voice_id` — router falls back to env default when omitted
+- `video_format` — router derives from `brief.platform_briefs[*].aspect_ratio` or defaults to `"9:16"`
+- `target_resolution` — router defaults to `"720p"`
+- `brief`, `platform`, `video_idea_id` — V-CaaS brief-aware fields; see `OrchestrateStartRequest` for semantics
+
 ### Important Rules
 
-- `run_id` must already reference a shared directory containing storyboard assets
+- In the legacy flow, `run_id` must already reference a shared directory containing storyboard assets
 - `user_access_token` is required for final-video upload to Supabase
+- Legacy payloads continue to validate unchanged
 
 ## `UpscaleStartRequest`
 
