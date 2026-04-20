@@ -23,7 +23,7 @@ def _build_image_generation_run_id(script: str, language: str) -> str:
 
 @router.post(
     "/orchestrate/start",
-    summary="Start the full video-generation workflow",
+    summary="Start the full video-generation workflow. One-Shot video generation without storyboard.",
     description=(
         "Starts the main Temporal workflow for end-to-end video generation. "
         "This flow can generate voiceover, scene prompts, images, video clips, subtitles, and the final stitched video."
