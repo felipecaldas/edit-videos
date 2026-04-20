@@ -325,3 +325,71 @@ class TranscriptionResponse(BaseModel):
     text: str = Field(..., description="Transcribed text")
     detected_language: Optional[str] = Field(None, description="Detected language code (if auto-detected)")
     confidence: Optional[float] = Field(None, description="Language detection confidence (if available)")
+
+
+class HandoffPayload(BaseModel):
+    """Payload forwarded to ``tabario-video-compositor`` via the ``handoff_to_compositor`` activity.
+
+    Carries everything the compositor needs to assemble and upload a final
+    brand-aware video from already-generated clips.
+    """
+
+    run_id: str = Field(
+        ...,
+        description="Business run identifier; maps to the shared working directory ``/data/shared/{run_id}/``.",
+        examples=["run-abc123"],
+    )
+    client_id: str = Field(
+        ...,
+        description="Client / tenant identifier used for brand-profile resolution and storage namespacing.",
+        examples=["client-42"],
+    )
+    brand_profile_id: Optional[str] = Field(
+        None,
+        description="Optional brand profile UUID. When omitted, the compositor resolves it from ``client_id``.",
+        examples=["bp-9f3e1a"],
+    )
+    brief: Brief = Field(
+        ...,
+        description="The full V-CaaS brief used to produce the source clips; forwarded for downstream enrichment.",
+    )
+    platform: str = Field(
+        ...,
+        description="Platform identifier that selected the active ``PlatformBriefModel`` (e.g. 'LinkedIn').",
+        examples=["LinkedIn"],
+    )
+    voiceover_path: str = Field(
+        ...,
+        description="Container-absolute path to the voiceover audio file under ``/data/shared/{run_id}/``.",
+        examples=["/data/shared/run-abc123/voiceover.mp3"],
+    )
+    clip_paths: List[str] = Field(
+        ...,
+        description="Ordered list of container-absolute paths to per-scene video clips.",
+        examples=[["/data/shared/run-abc123/000_clip.mp4", "/data/shared/run-abc123/001_clip.mp4"]],
+    )
+    video_format: str = Field(
+        ...,
+        description="Video aspect-ratio format ('9:16', '16:9', or '1:1').",
+        examples=["9:16"],
+    )
+    target_resolution: Optional[str] = Field(
+        None,
+        description="Target output resolution ('480p', '720p', '1080p'). Compositor applies its own default when omitted.",
+        examples=["720p"],
+    )
+    video_idea_id: Optional[str] = Field(
+        None,
+        description="Supabase ``video_ideas.id`` echoed for correlation with the originating idea.",
+        examples=["fe1004f1-9a5d-4b9f-8e0a-5c7f9b3e6c11"],
+    )
+    workflow_id: str = Field(
+        ...,
+        description="Temporal workflow ID of the originating generation workflow, for traceability.",
+        examples=["wf-xyz789"],
+    )
+    user_access_token: str = Field(
+        ...,
+        description="Supabase user JWT forwarded so the compositor can upload assets under the user's RLS context.",
+        examples=["eyJhbGciOi..."],
+    )

@@ -154,6 +154,7 @@ async def main() -> None:
             activities.list_upscaled_videos,
             activities.encode_file_to_base64,
             activities.send_upscale_completion_webhook,
+            activities.handoff_to_compositor,
         ],
     )
 

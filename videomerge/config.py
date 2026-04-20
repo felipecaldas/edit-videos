@@ -237,6 +237,11 @@ def _load_supabase_defaults() -> tuple[str | None, str | None, str | None, str |
     return supabase_url, supabase_anon_key, supabase_storage_bucket, image_generation_webhook_url
 
 
+def _load_compositor_defaults() -> str | None:
+    """Load tabario-video-compositor configuration values from the environment."""
+    return os.getenv("TABARIO_VIDEO_COMPOSITOR_URL")
+
+
 def _apply_config() -> None:
     """Populate module-level constants from current environment variables."""
     global TMP_BASE, DATA_SHARED_BASE, TIKTOK_VIDEOS_ARCHIVE_FOLDER
@@ -339,6 +344,9 @@ def _apply_config() -> None:
         SUPABASE_STORAGE_BUCKET,
         IMAGE_GENERATION_N8N_WEBHOOK_URL,
     ) = _load_supabase_defaults()
+
+    global TABARIO_VIDEO_COMPOSITOR_URL
+    TABARIO_VIDEO_COMPOSITOR_URL = _load_compositor_defaults()
 
 
 def _load_env() -> None:

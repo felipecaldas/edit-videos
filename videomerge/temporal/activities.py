@@ -29,6 +29,7 @@ from videomerge.config import (
     RUNPOD_API_KEY,
     RUNPOD_BASE_URL,
     RUNPOD_VIDEO_INSTANCE_ID,
+    TABARIO_VIDEO_COMPOSITOR_URL,
     UPSCALE_BATCH_SIZE,
     UPSCALE_JOB_TIMEOUT_SECONDS,
     UPSCALE_POLL_INTERVAL_SECONDS,
@@ -54,6 +55,7 @@ from videomerge.services.metrics import (
     job_total_seconds,
     worker_active,
 )
+from videomerge.models import HandoffPayload
 from videomerge.services.comfyui_client import get_image_client, get_video_client, refresh_comfyui_client, ClientType, get_comfyui_client
 from videomerge.services.comfyui_wrapper import (
     submit_text_to_image,
@@ -1469,3 +1471,89 @@ async def send_upscale_completion_webhook(
     event_type = "job_completed" if status == "completed" else "job_failed"
     logger.info(f"Sending '{event_type}' webhook for run_id={run_id}")
     await webhook_manager.send_webhook(VIDEO_COMPLETED_N8N_WEBHOOK_URL, payload, event_type)
+
+
+@activity.defn
+async def handoff_to_compositor(payload: HandoffPayload) -> str:
+    """POST a HandoffPayload to tabario-video-compositor and return its compose_job_id.
+
+    Retry policy (configured in the calling workflow):
+    - Retryable: 5xx HTTP errors, network-level errors.
+    - Non-retryable: 4xx HTTP errors (bad request — retrying will not help).
+
+    Args:
+        payload: The :class:`HandoffPayload` describing the clips and metadata
+            to pass to the compositor.
+
+    Returns:
+        The ``compose_job_id`` string returned by the compositor.
+
+    Raises:
+        RuntimeError: If ``TABARIO_VIDEO_COMPOSITOR_URL`` is not configured.
+        NonRetryableError: If the compositor responds with a 4xx status code.
+        RuntimeError: On 5xx errors or unexpected response shapes (retryable).
+    """
+    activity.heartbeat()
+
+    if not TABARIO_VIDEO_COMPOSITOR_URL:
+        raise RuntimeError(
+            "TABARIO_VIDEO_COMPOSITOR_URL environment variable is not set; "
+            "cannot forward handoff payload to compositor."
+        )
+
+    url = f"{TABARIO_VIDEO_COMPOSITOR_URL.rstrip('/')}/compose/start"
+    body = payload.model_dump(mode="json")
+
+    logger.info(
+        "[handoff] POSTing HandoffPayload to compositor for run_id=%s workflow_id=%s url=%s",
+        payload.run_id,
+        payload.workflow_id,
+        url,
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(url, json=body)
+    except httpx.TimeoutException as exc:
+        raise RuntimeError(
+            f"[handoff] Request to compositor timed out for run_id={payload.run_id}"
+        ) from exc
+    except httpx.RequestError as exc:
+        raise RuntimeError(
+            f"[handoff] Network error contacting compositor for run_id={payload.run_id}: {exc}"
+        ) from exc
+
+    if 400 <= response.status_code < 500:
+        try:
+            error_detail = response.json()
+        except Exception:
+            error_detail = response.text
+        raise NonRetryableError(
+            f"[handoff] Compositor rejected payload with {response.status_code} for "
+            f"run_id={payload.run_id}: {error_detail}"
+        )
+
+    if not response.is_success:
+        try:
+            error_detail = response.json()
+        except Exception:
+            error_detail = response.text
+        raise RuntimeError(
+            f"[handoff] Compositor returned {response.status_code} for "
+            f"run_id={payload.run_id}: {error_detail}"
+        )
+
+    data = response.json()
+    compose_job_id = data.get("compose_job_id")
+    if not compose_job_id:
+        raise RuntimeError(
+            f"[handoff] Compositor response missing 'compose_job_id' for "
+            f"run_id={payload.run_id}: {data}"
+        )
+
+    logger.info(
+        "[handoff] Compositor accepted handoff for run_id=%s; compose_job_id=%s",
+        payload.run_id,
+        compose_job_id,
+    )
+    return compose_job_id
