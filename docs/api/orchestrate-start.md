@@ -209,6 +209,19 @@ When `brief` and `platform` are both present:
 - `client_id` is **required** whenever `handoff_to_compositor` resolves to `true` (explicit or auto-computed)
 - `handoff_to_compositor` auto-computes to `true` when `brief + platform + client_id` are all present; pass `false` explicitly to opt out
 
+## Completion Webhook Ownership
+
+Who emits the final completion webhook depends on the run path:
+
+| Path | Condition | Webhook emitter | Webhook `status` |
+|---|---|---|---|
+| **Legacy success** | `handoff_to_compositor` is `false` / unset, no brief | `edit-videos` (`send_completion_webhook`) | `"completed"` |
+| **Brief-aware success** | `handoff_to_compositor` resolves to `true` | `tabario-video-compositor` (after compositing) | `"completed"` |
+| **Brief-aware failure** (handoff fails after retries) | `handoff_to_compositor` is `true` but activity raises | `edit-videos` (`send_completion_webhook`) | `"failed"` |
+| **Any workflow failure** (pre-handoff) | Exception before or during clip generation | `edit-videos` (`send_completion_webhook`) | `"failed"` |
+
+> **Key invariant:** `edit-videos` never emits a `"completed"` webhook for a brief-aware run. The compositor is the sole success-path webhook emitter for those runs. `edit-videos` always emits `"failed"` webhooks so callers are never left hanging.
+
 ## Workflow Behavior
 
 1. Validates `image_style` against known workflows
@@ -217,6 +230,18 @@ When `brief` and `platform` are both present:
 4. Starts `VideoGenerationWorkflow` on Temporal task queue `video-generation-task-queue`
 5. Sets `id_reuse_policy` to `ALLOW_DUPLICATE_FAILED_ONLY`
 6. Returns `202` immediately (workflow runs asynchronously)
+
+### Tail branching (after clip generation)
+
+**Handoff path** (`handoff_to_compositor` = `true`):
+- Calls `handoff_to_compositor` activity with a `HandoffPayload` (clips + voiceover + brief metadata)
+- Returns the `compose_job_id` from the compositor
+- Does **not** call `stitch_videos`, `burn_subtitles_into_video`, or `send_completion_webhook`
+- If handoff fails: emits `send_completion_webhook` with `status="failed"` then raises `ApplicationError`
+
+**Legacy path** (`handoff_to_compositor` = `false` or unset):
+- Calls `stitch_videos` → `burn_subtitles_into_video` → `send_completion_webhook(status="completed")`
+- No Supabase upload (this endpoint does not carry `user_access_token`)
 
 ## Related Documentation
 

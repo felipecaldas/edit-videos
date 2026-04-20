@@ -162,19 +162,30 @@ When `brief` and `platform` are both present:
 
 ## Important Invariants
 
-- `user_access_token` is **required** because the final video is uploaded to Supabase
-- `SUPABASE_URL` and `SUPABASE_ANON_KEY` must be configured in the environment
+- `user_access_token` is **required** (used for Supabase upload in legacy path, forwarded in `HandoffPayload` in brief-aware path)
+- `SUPABASE_URL` and `SUPABASE_ANON_KEY` must be configured in the environment (legacy path only — compositor handles its own uploads)
 - `workflow_id` is constructed as `tabario-storyboard-video-user-{user_id}-{run_id}` by the backend
 - The Temporal search attribute `TabarioRunId` is set to `[run_id]` for correlation
-- Generated video clips remain in `/data/shared/{run_id}` and are **not** uploaded to Supabase
-- Only the final stitched video is uploaded to Supabase
-- The completion webhook includes both `final_video_path` (local) and `uploaded_video_object_path` (Supabase)
+- Generated video clips remain in `/data/shared/{run_id}` and are **not** uploaded to Supabase by `edit-videos`
 - `client_id` is **required** whenever `handoff_to_compositor` resolves to `true` (explicit or auto-computed)
 - `handoff_to_compositor` auto-computes to `true` when `brief + platform + client_id` are all present; pass `false` explicitly to opt out
 
+## Completion Webhook Ownership
+
+Who emits the final completion webhook depends on the run path:
+
+| Path | Condition | Webhook emitter | Webhook `status` |
+|---|---|---|---|
+| **Legacy success** | `handoff_to_compositor` is `false` / unset | `edit-videos` (`send_completion_webhook`) | `"completed"` |
+| **Brief-aware success** | `handoff_to_compositor` resolves to `true` | `tabario-video-compositor` (after compositing) | `"completed"` |
+| **Brief-aware failure** (handoff fails after retries) | `handoff_to_compositor` is `true` but activity raises | `edit-videos` (`send_completion_webhook`) | `"failed"` |
+| **Any workflow failure** (pre-handoff) | Exception before or during clip generation | `edit-videos` (`send_completion_webhook`) | `"failed"` |
+
+> **Key invariant:** `edit-videos` never emits a `"completed"` webhook for a brief-aware run. The compositor is the sole success-path webhook emitter for those runs. `edit-videos` always emits `"failed"` webhooks so callers are never left hanging.
+
 ## Workflow Behavior
 
-1. Validates Supabase configuration is present
+1. Validates Supabase configuration is present (legacy path only)
 2. Derives `run_id`, `video_format` if in V-CaaS flow
 3. Constructs `workflow_id` as `tabario-storyboard-video-user-{user_id}-{run_id}`
 4. Starts `StoryBoardVideoGeneration` on Temporal task queue `video-generation-task-queue`
@@ -183,15 +194,30 @@ When `brief` and `platform` are both present:
 
 ## Workflow Steps
 
-1. **Load existing assets**: Reads `scene_prompts.json` and verifies `image_XXX.png` files exist
+1. **Setup run directory**: Creates shared working directory for this run
 2. **Generate voiceover**: Creates voiceover from `script` (legacy) or concatenated `spoken_line` values (V-CaaS)
-3. **Generate video clips**: Converts each `image_XXX.png` to a video clip using image-to-video model
-4. **Stitch clips**: Combines clips in sequence order
-5. **Burn subtitles**: Generates and burns subtitles onto the stitched video
-6. **Upload final video**: Uploads only the final video to Supabase storage
-7. **Send webhook**: Sends completion webhook with both local and Supabase paths
+3. **Load storyboard inputs**: Reads `scene_prompts.json` and resolves `image_XXX.png` paths
+4. **Generate video clips**: Converts each image to a video clip in parallel using the image-to-video model
+
+Then branches based on `handoff_to_compositor`:
+
+**Handoff path** (`handoff_to_compositor` = `true`):
+
+5. **Handoff to compositor**: Calls `handoff_to_compositor` activity with a `HandoffPayload` (clip paths, voiceover path, brief, `user_access_token`, metadata)
+6. Returns `compose_job_id` from the compositor
+- Does **not** call `stitch_videos`, `burn_subtitles_into_video`, `upload_final_video_output`, or `send_completion_webhook`
+- If handoff fails: emits `send_completion_webhook` with `status="failed"` then raises `ApplicationError`
+
+**Legacy path** (`handoff_to_compositor` = `false` or unset):
+
+5. **Stitch clips**: Combines clips in sequence order
+6. **Burn subtitles**: Generates and burns subtitles onto the stitched video
+7. **Upload final video**: Uploads only the final video to Supabase storage
+8. **Send webhook**: Sends `send_completion_webhook(status="completed")` with both local and Supabase paths
 
 ## Output
+
+### Legacy path output
 
 Final video is uploaded to Supabase storage:
 
@@ -199,7 +225,7 @@ Final video is uploaded to Supabase storage:
 {user_id}/{run_id}/final_video.mp4
 ```
 
-The completion webhook includes:
+The `edit-videos` completion webhook (emitted by `send_completion_webhook`) includes:
 
 ```json
 {
@@ -214,7 +240,13 @@ The completion webhook includes:
 }
 ```
 
-Note: `uploaded_video_object_path` is **only** present in this workflow's completion webhook, not in `/orchestrate/start`.
+Note: `uploaded_video_object_path` is **only** present in this workflow's legacy completion webhook, not in `/orchestrate/start`.
+
+### Brief-aware (handoff) path output
+
+`edit-videos` does **not** emit a completion webhook on success. The Temporal workflow returns the `compose_job_id` string from the compositor.
+
+The final completion webhook is emitted by `tabario-video-compositor` once compositing is finished. Its shape is defined in the compositor's own API contract.
 
 ## Related Documentation
 
