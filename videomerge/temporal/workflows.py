@@ -44,6 +44,7 @@ from videomerge.config import (
 )
 from videomerge.utils.video_dimensions import calculate_video_dimensions
 from videomerge.models import (
+    HandoffPayload,
     OrchestrateStartRequest,
     PromptItem,
     UpscaleStartRequest,
@@ -74,6 +75,7 @@ with workflow.unsafe.imports_passed_through():
         stitch_videos,
         burn_subtitles_into_video,
         send_completion_webhook,
+        handoff_to_compositor,
         download_video,
         start_video_upscaling,
         poll_upscale_status,
@@ -362,7 +364,76 @@ class VideoGenerationWorkflow:
                     non_retryable=True,
                 )
 
-            # 6. Stitch all video clips together with the voiceover
+            # 6. Compositor handoff OR legacy stitch/subtitle/upload/webhook tail
+            effective_handoff = (
+                req.handoff_to_compositor
+                if req.handoff_to_compositor is not None
+                else bool(req.brief and req.platform and req.client_id)
+            )
+
+            if effective_handoff:
+                handoff_payload = HandoffPayload(
+                    run_id=req.run_id,
+                    client_id=req.client_id,
+                    brief=req.brief,
+                    platform=req.platform,
+                    voiceover_path=voiceover_path,
+                    clip_paths=video_paths,
+                    video_format=req.video_format or "9:16",
+                    target_resolution=req.target_resolution,
+                    video_idea_id=req.video_idea_id,
+                    workflow_id=req.workflow_id,
+                    user_access_token="",
+                )
+                handoff_retry_policy = RetryPolicy(
+                    maximum_attempts=3,
+                    initial_interval=timedelta(seconds=10),
+                    backoff_coefficient=2.0,
+                    non_retryable_error_types=["NonRetryableError"],
+                )
+                try:
+                    compose_job_id = await workflow.execute_activity(
+                        handoff_to_compositor,
+                        args=[handoff_payload],
+                        start_to_close_timeout=timedelta(minutes=DEFAULT_ACTIVITY_TIMEOUT_MINUTES),
+                        retry_policy=handoff_retry_policy,
+                    )
+                    workflow.logger.info(
+                        f"Handoff to compositor succeeded for run_id={req.run_id} compose_job_id={compose_job_id}"
+                    )
+                except Exception as handoff_exc:
+                    detail = _root_cause_message(handoff_exc)
+                    workflow.logger.error(
+                        f"Handoff activity failed for run_id={req.run_id}: {detail}"
+                    )
+                    await workflow.execute_activity(
+                        send_completion_webhook,
+                        args=[
+                            req.run_id,
+                            "failed",
+                            "",
+                            req.workflow_id,
+                            run_dir,
+                            video_paths,
+                            [],
+                            voiceover_path,
+                            detail,
+                            None,
+                            req.video_idea_id,
+                            req.platform,
+                        ],
+                        start_to_close_timeout=timedelta(minutes=ACTIVITY_SHORT_TIMEOUT_MINUTES),
+                        retry_policy=retry_policy,
+                    )
+                    raise ApplicationError(
+                        f"Handoff to compositor failed for run_id={req.run_id}: {detail}",
+                        non_retryable=True,
+                    ) from handoff_exc
+
+                workflow.logger.info(f"Workflow for run_id={req.run_id} completed via compositor handoff.")
+                return compose_job_id
+
+            # Legacy tail: stitch -> subtitles -> upload -> webhook
             stitched_video_path = await workflow.execute_activity(
                 stitch_videos,
                 args=[req.run_id, video_paths, voiceover_path],
@@ -370,7 +441,6 @@ class VideoGenerationWorkflow:
                 retry_policy=retry_policy,
             )
 
-            # 7. Burn subtitles into the final video
             final_video_path = await workflow.execute_activity(
                 burn_subtitles_into_video,
                 args=[req.run_id, stitched_video_path, req.language, voiceover_path],
@@ -388,7 +458,6 @@ class VideoGenerationWorkflow:
                 if img:
                     image_files.append(img)
 
-            # 8. Send completion webhook
             await workflow.execute_activity(
                 send_completion_webhook,
                 args=[
@@ -683,6 +752,80 @@ class StoryBoardVideoGeneration:
                     )
                 video_paths.append(result_list[0])
 
+            # Compositor handoff OR legacy stitch/subtitle/upload/webhook tail
+            effective_handoff = (
+                req.handoff_to_compositor
+                if req.handoff_to_compositor is not None
+                else bool(req.brief and req.platform and req.client_id)
+            )
+
+            if effective_handoff:
+                handoff_payload = HandoffPayload(
+                    run_id=req.run_id,
+                    client_id=req.client_id,
+                    brief=req.brief,
+                    platform=req.platform,
+                    voiceover_path=voiceover_path,
+                    clip_paths=video_paths,
+                    video_format=req.video_format or "9:16",
+                    target_resolution=req.target_resolution,
+                    video_idea_id=req.video_idea_id,
+                    workflow_id=req.workflow_id,
+                    user_access_token=req.user_access_token,
+                )
+                handoff_retry_policy = RetryPolicy(
+                    maximum_attempts=3,
+                    initial_interval=timedelta(seconds=10),
+                    backoff_coefficient=2.0,
+                    non_retryable_error_types=["NonRetryableError"],
+                )
+                try:
+                    compose_job_id = await workflow.execute_activity(
+                        handoff_to_compositor,
+                        args=[handoff_payload],
+                        start_to_close_timeout=timedelta(minutes=DEFAULT_ACTIVITY_TIMEOUT_MINUTES),
+                        retry_policy=handoff_retry_policy,
+                    )
+                    workflow.logger.info(
+                        "Handoff to compositor succeeded for run_id=%s compose_job_id=%s",
+                        req.run_id,
+                        compose_job_id,
+                    )
+                except Exception as handoff_exc:
+                    detail = _root_cause_message(handoff_exc)
+                    workflow.logger.error(
+                        "Handoff activity failed for run_id=%s: %s", req.run_id, detail
+                    )
+                    await workflow.execute_activity(
+                        send_completion_webhook,
+                        args=[
+                            req.run_id,
+                            "failed",
+                            "",
+                            req.workflow_id,
+                            locals().get("run_dir", ""),
+                            video_paths,
+                            [],
+                            voiceover_path,
+                            detail,
+                            None,
+                            req.video_idea_id,
+                            req.platform,
+                        ],
+                        **activity_defaults,
+                    )
+                    raise ApplicationError(
+                        f"Handoff to compositor failed for run_id={req.run_id}: {detail}",
+                        non_retryable=True,
+                    ) from handoff_exc
+
+                workflow.logger.info(
+                    "Storyboard video generation completed via compositor handoff for run_id=%s",
+                    req.run_id,
+                )
+                return compose_job_id
+
+            # Legacy tail: stitch -> subtitles -> upload -> webhook
             stitched_video_path = await workflow.execute_activity(
                 stitch_videos,
                 args=[req.run_id, video_paths, voiceover_path],
