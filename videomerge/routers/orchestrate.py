@@ -1,3 +1,5 @@
+from typing import Optional
+
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 from temporalio.client import Client
@@ -13,6 +15,31 @@ import hashlib
 
 router = APIRouter(prefix="", tags=["orchestrate"])
 logger = get_logger(__name__)
+
+
+def aspect_ratio_to_video_format(aspect_ratio: str) -> str:
+    """Convert aspect ratio string to video format.
+
+    Args:
+        aspect_ratio: Aspect ratio string (e.g., '1:1', '9:16', '16:9')
+
+    Returns:
+        Video format string (e.g., '1:1', '9:16', '16:9')
+    """
+    valid_ratios = {"1:1", "9:16", "16:9"}
+    if aspect_ratio in valid_ratios:
+        return aspect_ratio
+    logger.warning("Unknown aspect_ratio '%s', defaulting to '9:16'", aspect_ratio)
+    return "9:16"
+
+
+def _derive_run_id(video_idea_id: Optional[str], platform: Optional[str]) -> str:
+    """Derive run_id from video_idea_id and platform."""
+    if not video_idea_id:
+        raise ValueError("video_idea_id is required when run_id is not supplied")
+    if not platform:
+        raise ValueError("platform is required when run_id is not supplied")
+    return f"{video_idea_id}-{platform.lower()}"
 
 
 def _build_image_generation_run_id(script: str, language: str) -> str:
@@ -37,6 +64,36 @@ def _build_image_generation_run_id(script: str, language: str) -> str:
 )
 async def orchestrate_start(req: OrchestrateStartRequest):
     """Starts a new video generation workflow."""
+    # Brief-aware branching: derive run_id, video_format, image_style from brief/platform
+    if req.brief and req.platform:
+        platform_brief = next(
+            (pb for pb in req.brief.platform_briefs if pb.platform.lower() == req.platform.lower()),
+            None,
+        )
+        if not platform_brief:
+            available_platforms = [pb.platform for pb in req.brief.platform_briefs]
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Platform '{req.platform}' not found in brief.platform_briefs. "
+                    f"Available platforms: {available_platforms}"
+                ),
+            )
+        # Derive run_id: use provided or derive from video_idea_id + platform
+        if not req.run_id:
+            if not req.video_idea_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="video_idea_id is required when run_id is not supplied in brief-aware flow.",
+                )
+            req.run_id = _derive_run_id(req.video_idea_id, req.platform)
+        # Derive video_format: use provided or derive from platform_brief.aspect_ratio
+        if not req.video_format and platform_brief.aspect_ratio:
+            req.video_format = aspect_ratio_to_video_format(platform_brief.aspect_ratio)
+        # Derive image_style: use provided or fall back to 'default'
+        if not req.image_style:
+            req.image_style = "default"
+
     workflow_id = f"tabario-user-{req.user_id}-{req.run_id}"
     logger.info(
         "Received request to start video generation with workflow_id=%s for run_id=%s",
@@ -122,7 +179,31 @@ async def orchestrate_start(req: OrchestrateStartRequest):
 )
 async def orchestrate_generate_images(req: ImageGenerationStartRequest):
     """Starts a new image-generation workflow."""
-    req.run_id = req.run_id or _build_image_generation_run_id(req.script, req.language)
+    # Brief-aware branching: derive run_id from brief/platform
+    if req.brief and req.platform:
+        platform_brief = next(
+            (pb for pb in req.brief.platform_briefs if pb.platform.lower() == req.platform.lower()),
+            None,
+        )
+        if not platform_brief:
+            available_platforms = [pb.platform for pb in req.brief.platform_briefs]
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Platform '{req.platform}' not found in brief.platform_briefs. "
+                    f"Available platforms: {available_platforms}"
+                ),
+            )
+        # Derive run_id: use provided or derive from video_idea_id + platform
+        if not req.run_id:
+            if not req.video_idea_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="video_idea_id is required when run_id is not supplied in brief-aware flow.",
+                )
+            req.run_id = _derive_run_id(req.video_idea_id, req.platform)
+    else:
+        req.run_id = req.run_id or _build_image_generation_run_id(req.script, req.language)
     workflow_id = req.workflow_id or f"tabario-image-user-{req.user_id}-{req.run_id}"
     logger.info(
         "Received request to start image generation with workflow_id=%s for run_id=%s",
@@ -218,6 +299,33 @@ async def orchestrate_generate_images(req: ImageGenerationStartRequest):
 )
 async def orchestrate_generate_videos(req: StoryboardVideoGenerationRequest):
     """Starts a storyboard video-generation workflow from pre-generated images and prompts."""
+    # Brief-aware branching: derive run_id, video_format from brief/platform
+    if req.brief and req.platform:
+        platform_brief = next(
+            (pb for pb in req.brief.platform_briefs if pb.platform.lower() == req.platform.lower()),
+            None,
+        )
+        if not platform_brief:
+            available_platforms = [pb.platform for pb in req.brief.platform_briefs]
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Platform '{req.platform}' not found in brief.platform_briefs. "
+                    f"Available platforms: {available_platforms}"
+                ),
+            )
+        # Derive run_id: use provided or derive from video_idea_id + platform
+        if not req.run_id:
+            if not req.video_idea_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="video_idea_id is required when run_id is not supplied in brief-aware flow.",
+                )
+            req.run_id = _derive_run_id(req.video_idea_id, req.platform)
+        # Derive video_format: use provided or derive from platform_brief.aspect_ratio
+        if not req.video_format and platform_brief.aspect_ratio:
+            req.video_format = aspect_ratio_to_video_format(platform_brief.aspect_ratio)
+
     workflow_id = req.workflow_id or f"tabario-storyboard-video-user-{req.user_id}-{req.run_id}"
     logger.info(
         "Received request to start storyboard video generation with workflow_id=%s for run_id=%s",
