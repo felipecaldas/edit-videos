@@ -117,6 +117,9 @@ def extract_runpod_outputs(payload: Any) -> List[str]:
         url_value = payload.get("url")
         if isinstance(url_value, str):
             results.append(url_value)
+        # Handle filename-only entries (RunPod sometimes returns just filename)
+        elif isinstance(filename, str):
+            results.append(filename)
 
         for key in ("output", "outputs", "images", "videos", "gifs", "files", "result", "items"):
             if key in payload:
