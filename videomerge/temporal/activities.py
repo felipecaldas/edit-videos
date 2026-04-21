@@ -1557,3 +1557,112 @@ async def handoff_to_compositor(payload: HandoffPayload) -> str:
         compose_job_id,
     )
     return compose_job_id
+
+
+@activity.defn
+async def poll_compose_status(
+    compose_job_id: str,
+    run_id: str,
+    poll_interval_seconds: float = 15.0,
+    timeout_seconds: float = 900.0,
+) -> str:
+    """Poll ``GET /compose/:id`` until the job is ``done`` or ``failed``.
+
+    Heartbeats on every poll cycle so Temporal knows the activity is alive.
+
+    Args:
+        compose_job_id: The compose job ID returned by ``handoff_to_compositor``.
+        run_id: The run ID, used only for structured log messages.
+        poll_interval_seconds: Seconds to wait between poll requests.
+        timeout_seconds: Maximum total seconds to wait before raising.
+
+    Returns:
+        The ``final_video_path`` from the compositor response (a container-absolute
+        path under ``/data/shared/{run_id}/``).
+
+    Raises:
+        RuntimeError: If ``TABARIO_VIDEO_COMPOSITOR_URL`` is not set or the job fails.
+        NonRetryableError: If the compositor reports ``status=failed``.
+        RuntimeError: If the poll timeout is exceeded.
+    """
+    if not TABARIO_VIDEO_COMPOSITOR_URL:
+        raise RuntimeError(
+            "TABARIO_VIDEO_COMPOSITOR_URL environment variable is not set; "
+            "cannot poll compose status."
+        )
+
+    url = f"{TABARIO_VIDEO_COMPOSITOR_URL.rstrip('/')}/compose/{compose_job_id}"
+    elapsed = 0.0
+
+    logger.info(
+        "[poll_compose] Starting poll for compose_job_id=%s run_id=%s url=%s",
+        compose_job_id,
+        run_id,
+        url,
+    )
+
+    while elapsed < timeout_seconds:
+        activity.heartbeat()
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.get(url)
+        except httpx.RequestError as exc:
+            logger.warning(
+                "[poll_compose] Network error polling compose_job_id=%s: %s — retrying",
+                compose_job_id,
+                exc,
+            )
+            await asyncio.sleep(poll_interval_seconds)
+            elapsed += poll_interval_seconds
+            continue
+
+        if not response.is_success:
+            logger.warning(
+                "[poll_compose] Unexpected %s from compositor for compose_job_id=%s — retrying",
+                response.status_code,
+                compose_job_id,
+            )
+            await asyncio.sleep(poll_interval_seconds)
+            elapsed += poll_interval_seconds
+            continue
+
+        data = response.json()
+        status = data.get("status")
+
+        logger.info(
+            "[poll_compose] compose_job_id=%s run_id=%s status=%s elapsed=%.0fs",
+            compose_job_id,
+            run_id,
+            status,
+            elapsed,
+        )
+
+        if status == "done":
+            final_video_path = data.get("final_video_path")
+            if not final_video_path:
+                raise RuntimeError(
+                    f"[poll_compose] Compositor reported done but final_video_path is missing "
+                    f"for compose_job_id={compose_job_id}"
+                )
+            logger.info(
+                "[poll_compose] compose_job_id=%s complete. final_video_path=%s",
+                compose_job_id,
+                final_video_path,
+            )
+            return final_video_path
+
+        if status == "failed":
+            error = data.get("error", "unknown error")
+            raise NonRetryableError(
+                f"[poll_compose] Compositor job failed for compose_job_id={compose_job_id} "
+                f"run_id={run_id}: {error}"
+            )
+
+        await asyncio.sleep(poll_interval_seconds)
+        elapsed += poll_interval_seconds
+
+    raise RuntimeError(
+        f"[poll_compose] Timed out after {timeout_seconds}s waiting for compose_job_id={compose_job_id} "
+        f"run_id={run_id} to complete"
+    )

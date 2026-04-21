@@ -225,6 +225,14 @@ class OrchestrateStartRequest(BaseModel):
             "otherwise False. Explicitly set to False to disable handoff even in brief-aware runs."
         ),
     )
+    user_access_token: Optional[str] = Field(
+        None,
+        description=(
+            "Supabase user JWT access token. Required when handoff_to_compositor is enabled (or auto-resolves True). "
+            "Forwarded to the compositor so Supabase uploads honour the user's RLS context."
+        ),
+        examples=["eyJhbGciOi..."],
+    )
 
 
 class ImageGenerationStartRequest(BaseModel):

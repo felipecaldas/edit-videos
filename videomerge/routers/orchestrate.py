@@ -132,11 +132,16 @@ async def orchestrate_start(req: OrchestrateStartRequest):
             ),
         )
 
-    # Validate handoff: client_id required when handoff is enabled
+    # Validate handoff: client_id and user_access_token required when handoff is enabled
     if _resolve_handoff_flag(req) and not req.client_id:
         raise HTTPException(
             status_code=400,
             detail="client_id is required when handoff_to_compositor is enabled.",
+        )
+    if _resolve_handoff_flag(req) and not req.user_access_token:
+        raise HTTPException(
+            status_code=400,
+            detail="user_access_token is required when handoff_to_compositor is enabled.",
         )
 
     # Ensure the workflow_id is propagated into the workflow request payload

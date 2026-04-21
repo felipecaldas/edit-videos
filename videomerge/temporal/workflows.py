@@ -76,6 +76,7 @@ with workflow.unsafe.imports_passed_through():
         burn_subtitles_into_video,
         send_completion_webhook,
         handoff_to_compositor,
+        poll_compose_status,
         download_video,
         start_video_upscaling,
         poll_upscale_status,
@@ -383,7 +384,7 @@ class VideoGenerationWorkflow:
                     target_resolution=req.target_resolution,
                     video_idea_id=req.video_idea_id,
                     workflow_id=req.workflow_id,
-                    user_access_token="",
+                    user_access_token=req.user_access_token or "",
                 )
                 handoff_retry_policy = RetryPolicy(
                     maximum_attempts=3,
@@ -430,8 +431,48 @@ class VideoGenerationWorkflow:
                         non_retryable=True,
                     ) from handoff_exc
 
+                # Poll compositor until composed.mp4 is ready
+                final_video_path = await workflow.execute_activity(
+                    poll_compose_status,
+                    args=[compose_job_id, req.run_id],
+                    schedule_to_close_timeout=timedelta(minutes=30),
+                    start_to_close_timeout=timedelta(minutes=30),
+                    heartbeat_timeout=timedelta(minutes=2),
+                    retry_policy=retry_policy,
+                )
+                workflow.logger.info(
+                    f"Compositor finished for run_id={req.run_id}; final_video_path={final_video_path}"
+                )
+
+                # Upload composed video to Supabase and fire completion webhook
+                uploaded_object_path = await workflow.execute_activity(
+                    upload_final_video_output,
+                    args=[req.run_id, req.user_id, final_video_path, req.user_access_token],
+                    start_to_close_timeout=timedelta(minutes=DEFAULT_ACTIVITY_TIMEOUT_MINUTES),
+                    retry_policy=retry_policy,
+                )
+                await workflow.execute_activity(
+                    send_completion_webhook,
+                    args=[
+                        req.run_id,
+                        "completed",
+                        final_video_path,
+                        req.workflow_id,
+                        run_dir,
+                        video_paths,
+                        [],
+                        voiceover_path,
+                        None,
+                        uploaded_object_path,
+                        req.video_idea_id,
+                        req.platform,
+                    ],
+                    start_to_close_timeout=timedelta(minutes=ACTIVITY_SHORT_TIMEOUT_MINUTES),
+                    retry_policy=retry_policy,
+                )
+
                 workflow.logger.info(f"Workflow for run_id={req.run_id} completed via compositor handoff.")
-                return compose_job_id
+                return final_video_path
 
             # Legacy tail: stitch -> subtitles -> upload -> webhook
             stitched_video_path = await workflow.execute_activity(
@@ -819,11 +860,52 @@ class StoryBoardVideoGeneration:
                         non_retryable=True,
                     ) from handoff_exc
 
+                # Poll compositor until composed.mp4 is ready
+                final_video_path = await workflow.execute_activity(
+                    poll_compose_status,
+                    args=[compose_job_id, req.run_id],
+                    schedule_to_close_timeout=timedelta(minutes=30),
+                    start_to_close_timeout=timedelta(minutes=30),
+                    heartbeat_timeout=timedelta(minutes=2),
+                    retry_policy=retry_policy,
+                )
+                workflow.logger.info(
+                    "Compositor finished for run_id=%s; final_video_path=%s",
+                    req.run_id,
+                    final_video_path,
+                )
+
+                # Upload composed video to Supabase and fire completion webhook
+                uploaded_object_path = await workflow.execute_activity(
+                    upload_final_video_output,
+                    args=[req.run_id, req.user_id, final_video_path, req.user_access_token],
+                    start_to_close_timeout=timedelta(minutes=DEFAULT_ACTIVITY_TIMEOUT_MINUTES),
+                    retry_policy=retry_policy,
+                )
+                await workflow.execute_activity(
+                    send_completion_webhook,
+                    args=[
+                        req.run_id,
+                        "completed",
+                        final_video_path,
+                        req.workflow_id,
+                        locals().get("run_dir", ""),
+                        video_paths,
+                        [],
+                        voiceover_path,
+                        None,
+                        uploaded_object_path,
+                        req.video_idea_id,
+                        req.platform,
+                    ],
+                    **activity_defaults,
+                )
+
                 workflow.logger.info(
                     "Storyboard video generation completed via compositor handoff for run_id=%s",
                     req.run_id,
                 )
-                return compose_job_id
+                return final_video_path
 
             # Legacy tail: stitch -> subtitles -> upload -> webhook
             stitched_video_path = await workflow.execute_activity(
