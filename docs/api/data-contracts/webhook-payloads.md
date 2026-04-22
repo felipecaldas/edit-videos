@@ -30,6 +30,8 @@ These fields are present **depending on the workflow and execution context**:
 | `uploaded_video_object_path` | string | **Only** `StoryBoardVideoGeneration` workflow | Supabase storage object path for uploaded final video |
 | `video_idea_id` | string | V-CaaS brief-aware flow | Supabase `video_ideas.id` echoed from request |
 | `platform` | string | V-CaaS brief-aware flow | Platform identifier echoed from request (e.g., `"LinkedIn"`) |
+| `scene_classifications` | array | Scene classifier enabled (`SCENE_CLASSIFIER_ENABLED=true`) | Array of `SceneClassification` objects (see `scene-classifier.md`) |
+| `video_provider_used` | string | Always (when video generation ran) | Provider used for video generation: `"fal"` or `"runpod"` |
 
 ## Workflow-Specific Contract Differences
 

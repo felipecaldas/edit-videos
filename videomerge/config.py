@@ -242,6 +242,29 @@ def _load_compositor_defaults() -> str | None:
     return os.getenv("TABARIO_VIDEO_COMPOSITOR_URL")
 
 
+def _load_fal_defaults() -> tuple[str | None, str, str, list[str], str]:
+    """Load Fal.ai configuration values from the environment."""
+    fal_api_key = os.getenv("FAL_AI_API_KEY")
+    video_provider = os.getenv("VIDEO_PROVIDER", "fal").lower()
+    fal_video_model = os.getenv("FAL_VIDEO_MODEL", "bytedance/seedance-2.0/image-to-video")
+    fal_image_models_str = os.getenv(
+        "FAL_IMAGE_MODELS",
+        "fal-ai/flux-pro/v1.1,fal-ai/flux/dev,fal-ai/ideogram/v2,fal-ai/recraft-v3"
+    )
+    fal_image_models = [m.strip() for m in fal_image_models_str.split(",") if m.strip()]
+    fal_image_default = os.getenv("FAL_IMAGE_DEFAULT", "fal-ai/flux/dev")
+    return fal_api_key, video_provider, fal_video_model, fal_image_models, fal_image_default
+
+
+def _load_scene_classifier_defaults() -> tuple[bool, str, str, str | None]:
+    """Load scene classifier configuration values from the environment."""
+    enabled = _str_to_bool(os.getenv("SCENE_CLASSIFIER_ENABLED"), "true")
+    provider = os.getenv("SCENE_CLASSIFIER_PROVIDER", "openrouter")
+    model = os.getenv("SCENE_CLASSIFIER_MODEL", "google/gemini-2.5-flash")
+    openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
+    return enabled, provider, model, openrouter_api_key
+
+
 def _apply_config() -> None:
     """Populate module-level constants from current environment variables."""
     global TMP_BASE, DATA_SHARED_BASE, TIKTOK_VIDEOS_ARCHIVE_FOLDER
@@ -347,6 +370,23 @@ def _apply_config() -> None:
 
     global TABARIO_VIDEO_COMPOSITOR_URL
     TABARIO_VIDEO_COMPOSITOR_URL = _load_compositor_defaults()
+
+    global FAL_AI_API_KEY, VIDEO_PROVIDER, FAL_VIDEO_MODEL, FAL_IMAGE_MODELS, FAL_IMAGE_DEFAULT
+    (
+        FAL_AI_API_KEY,
+        VIDEO_PROVIDER,
+        FAL_VIDEO_MODEL,
+        FAL_IMAGE_MODELS,
+        FAL_IMAGE_DEFAULT,
+    ) = _load_fal_defaults()
+
+    global SCENE_CLASSIFIER_ENABLED, SCENE_CLASSIFIER_PROVIDER, SCENE_CLASSIFIER_MODEL, OPENROUTER_API_KEY
+    (
+        SCENE_CLASSIFIER_ENABLED,
+        SCENE_CLASSIFIER_PROVIDER,
+        SCENE_CLASSIFIER_MODEL,
+        OPENROUTER_API_KEY,
+    ) = _load_scene_classifier_defaults()
 
 
 def _load_env() -> None:
