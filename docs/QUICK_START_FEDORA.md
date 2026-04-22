@@ -212,7 +212,7 @@ Use Temporal UI to:
 
 ### Update Temporal Version
 
-Edit `docker-compose.yml` or `docker-compose.local.yml`:
+Edit `docker-compose.yml`:
 ```yaml
 temporal:
   image: temporalio/auto-setup:1.29.0  # Update version here

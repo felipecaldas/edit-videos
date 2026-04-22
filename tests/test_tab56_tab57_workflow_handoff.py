@@ -85,7 +85,7 @@ class TestVideoGenerationWorkflowHandoff:
         return asyncio.get_event_loop().run_until_complete(coro)
 
     def test_handoff_true_calls_handoff_activity_not_stitch(self):
-        """When handoff_to_compositor=True, handoff_to_compositor is called; stitch_videos is NOT."""
+        """When handoff_to_compositor=True: handoff path runs (includes send_completion_webhook); legacy tail (stitch/subtitles) is skipped."""
         try:
             from videomerge.temporal.workflows import VideoGenerationWorkflow
         except ImportError as exc:
@@ -107,6 +107,10 @@ class TestVideoGenerationWorkflowHandoff:
                 return [{"image_prompt": "img1", "video_prompt": "vid1"}]
             if name == "handoff_to_compositor":
                 return "cj-compose-001"
+            if name == "poll_compose_status":
+                return "/data/shared/run-vgw-123/final.mp4"
+            if name == "upload_final_video_output":
+                return "supabase/path/video.mp4"
             return MagicMock()
 
         async def fake_execute_child_workflow(fn, args=None, **kwargs):
@@ -131,11 +135,13 @@ class TestVideoGenerationWorkflowHandoff:
 
             result = self._run(wf.run(req))
 
-        assert result == "cj-compose-001"
+        assert result == "/data/shared/run-vgw-123/final.mp4"
         assert "handoff_to_compositor" in activity_calls
+        assert "poll_compose_status" in activity_calls
+        assert "upload_final_video_output" in activity_calls
         assert "stitch_videos" not in activity_calls
         assert "burn_subtitles_into_video" not in activity_calls
-        assert "send_completion_webhook" not in activity_calls
+        assert "send_completion_webhook" in activity_calls  # completion notification runs in both paths
 
     def test_handoff_false_calls_legacy_tail_not_handoff(self):
         """When handoff_to_compositor=False, legacy tail runs; handoff_to_compositor is NOT called."""
@@ -300,7 +306,7 @@ class TestStoryBoardVideoGenerationHandoff:
         return asyncio.get_event_loop().run_until_complete(coro)
 
     def test_handoff_true_calls_handoff_activity_not_stitch(self):
-        """When handoff_to_compositor=True, handoff_to_compositor is called; stitch_videos is NOT."""
+        """When handoff_to_compositor=True: handoff path runs (includes send_completion_webhook); legacy tail (stitch/subtitles) is skipped."""
         try:
             from videomerge.temporal.workflows import StoryBoardVideoGeneration
         except ImportError as exc:
@@ -328,6 +334,10 @@ class TestStoryBoardVideoGenerationHandoff:
                 return ["/data/shared/run-sb-123/000_clip.mp4"]
             if name == "handoff_to_compositor":
                 return "cj-sb-compose-001"
+            if name == "poll_compose_status":
+                return "/data/shared/run-sb-123/final.mp4"
+            if name == "upload_final_video_output":
+                return "supabase/path/video.mp4"
             return MagicMock()
 
         async def fake_start_activity(fn, args=None, **kwargs):
@@ -354,11 +364,13 @@ class TestStoryBoardVideoGenerationHandoff:
 
                 result = self._run(wf.run(req))
 
-        assert result == "cj-sb-compose-001"
+        assert result == "/data/shared/run-sb-123/final.mp4"
         assert "handoff_to_compositor" in activity_calls
+        assert "poll_compose_status" in activity_calls
+        assert "upload_final_video_output" in activity_calls
         assert "stitch_videos" not in activity_calls
         assert "burn_subtitles_into_video" not in activity_calls
-        assert "send_completion_webhook" not in activity_calls
+        assert "send_completion_webhook" in activity_calls  # completion notification runs in both paths
 
     def test_handoff_false_calls_legacy_tail_not_handoff(self):
         """When handoff_to_compositor=False, legacy tail runs; handoff_to_compositor is NOT called."""

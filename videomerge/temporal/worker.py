@@ -133,6 +133,7 @@ async def main() -> None:
             activities.generate_voiceover,
             activities.generate_scene_prompts,
             activities.generate_image_scene_prompts,
+            activities.persist_scene_prompts,
             activities.load_storyboard_scene_inputs,
             activities.generate_image,
             activities.start_image_generation,

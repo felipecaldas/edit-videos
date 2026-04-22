@@ -7,12 +7,12 @@
 set -e  # Exit immediately if any command fails
 
 echo "Stopping video-merger and temporal-worker services..."
-sudo docker compose -f docker-compose.yml -f docker-compose.runpod.yml stop video-merger temporal-worker
+sudo docker compose stop video-merger temporal-worker
 
 echo "Building video-merger and temporal-worker services..."
-sudo docker compose -f docker-compose.yml -f docker-compose.runpod.yml build video-merger temporal-worker
+sudo docker compose build video-merger temporal-worker
 
 echo "Starting video-merger and temporal-worker services..."
-sudo docker compose -f docker-compose.yml -f docker-compose.runpod.yml up -d video-merger temporal-worker
+sudo docker compose up -d video-merger temporal-worker
 
 echo "Services restarted successfully!"
