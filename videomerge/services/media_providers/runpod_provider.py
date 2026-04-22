@@ -103,9 +103,16 @@ class RunpodProvider(MediaProvider):
         self,
         job_id: str,
         timeout_s: int,
-        poll_interval_s: float
+        poll_interval_s: float,
+        model: str = ""
     ) -> List[str]:
         """Poll for image generation completion.
+        
+        Args:
+            job_id: Job ID from submit_text_to_image
+            timeout_s: Maximum time to wait in seconds
+            poll_interval_s: Seconds between poll attempts
+            model: Model identifier (optional, not used for RunPod)
         
         Returns:
             List of local file paths (Runpod client downloads automatically)

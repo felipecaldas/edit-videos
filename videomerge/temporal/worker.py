@@ -159,6 +159,10 @@ async def main() -> None:
             activities.poll_compose_status,
             activities.classify_scenes_activity,
             activities.classify_scenes_from_script_activity,
+            activities.start_image_generation_provider,
+            activities.poll_image_generation_provider,
+            activities.start_video_generation_provider,
+            activities.poll_video_generation_provider,
         ],
     )
 

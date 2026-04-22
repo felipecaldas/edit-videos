@@ -121,7 +121,7 @@ class FalClient:
         
         Args:
             prompt: Video motion/camera prompt
-            image_input: Local file path or base64 data URL
+            image_input: Local file path, base64 data URL, or HTTP URL
             model: Fal model ID (e.g., "bytedance/seedance-2.0/image-to-video")
             width: Video width in pixels
             height: Video height in pixels
@@ -134,30 +134,59 @@ class FalClient:
         start_time = time.time()
         
         try:
-            # Convert local file path to data URL if needed
-            if not image_input.startswith("data:image/"):
-                logger.info("[fal] Converting local image to data URL: %s", image_input)
-                image_url = await self._file_to_data_url(image_input)
-            else:
-                # Strip filename metadata if present
+            # Handle different image input formats
+            if image_input.startswith("data:image/"):
+                # Base64 data URL - strip filename metadata if present
                 if "#filename=" in image_input:
                     image_url = image_input.split("#filename=")[0]
                 else:
                     image_url = image_input
+            elif image_input.startswith("http://") or image_input.startswith("https://"):
+                # HTTP URL - use as-is (e.g., from user's Supabase bucket)
+                logger.info("[fal] Using HTTP URL for image: %s", image_input)
+                image_url = image_input
+            else:
+                # Local file path - convert to data URL
+                logger.info("[fal] Converting local image to data URL: %s", image_input)
+                image_url = await self._file_to_data_url(image_input)
             
-            arguments = {
-                "prompt": prompt,
-                "image_url": image_url,
-                "width": width,
-                "height": height,
-                "length": length,
-                **kwargs
-            }
+            # Seedance 2.0 expects resolution and aspect_ratio as strings
+            is_seedance = "seedance" in model.lower()
             
-            logger.info(
-                "[fal] Submitting image-to-video: model=%s, size=%dx%d, length=%d",
-                model, width, height, length
-            )
+            if is_seedance:
+                # Convert pixel dimensions to resolution string
+                resolution = self._pixels_to_resolution(height)
+                aspect_ratio = self._pixels_to_aspect_ratio(width, height)
+                
+                arguments = {
+                    "prompt": prompt,
+                    "image_url": image_url,
+                    "resolution": resolution,
+                    "aspect_ratio": aspect_ratio,
+                    "length": str(length),
+                    "generate_audio": False,
+                    **kwargs
+                }
+                
+                logger.info(
+                    "[fal] Submitting image-to-video: model=%s, resolution=%s, aspect_ratio=%s, length=%s",
+                    model, resolution, aspect_ratio, length
+                )
+            else:
+                # Other models use width/height
+                arguments = {
+                    "prompt": prompt,
+                    "image_url": image_url,
+                    "width": width,
+                    "height": height,
+                    "length": length,
+                    **kwargs
+                }
+                
+                logger.info(
+                    "[fal] Submitting image-to-video: model=%s, size=%dx%d, length=%d",
+                    model, width, height, length
+                )
             
             handler = await fal_client.submit_async(model, arguments=arguments)
             request_id = handler.request_id
@@ -245,8 +274,18 @@ class FalClient:
                     continue
                     
             except Exception as e:
+                # Check for HTTP errors that shouldn't be retried
+                error_str = str(e)
+                is_http_error = any(x in error_str for x in ["HTTPError", "422", "400", "401", "403", "404", "500", "502", "503", "504"])
+                
+                if is_http_error:
+                    # HTTP errors should fail immediately - don't retry
+                    logger.error("[fal] HTTP error during poll (not retrying): %s, request_id=%s", e, request_id)
+                    raise RuntimeError(f"Fal API error (HTTP): {e}")
+                
                 if isinstance(e, RuntimeError):
                     raise
+                    
                 attempts += 1
                 logger.warning(
                     "[fal] Poll error: %s, attempt=%d, request_id=%s",
@@ -412,5 +451,57 @@ class FalClient:
             out_path = dest_dir / filename
             await asyncio.to_thread(out_path.write_bytes, response.content)
             
+            # Convert WebP to PNG if needed
+            if ext == ".webp":
+                png_path = out_path.with_suffix(".png")
+                import subprocess
+                result = subprocess.run(
+                    ["ffmpeg", "-y", "-i", str(out_path), str(png_path)],
+                    capture_output=True,
+                    text=True
+                )
+                if result.returncode == 0:
+                    out_path.unlink()  # Remove original WebP
+                    out_path = png_path
+                    logger.info("[fal] Converted WebP to PNG: %s", out_path)
+                else:
+                    logger.warning("[fal] WebP conversion failed: %s", result.stderr)
+            
             logger.info("[fal] Downloaded %s to %s", url, out_path)
             return out_path
+
+    def _pixels_to_resolution(self, height: int) -> str:
+        """Convert pixel height to Fal resolution string.
+        
+        Args:
+            height: Video height in pixels
+            
+        Returns:
+            Fal resolution string (e.g., "480p", "720p", "1080p")
+        """
+        if height >= 1080:
+            return "1080p"
+        elif height >= 720:
+            return "720p"
+        else:
+            return "480p"
+
+    def _pixels_to_aspect_ratio(self, width: int, height: int) -> str:
+        """Convert pixel dimensions to Fal aspect_ratio string.
+        
+        Args:
+            width: Video width in pixels
+            height: Video height in pixels
+            
+        Returns:
+            Fal aspect_ratio string (e.g., "16:9", "9:16", "1:1")
+        """
+        # Calculate approximate aspect ratio
+        ratio = width / height
+        
+        if ratio > 1.5:
+            return "16:9"
+        elif ratio < 0.7:
+            return "9:16"
+        else:
+            return "1:1"

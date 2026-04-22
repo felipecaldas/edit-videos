@@ -63,7 +63,8 @@ class MediaProvider(ABC):
         self,
         job_id: str,
         timeout_s: int,
-        poll_interval_s: float
+        poll_interval_s: float,
+        model: str = ""
     ) -> List[str]:
         """Poll for image generation completion.
         
@@ -71,6 +72,7 @@ class MediaProvider(ABC):
             job_id: Job ID from submit_text_to_image
             timeout_s: Maximum time to wait in seconds
             poll_interval_s: Seconds between poll attempts
+            model: Model identifier (optional, for providers that need it)
         
         Returns:
             List of output file paths or data URLs

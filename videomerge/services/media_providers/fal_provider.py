@@ -60,11 +60,12 @@ class FalProvider(MediaProvider):
         self,
         job_id: str,
         timeout_s: int,
-        poll_interval_s: float
+        poll_interval_s: float,
+        model: str = ""
     ) -> List[str]:
         """Poll for image generation completion."""
         return await self._client.poll_until_complete(
-            model="",  # Model not needed for polling
+            model=model,
             request_id=job_id,
             timeout_s=timeout_s,
             poll_interval_s=poll_interval_s,

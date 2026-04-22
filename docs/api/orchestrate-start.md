@@ -158,7 +158,27 @@ POST /orchestrate/start
 | `platform` | string | V-CaaS flow | Platform identifier selecting one `PlatformBriefModel` from `brief.platform_briefs` (e.g., `"LinkedIn"`, `"Instagram"`) |
 | `video_idea_id` | string | V-CaaS flow without `run_id` | Supabase `video_ideas.id`, used to derive `run_id` and echoed in webhooks |
 | `client_id` | string | When `handoff_to_compositor` is `true` (or auto-computed `true`) | Supabase `clients.id`. Required for the compositor handoff path. |
-| `handoff_to_compositor` | boolean \| null | No | Controls whether finished clips are forwarded to `tabario-video-compositor`. When `null` (default), auto-computes to `true` if `brief + platform + client_id` are all present. Explicitly set to `false` to disable handoff even in brief-aware runs. |
+| `handoff_to_compositor` | boolean | null | No | Controls whether finished clips are forwarded to `tabario-video-compositor`. When `null` (default), auto-computes to `true` if `brief + platform + client_id` are all present. Explicitly set to `false` to disable handoff even in brief-aware runs. |
+
+### Fal.ai Integration Fields
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `enable_scene_classifier` | boolean | `SCENE_CLASSIFIER_ENABLED` env var | Enable LLM-based scene classification to auto-select image provider (Fal vs Runpod) and detect text-heavy scenes for overlay rendering. When disabled, falls back to legacy behavior (all Runpod z-image-turbo). |
+| `video_provider_override` | string | `VIDEO_PROVIDER` env var | Override the video generation provider. Options: `"fal"` (default, uses Fal Seedance 2.0), `"runpod"` (uses Runpod Wan 2.2). Useful for testing or fallback scenarios. |
+| `fal_ai_model_id` | string | `FAL_AI_MODEL_ID` env var | Fal.ai model ID for video generation. |
+| `fal_ai_api_key` | string | `FAL_AI_API_KEY` env var | Fal.ai API key for authentication. |
+
+### Response Fields (Success)
+
+| Field | Type | Description |
+|---|---|---|
+| `message` | string | Status message |
+| `workflow_id` | string | Temporal workflow identifier |
+| `run_id` | string | Business identifier for the run |
+| `scene_classifications` | array | (When `enable_scene_classifier` is `true`) Array of scene classifications from the LLM classifier. Each entry includes: `scene_index`, `is_text_heavy`, `image_provider`, `image_model`, `skip_image_generation`, `prominent_text_overlay`, `reasoning`. |
+| `video_provider_used` | string | Provider used for video generation: `"fal"` or `"runpod"`. Useful for debugging and webhook correlation. |
+| `scene_overlays` | array | (When `enable_scene_classifier` is `true`) Array of text overlays to render in the compositor. Each entry includes: `scene_index`, `component` (e.g., `"kinetic_title"`, `"stagger_title"`, `"caption_bar"`), `text`, and `props` (color, size, position, etc.). |
 
 ## Derivation Rules (V-CaaS Flow)
 

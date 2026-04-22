@@ -29,6 +29,7 @@ from videomerge.config import (
     DATA_SHARED_BASE,
     DEFAULT_ACTIVITY_TIMEOUT_MINUTES,
     ENABLE_VOICEOVER_GEN,
+    FAL_VIDEO_MODEL,
     GENERATE_SCENES_TIMEOUT_MINUTES,
     IMAGE_HEIGHT,
     IMAGE_JOB_TIMEOUT_SECONDS,
@@ -47,7 +48,7 @@ from videomerge.config import (
     VIDEO_POLL_INTERVAL_SECONDS,
     WORKFLOWS_BASE_PATH,
 )
-from videomerge.utils.video_dimensions import calculate_video_dimensions
+from videomerge.utils.video_dimensions import calculate_image_dimensions, calculate_video_dimensions
 from videomerge.models import (
     HandoffPayload,
     OrchestrateStartRequest,
@@ -168,7 +169,7 @@ class ProcessSceneWorkflow:
 
                         image_hint = await workflow.execute_activity(
                             poll_image_generation_provider,
-                            args=["fal", image_job_id, run_id, index, IMAGE_JOB_TIMEOUT_SECONDS, IMAGE_POLL_INTERVAL_SECONDS],
+                            args=["fal", image_job_id, run_id, index, IMAGE_JOB_TIMEOUT_SECONDS, IMAGE_POLL_INTERVAL_SECONDS, image_model],
                             schedule_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
                             start_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
                             heartbeat_timeout=timedelta(minutes=2),
@@ -237,9 +238,10 @@ class ProcessSceneWorkflow:
                             "fal",
                             prompt.video_prompt,
                             image_input,
-                            index,
+                            FAL_VIDEO_MODEL,
                             video_width,
                             video_height,
+                            index,
                         ],
                         start_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
                         retry_policy=activity_defaults["retry_policy"],
@@ -353,9 +355,10 @@ class VideoGenerationWorkflow:
                 )
                 workflow.logger.info(f"[VideoGenerationWorkflow] Classified {len(scene_classifications)} scenes")
 
-            image_width = int(req.image_width) if req.image_width is not None else int(IMAGE_WIDTH)
-            image_height = int(req.image_height) if req.image_height is not None else int(IMAGE_HEIGHT)
-            
+            # Image dimensions are always derived from aspect ratio, capped at 720p.
+            # req.image_width/image_height are intentionally ignored to enforce the cap.
+            image_width, image_height = calculate_image_dimensions(req.video_format, req.target_resolution)
+
             # Calculate video dimensions from format and resolution
             video_width, video_height = calculate_video_dimensions(req.video_format, req.target_resolution)
 
@@ -763,10 +766,11 @@ class ImageGenerationWorkflow:
                 use_fal = classification and classification.get("image_provider") == "fal"
 
                 if use_fal:
+                    image_model = classification.get("image_model") if classification else None
                     image_hint_tasks.append(
                         workflow.start_activity(
                             poll_image_generation_provider,
-                            args=["fal", image_job_id, req.run_id, index, IMAGE_JOB_TIMEOUT_SECONDS, IMAGE_POLL_INTERVAL_SECONDS],
+                            args=["fal", image_job_id, req.run_id, index, IMAGE_JOB_TIMEOUT_SECONDS, IMAGE_POLL_INTERVAL_SECONDS, image_model],
                             schedule_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
                             start_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
                             heartbeat_timeout=timedelta(minutes=2),
@@ -902,9 +906,10 @@ class StoryBoardVideoGeneration:
                             "fal",
                             scene_input["video_prompt"],
                             scene_input["image_path"],
-                            int(scene_input["index"]),
+                            FAL_VIDEO_MODEL,
                             video_width,
                             video_height,
+                            int(scene_input["index"]),
                         ],
                         start_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
                         retry_policy=retry_policy,

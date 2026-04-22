@@ -115,6 +115,35 @@ async def _run_in_thread_with_heartbeats(
             pass
 
 
+async def _run_async_with_heartbeats(
+    coro_fn,
+    *args,
+    heartbeat_interval_s: float = 30.0,
+    **kwargs,
+) -> Any:
+    """Run an async function while periodically heartbeating.
+
+    This is used for long-running async operations (e.g., Fal.ai polling)
+    so the activity doesn't appear stuck.
+    """
+
+    async def _heartbeat_loop() -> None:
+        while True:
+            await asyncio.sleep(heartbeat_interval_s)
+            _safe_heartbeat()
+
+    _safe_heartbeat()
+    task = asyncio.create_task(_heartbeat_loop())
+    try:
+        return await coro_fn(*args, **kwargs)
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
 def _safe_heartbeat() -> None:
     """Call Temporal activity heartbeat if running in an activity context."""
 
@@ -1778,7 +1807,8 @@ async def poll_image_generation_provider(
     run_id: str,
     index: int,
     timeout_s: int,
-    poll_interval_s: float
+    poll_interval_s: float,
+    model: str = ""
 ) -> str:
     """Poll image generation job and download outputs.
     
@@ -1799,13 +1829,23 @@ async def poll_image_generation_provider(
     provider_instance = get_image_provider(provider)
     
     # Poll for completion
-    output_urls = await _run_in_thread_with_heartbeats(
-        provider_instance.poll_image_generation,
-        job_id,
-        timeout_s,
-        poll_interval_s,
-        heartbeat_interval_s=30.0
-    )
+    if provider == "fal":
+        output_urls = await _run_async_with_heartbeats(
+            provider_instance.poll_image_generation,
+            job_id,
+            timeout_s,
+            poll_interval_s,
+            model,
+            heartbeat_interval_s=30.0
+        )
+    else:
+        output_urls = await _run_in_thread_with_heartbeats(
+            provider_instance.poll_image_generation,
+            job_id,
+            timeout_s,
+            poll_interval_s,
+            heartbeat_interval_s=30.0
+        )
     
     if not output_urls:
         raise RuntimeError(f"Image generation failed for scene {index}: No outputs")
@@ -1898,13 +1938,22 @@ async def poll_video_generation_provider(
     provider_instance = get_video_provider(provider)
     
     # Poll for completion
-    output_urls = await _run_in_thread_with_heartbeats(
-        provider_instance.poll_video_generation,
-        job_id,
-        timeout_s,
-        poll_interval_s,
-        heartbeat_interval_s=30.0
-    )
+    if provider == "fal":
+        output_urls = await _run_async_with_heartbeats(
+            provider_instance.poll_video_generation,
+            job_id,
+            timeout_s,
+            poll_interval_s,
+            heartbeat_interval_s=30.0
+        )
+    else:
+        output_urls = await _run_in_thread_with_heartbeats(
+            provider_instance.poll_video_generation,
+            job_id,
+            timeout_s,
+            poll_interval_s,
+            heartbeat_interval_s=30.0
+        )
     
     if not output_urls:
         raise RuntimeError(f"Video generation failed for scene {index}: No outputs")
