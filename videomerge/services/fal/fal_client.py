@@ -114,18 +114,18 @@ class FalClient:
         model: str,
         width: int,
         height: int,
-        length: int = 81,
+        duration_seconds: int = 5,
         **kwargs
     ) -> str:
         """Submit an image-to-video generation job.
-        
+
         Args:
             prompt: Video motion/camera prompt
             image_input: Local file path, base64 data URL, or HTTP URL
             model: Fal model ID (e.g., "bytedance/seedance-2.0/image-to-video")
             width: Video width in pixels
             height: Video height in pixels
-            length: Number of frames (default 81 = ~3s at 30fps)
+            duration_seconds: Video duration in seconds for Seedance (default 5). Non-Seedance models receive this as frame count.
             **kwargs: Additional model-specific parameters
         
         Returns:
@@ -163,29 +163,29 @@ class FalClient:
                     "image_url": image_url,
                     "resolution": resolution,
                     "aspect_ratio": aspect_ratio,
-                    "length": str(length),
+                    "duration": str(duration_seconds),
                     "generate_audio": False,
                     **kwargs
                 }
-                
+
                 logger.info(
-                    "[fal] Submitting image-to-video: model=%s, resolution=%s, aspect_ratio=%s, length=%s",
-                    model, resolution, aspect_ratio, length
+                    "[fal] Submitting image-to-video: model=%s, resolution=%s, aspect_ratio=%s, duration=%ss",
+                    model, resolution, aspect_ratio, duration_seconds
                 )
             else:
-                # Other models use width/height
+                # Other models use width/height and frame count
                 arguments = {
                     "prompt": prompt,
                     "image_url": image_url,
                     "width": width,
                     "height": height,
-                    "length": length,
+                    "length": duration_seconds,
                     **kwargs
                 }
-                
+
                 logger.info(
                     "[fal] Submitting image-to-video: model=%s, size=%dx%d, length=%d",
-                    model, width, height, length
+                    model, width, height, duration_seconds
                 )
             
             handler = await fal_client.submit_async(model, arguments=arguments)
@@ -236,26 +236,27 @@ class FalClient:
         
         while time.time() - start_time < timeout_s:
             try:
-                status = fal_client.status(model, request_id, with_logs=False)
-                status_str = status.get("status", "UNKNOWN")
-                
+                status = await fal_client.status_async(model, request_id, with_logs=False)
+                # fal_client returns typed objects (Queued/InProgress/Completed), not dicts
+                status_str = getattr(status, "status", "UNKNOWN")
+
                 logger.debug(
                     "[fal] Poll attempt %d: status=%s, request_id=%s",
                     attempts + 1, status_str, request_id
                 )
-                
+
                 if status_str == "COMPLETED":
-                    result = fal_client.result(model, request_id)
+                    result = await fal_client.result_async(model, request_id)
                     outputs = self._extract_outputs(result, operation_type)
-                    
+
                     logger.info(
                         "[fal] Job completed with %d outputs: request_id=%s",
                         len(outputs), request_id
                     )
                     return outputs
-                
+
                 elif status_str in ("FAILED", "ERROR"):
-                    error_msg = status.get("error", "Unknown Fal error")
+                    error_msg = getattr(status, "error", "Unknown Fal error")
                     logger.error("[fal] Job FAILED: request_id=%s, error=%s", request_id, error_msg)
                     raise RuntimeError(f"Fal job failed: {error_msg}")
                 

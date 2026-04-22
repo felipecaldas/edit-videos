@@ -24,11 +24,24 @@ def _root_cause_message(exc: BaseException) -> str:
             msg = cause_msg
     return msg
 
+
+def _is_content_policy_violation(exc: BaseException) -> bool:
+    """Return True if the exception chain contains a Fal content-policy rejection."""
+    msg = _root_cause_message(exc).lower()
+    return any(kw in msg for kw in (
+        "content_policy_violation",
+        "likenesses of real people",
+        "partner_validation_failed",
+        "private information that cannot be processed",
+    ))
+
+
 from videomerge.config import (
     ACTIVITY_SHORT_TIMEOUT_MINUTES,
     DATA_SHARED_BASE,
     DEFAULT_ACTIVITY_TIMEOUT_MINUTES,
     ENABLE_VOICEOVER_GEN,
+    DEFAULT_I2V_WORKFLOW_NAME,
     FAL_VIDEO_MODEL,
     GENERATE_SCENES_TIMEOUT_MINUTES,
     IMAGE_HEIGHT,
@@ -148,7 +161,7 @@ class ProcessSceneWorkflow:
             if prompt.image_prompt:
                 try:
                     # Use Fal provider if classification is available and specifies fal
-                    use_fal_image = scene_classification and scene_classification.get("image_provider") == "fal"
+                    use_fal_image = scene_classification and scene_classification.get("image_provider") == "runpod"
                     image_model = scene_classification.get("image_model") if scene_classification else None
 
                     if use_fal_image and image_model:
@@ -230,31 +243,61 @@ class ProcessSceneWorkflow:
             video_paths = []
             if prompt.video_prompt:
                 try:
-                    # Always use Fal Seedance for video generation (mandatory per requirements)
                     workflow.logger.info(f"[ProcessSceneWorkflow] Using Fal Seedance for video generation")
-                    video_job_id = await workflow.execute_activity(
-                        start_video_generation_provider,
-                        args=[
-                            "fal",
-                            prompt.video_prompt,
-                            image_input,
-                            FAL_VIDEO_MODEL,
-                            video_width,
-                            video_height,
-                            index,
-                        ],
-                        start_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
-                        retry_policy=activity_defaults["retry_policy"],
-                    )
+                    try:
+                        video_job_id = await workflow.execute_activity(
+                            start_video_generation_provider,
+                            args=[
+                                "fal",
+                                prompt.video_prompt,
+                                image_input,
+                                FAL_VIDEO_MODEL,
+                                video_width,
+                                video_height,
+                                index,
+                            ],
+                            start_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
+                            retry_policy=activity_defaults["retry_policy"],
+                        )
 
-                    video_paths = await workflow.execute_activity(
-                        poll_video_generation_provider,
-                        args=["fal", video_job_id, run_id, index, VIDEO_JOB_TIMEOUT_SECONDS, VIDEO_POLL_INTERVAL_SECONDS],
-                        schedule_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
-                        start_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
-                        heartbeat_timeout=timedelta(minutes=2),
-                        retry_policy=activity_defaults["retry_policy"],
-                    )
+                        video_paths = await workflow.execute_activity(
+                            poll_video_generation_provider,
+                            args=["fal", video_job_id, run_id, index, VIDEO_JOB_TIMEOUT_SECONDS, VIDEO_POLL_INTERVAL_SECONDS],
+                            schedule_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
+                            start_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
+                            heartbeat_timeout=timedelta(minutes=2),
+                            retry_policy=activity_defaults["retry_policy"],
+                        )
+                    except Exception as seedance_err:
+                        if not _is_content_policy_violation(seedance_err):
+                            raise
+                        workflow.logger.warning(
+                            f"[ProcessSceneWorkflow] Seedance content-policy rejection for scene {index}, "
+                            f"falling back to RunPod Wan2.2"
+                        )
+                        video_job_id = await workflow.execute_activity(
+                            start_video_generation_provider,
+                            args=[
+                                "runpod",
+                                prompt.video_prompt,
+                                image_input,
+                                DEFAULT_I2V_WORKFLOW_NAME,
+                                video_width,
+                                video_height,
+                                index,
+                            ],
+                            start_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
+                            retry_policy=activity_defaults["retry_policy"],
+                        )
+
+                        video_paths = await workflow.execute_activity(
+                            poll_video_generation_provider,
+                            args=["runpod", video_job_id, run_id, index, VIDEO_JOB_TIMEOUT_SECONDS, VIDEO_POLL_INTERVAL_SECONDS],
+                            schedule_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
+                            start_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
+                            heartbeat_timeout=timedelta(minutes=2),
+                            retry_policy=activity_defaults["retry_policy"],
+                        )
                 except Exception as e:
                     detail = _root_cause_message(e)
                     workflow.logger.error(f"Video generation failed for scene {index}: {detail}")
