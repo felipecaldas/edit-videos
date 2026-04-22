@@ -426,8 +426,135 @@ def test_scene_classification_model():
         ),
         reasoning="Test scene"
     )
-    
+
     assert cls.scene_index == 0
     assert cls.is_text_heavy is True
     assert cls.image_provider == "fal"
     assert cls.prominent_text_overlay.component == "stagger_title"
+
+
+# Tests for classify_scenes_from_script
+from videomerge.services.scene_classifier import (
+    classify_scenes_from_script,
+    _build_system_prompt_script_based,
+    _build_user_prompt_script_based,
+    _fallback_classifications_from_script,
+)
+
+
+def test_build_system_prompt_script_based():
+    """Test system prompt generation for script-based classification."""
+    prompt = _build_system_prompt_script_based()
+    assert "scene classifier" in prompt.lower()
+    assert "z-image-turbo" in prompt
+    assert "Fal models" in prompt
+
+
+def test_build_user_prompt_script_based():
+    """Test user prompt generation for script-based classification."""
+    script = "This is a test voiceover script."
+    scenes = [
+        {"image_prompt": "A person walking", "video_prompt": "Person walking forward"},
+        {"image_prompt": "A city skyline", "video_prompt": "City at night"},
+    ]
+    prompt = _build_user_prompt_script_based(script, scenes)
+    assert script in prompt
+    assert "A person walking" in prompt
+    assert "A city skyline" in prompt
+    assert "2 scenes" in prompt
+
+
+def test_fallback_classifications_from_script():
+    """Test fallback classifications when classifier is disabled."""
+    scenes = [
+        {"image_prompt": "Scene 1"},
+        {"image_prompt": "Scene 2"},
+        {"image_prompt": "Scene 3"},
+    ]
+    with patch("videomerge.services.scene_classifier.SCENE_CLASSIFIER_ENABLED", False):
+        result = _fallback_classifications_from_script(scenes)
+
+    assert len(result) == 3
+    assert all(cls.image_provider == "fal" for cls in result)
+    assert all(cls.skip_image_generation is False for cls in result)
+
+
+@patch("videomerge.services.scene_classifier._call_llm")
+@patch("videomerge.services.scene_classifier.SCENE_CLASSIFIER_ENABLED", True)
+def test_classify_scenes_from_script_success(mock_call_llm):
+    """Test successful script-based scene classification."""
+    mock_call_llm.return_value = json.dumps([
+        {
+            "scene_index": 0,
+            "is_text_heavy": False,
+            "image_provider": "runpod",
+            "image_model": "z-image-turbo",
+            "skip_image_generation": False,
+            "prominent_text_overlay": None,
+            "reasoning": "Scene shows a person"
+        },
+        {
+            "scene_index": 1,
+            "is_text_heavy": False,
+            "image_provider": "fal",
+            "image_model": "fal-ai/flux-2-pro",
+            "skip_image_generation": False,
+            "prominent_text_overlay": None,
+            "reasoning": "Abstract scene"
+        }
+    ])
+
+    script = "Welcome to our product demo."
+    scenes = [
+        {"image_prompt": "A person presenting", "video_prompt": "Person at podium"},
+        {"image_prompt": "Abstract geometric shapes", "video_prompt": "Shapes morphing"},
+    ]
+
+    result = classify_scenes_from_script(script, scenes)
+
+    assert len(result) == 2
+    assert result[0].image_provider == "runpod"
+    assert result[0].image_model == "z-image-turbo"
+    assert result[1].image_provider == "fal"
+    assert result[1].image_model == "fal-ai/flux-2-pro"
+    mock_call_llm.assert_called_once()
+
+
+@patch("videomerge.services.scene_classifier.SCENE_CLASSIFIER_ENABLED", True)
+def test_classify_scenes_from_script_empty_scenes():
+    """Test script-based classification with empty scenes list."""
+    script = "Test script"
+    scenes = []
+
+    result = classify_scenes_from_script(script, scenes)
+
+    assert len(result) == 0
+
+
+@patch("videomerge.services.scene_classifier.SCENE_CLASSIFIER_ENABLED", False)
+def test_classify_scenes_from_script_disabled():
+    """Test script-based classification when disabled."""
+    script = "Test script"
+    scenes = [
+        {"image_prompt": "Scene 1"},
+        {"image_prompt": "Scene 2"},
+    ]
+
+    result = classify_scenes_from_script(script, scenes)
+
+    assert len(result) == 2
+    # Should use fallback with Fal default
+    assert all(cls.image_provider == "fal" for cls in result)
+
+
+@patch("videomerge.services.scene_classifier._call_llm")
+@patch("videomerge.services.scene_classifier.SCENE_CLASSIFIER_ENABLED", True)
+def test_classify_scenes_from_script_invalid_json(mock_call_llm):
+    """Test script-based classification with invalid LLM response."""
+    mock_call_llm.return_value = "not valid json"
+
+    script = "Test script"
+    scenes = [{"image_prompt": "Scene 1"}]
+
+    with pytest.raises(RuntimeError, match="Failed to parse LLM response"):
+        classify_scenes_from_script(script, scenes)

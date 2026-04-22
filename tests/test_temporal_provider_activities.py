@@ -42,7 +42,7 @@ async def test_classify_scenes_activity(sample_brief):
     """Test classify_scenes_activity."""
     from videomerge.temporal.activities import classify_scenes_activity
     from videomerge.services.scene_classifier import SceneClassification
-    
+
     mock_classifications = [
         SceneClassification(
             scene_index=0,
@@ -52,16 +52,58 @@ async def test_classify_scenes_activity(sample_brief):
             reasoning="Test"
         )
     ]
-    
+
     with patch("videomerge.services.scene_classifier.classify_scenes", return_value=mock_classifications):
         result = await classify_scenes_activity(
             brief_json=sample_brief.model_dump_json(),
             platform="LinkedIn"
         )
-        
+
         assert len(result) == 1
         assert result[0]["image_model"] == "z-image-turbo"
         assert result[0]["image_provider"] == "runpod"
+
+
+@pytest.mark.asyncio
+async def test_classify_scenes_from_script_activity():
+    """Test classify_scenes_from_script_activity."""
+    from videomerge.temporal.activities import classify_scenes_from_script_activity
+    from videomerge.services.scene_classifier import SceneClassification
+
+    mock_classifications = [
+        SceneClassification(
+            scene_index=0,
+            is_text_heavy=False,
+            image_provider="fal",
+            image_model="fal-ai/flux/dev",
+            reasoning="Abstract scene"
+        ),
+        SceneClassification(
+            scene_index=1,
+            is_text_heavy=False,
+            image_provider="runpod",
+            image_model="z-image-turbo",
+            reasoning="Person portrait"
+        )
+    ]
+
+    script_json = json.dumps("Welcome to our product demo.")
+    scenes_json = json.dumps([
+        {"image_prompt": "Abstract shapes", "video_prompt": "Shapes morphing"},
+        {"image_prompt": "A person smiling", "video_prompt": "Person walking"}
+    ])
+
+    with patch("videomerge.services.scene_classifier.classify_scenes_from_script", return_value=mock_classifications):
+        result = await classify_scenes_from_script_activity(
+            script_json=script_json,
+            scenes_json=scenes_json
+        )
+
+        assert len(result) == 2
+        assert result[0]["image_model"] == "fal-ai/flux/dev"
+        assert result[0]["image_provider"] == "fal"
+        assert result[1]["image_model"] == "z-image-turbo"
+        assert result[1]["image_provider"] == "runpod"
 
 
 @pytest.mark.asyncio
@@ -72,7 +114,7 @@ async def test_start_image_generation_provider():
     mock_provider = MagicMock()
     mock_provider.submit_text_to_image = AsyncMock(return_value="job-123")
     
-    with patch("videomerge.services.media_providers.registry.get_image_provider", return_value=mock_provider):
+    with patch("videomerge.temporal.activities.get_image_provider", return_value=mock_provider):
         job_id = await start_image_generation_provider(
             provider="fal",
             prompt_text="test prompt",
@@ -121,7 +163,7 @@ async def test_start_video_generation_provider():
     mock_provider = MagicMock()
     mock_provider.submit_image_to_video = AsyncMock(return_value="video-job-456")
     
-    with patch("videomerge.services.media_providers.registry.get_video_provider", return_value=mock_provider):
+    with patch("videomerge.temporal.activities.get_video_provider", return_value=mock_provider):
         job_id = await start_video_generation_provider(
             provider="fal",
             prompt_text="zoom in",

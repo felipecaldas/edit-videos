@@ -157,6 +157,8 @@ async def main() -> None:
             activities.send_upscale_completion_webhook,
             activities.handoff_to_compositor,
             activities.poll_compose_status,
+            activities.classify_scenes_activity,
+            activities.classify_scenes_from_script_activity,
         ],
     )
 

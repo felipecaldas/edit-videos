@@ -31,15 +31,20 @@ from videomerge.config import (
     ENABLE_VOICEOVER_GEN,
     GENERATE_SCENES_TIMEOUT_MINUTES,
     IMAGE_HEIGHT,
+    IMAGE_JOB_TIMEOUT_SECONDS,
+    IMAGE_POLL_INTERVAL_SECONDS,
     IMAGE_STYLE_TO_WORKFLOW_MAPPING,
     IMAGE_WIDTH,
     IMAGE_WORKFLOWS,
+    SCENE_CLASSIFIER_ENABLED,
     SETUP_RUN_DIRECTORY_TIMEOUT_SECONDS,
     STITCH_TIMEOUT_MINUTES,
     SUBTITLES_TIMEOUT_MINUTES,
     TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES,
     TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES,
     TEMPORAL_UPSCALE_GENERATION_TIMEOUT_MINUTES,
+    VIDEO_JOB_TIMEOUT_SECONDS,
+    VIDEO_POLL_INTERVAL_SECONDS,
     WORKFLOWS_BASE_PATH,
 )
 from videomerge.utils.video_dimensions import calculate_video_dimensions
@@ -79,6 +84,7 @@ with workflow.unsafe.imports_passed_through():
         poll_compose_status,
         download_video,
         classify_scenes_activity,
+        classify_scenes_from_script_activity,
         start_image_generation_provider,
         poll_image_generation_provider,
         start_video_generation_provider,
@@ -113,6 +119,7 @@ class ProcessSceneWorkflow:
         video_height: int,
         comfyui_workflow_name: str | None = None,
         image_style: str | None = None,
+        scene_classification: dict | None = None,
     ) -> list[str]:
         """Workflow to process a single scene (image -> video)."""
         # Log parent workflow info for correlation
@@ -139,30 +146,60 @@ class ProcessSceneWorkflow:
             image_hint = ""
             if prompt.image_prompt:
                 try:
-                    image_job_id = await workflow.execute_activity(
-                        start_image_generation,
-                        args=[
-                            run_id,
-                            prompt.image_prompt,
-                            workflow_path,
-                            index,
-                            image_width,
-                            image_height,
-                            comfyui_workflow_name,
-                            image_style,
-                        ],
-                        start_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
-                        retry_policy=scene_retry_policy,
-                    )
+                    # Use Fal provider if classification is available and specifies fal
+                    use_fal_image = scene_classification and scene_classification.get("image_provider") == "fal"
+                    image_model = scene_classification.get("image_model") if scene_classification else None
 
-                    image_hint = await workflow.execute_activity(
-                        poll_image_generation,
-                        args=[image_job_id, run_id, index],
-                        schedule_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
-                        start_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
-                        heartbeat_timeout=timedelta(minutes=2),
-                        retry_policy=scene_retry_policy,
-                    )
+                    if use_fal_image and image_model:
+                        workflow.logger.info(f"[ProcessSceneWorkflow] Using Fal for image generation, model={image_model}")
+                        image_job_id = await workflow.execute_activity(
+                            start_image_generation_provider,
+                            args=[
+                                "fal",
+                                prompt.image_prompt,
+                                image_model,
+                                image_width,
+                                image_height,
+                                index,
+                            ],
+                            start_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
+                            retry_policy=scene_retry_policy,
+                        )
+
+                        image_hint = await workflow.execute_activity(
+                            poll_image_generation_provider,
+                            args=["fal", image_job_id, run_id, index, IMAGE_JOB_TIMEOUT_SECONDS, IMAGE_POLL_INTERVAL_SECONDS],
+                            schedule_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
+                            start_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
+                            heartbeat_timeout=timedelta(minutes=2),
+                            retry_policy=scene_retry_policy,
+                        )
+                    else:
+                        # Fall back to ComfyUI
+                        image_job_id = await workflow.execute_activity(
+                            start_image_generation,
+                            args=[
+                                run_id,
+                                prompt.image_prompt,
+                                workflow_path,
+                                index,
+                                image_width,
+                                image_height,
+                                comfyui_workflow_name,
+                                image_style,
+                            ],
+                            start_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
+                            retry_policy=scene_retry_policy,
+                        )
+
+                        image_hint = await workflow.execute_activity(
+                            poll_image_generation,
+                            args=[image_job_id, run_id, index],
+                            schedule_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
+                            start_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
+                            heartbeat_timeout=timedelta(minutes=2),
+                            retry_policy=scene_retry_policy,
+                        )
                 except Exception as e:
                     detail = _root_cause_message(e)
                     workflow.logger.error(f"Image generation failed for scene {index}: {detail}")
@@ -188,20 +225,29 @@ class ProcessSceneWorkflow:
                     non_retryable=True,
                 )
 
-            # 3. Generate video from image
+            # 3. Generate video from image (always use Fal Seedance)
             video_paths = []
             if prompt.video_prompt:
                 try:
+                    # Always use Fal Seedance for video generation (mandatory per requirements)
+                    workflow.logger.info(f"[ProcessSceneWorkflow] Using Fal Seedance for video generation")
                     video_job_id = await workflow.execute_activity(
-                        start_video_generation,
-                        args=[run_id, prompt.video_prompt, image_input, index, video_width, video_height],
+                        start_video_generation_provider,
+                        args=[
+                            "fal",
+                            prompt.video_prompt,
+                            image_input,
+                            index,
+                            video_width,
+                            video_height,
+                        ],
                         start_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
                         retry_policy=activity_defaults["retry_policy"],
                     )
 
                     video_paths = await workflow.execute_activity(
-                        poll_video_generation,
-                        args=[video_job_id, run_id, index],
+                        poll_video_generation_provider,
+                        args=["fal", video_job_id, run_id, index, VIDEO_JOB_TIMEOUT_SECONDS, VIDEO_POLL_INTERVAL_SECONDS],
                         schedule_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
                         start_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
                         heartbeat_timeout=timedelta(minutes=2),
@@ -294,6 +340,19 @@ class VideoGenerationWorkflow:
                 retry_policy=timeout_retry_policy,
             )
 
+            # 3b. Classify scenes for provider selection (when SCENE_CLASSIFIER_ENABLED)
+            scene_classifications = []
+            if SCENE_CLASSIFIER_ENABLED:
+                import json
+                workflow.logger.info("[VideoGenerationWorkflow] Classifying scenes from script")
+                scene_classifications = await workflow.execute_activity(
+                    classify_scenes_from_script_activity,
+                    args=[json.dumps(req.script), json.dumps(scene_prompts)],
+                    start_to_close_timeout=timedelta(minutes=2),
+                    retry_policy=RetryPolicy(maximum_attempts=2),
+                )
+                workflow.logger.info(f"[VideoGenerationWorkflow] Classified {len(scene_classifications)} scenes")
+
             image_width = int(req.image_width) if req.image_width is not None else int(IMAGE_WIDTH)
             image_height = int(req.image_height) if req.image_height is not None else int(IMAGE_HEIGHT)
             
@@ -328,6 +387,9 @@ class VideoGenerationWorkflow:
                 
                 # Add memo and search attributes for parent-child correlation
                 # Note: Parent workflow also has TabarioRunId set (in orchestrate.py)
+                # Get classification for this scene (if available)
+                scene_classification = scene_classifications[i] if scene_classifications and i < len(scene_classifications) else None
+
                 task = workflow.execute_child_workflow(
                     ProcessSceneWorkflow.run,
                     args=[
@@ -341,6 +403,7 @@ class VideoGenerationWorkflow:
                         video_height,
                         comfyui_workflow_name,
                         z_image_style,
+                        scene_classification,
                     ],
                     id=child_id,
                     memo={
@@ -632,6 +695,20 @@ class ImageGenerationWorkflow:
             comfyui_workflow_name = IMAGE_STYLE_TO_WORKFLOW_MAPPING.get(image_style)
             style_override = req.z_image_style if comfyui_workflow_name == "z-image-photo" else None
 
+            # Classify scenes for provider selection (brief-aware path)
+            scene_classifications = []
+            if req.brief and req.platform and SCENE_CLASSIFIER_ENABLED:
+                import json
+                workflow.logger.info("[ImageGenerationWorkflow] Classifying scenes from brief")
+                brief_json = req.brief.model_dump_json()
+                scene_classifications = await workflow.execute_activity(
+                    classify_scenes_activity,
+                    args=[brief_json, req.platform],
+                    start_to_close_timeout=timedelta(minutes=2),
+                    retry_policy=RetryPolicy(maximum_attempts=2),
+                )
+                workflow.logger.info(f"[ImageGenerationWorkflow] Classified {len(scene_classifications)} scenes")
+
             image_prompts: list[tuple[int, str]] = []
             for index, prompt in enumerate(scene_prompts):
                 image_prompt = prompt.get("image_prompt") if isinstance(prompt, dict) else getattr(prompt, "image_prompt", None)
@@ -642,37 +719,71 @@ class ImageGenerationWorkflow:
                     )
                 image_prompts.append((index, image_prompt))
 
-            image_job_tasks = [
-                workflow.start_activity(
-                    start_image_generation,
-                    args=[
-                        req.run_id,
-                        image_prompt,
-                        workflow_path,
-                        index,
-                        image_width,
-                        image_height,
-                        comfyui_workflow_name,
-                        style_override,
-                    ],
-                    start_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
-                    retry_policy=image_retry_policy,
-                )
-                for index, image_prompt in image_prompts
-            ]
+            # Generate images using Fal or ComfyUI based on classification
+            image_job_tasks = []
+            for index, image_prompt in image_prompts:
+                classification = scene_classifications[index] if scene_classifications and index < len(scene_classifications) else None
+                use_fal = classification and classification.get("image_provider") == "fal"
+                image_model = classification.get("image_model") if classification else None
+
+                if use_fal and image_model:
+                    workflow.logger.info(f"[ImageGenerationWorkflow] Using Fal for scene {index}, model={image_model}")
+                    image_job_tasks.append(
+                        workflow.start_activity(
+                            start_image_generation_provider,
+                            args=["fal", image_prompt, image_model, image_width, image_height, index],
+                            start_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
+                            retry_policy=image_retry_policy,
+                        )
+                    )
+                else:
+                    image_job_tasks.append(
+                        workflow.start_activity(
+                            start_image_generation,
+                            args=[
+                                req.run_id,
+                                image_prompt,
+                                workflow_path,
+                                index,
+                                image_width,
+                                image_height,
+                                comfyui_workflow_name,
+                                style_override,
+                            ],
+                            start_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
+                            retry_policy=image_retry_policy,
+                        )
+                    )
             image_job_ids = await asyncio.gather(*image_job_tasks)
 
-            image_hint_tasks = [
-                workflow.start_activity(
-                    poll_image_generation,
-                    args=[image_job_id, req.run_id, index],
-                    schedule_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
-                    start_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
-                    heartbeat_timeout=timedelta(minutes=2),
-                    retry_policy=image_retry_policy,
-                )
-                for (index, _), image_job_id in zip(image_prompts, image_job_ids, strict=True)
-            ]
+            # Poll for image completion
+            image_hint_tasks = []
+            for (index, _), image_job_id in zip(image_prompts, image_job_ids, strict=True):
+                classification = scene_classifications[index] if scene_classifications and index < len(scene_classifications) else None
+                use_fal = classification and classification.get("image_provider") == "fal"
+
+                if use_fal:
+                    image_hint_tasks.append(
+                        workflow.start_activity(
+                            poll_image_generation_provider,
+                            args=["fal", image_job_id, req.run_id, index, IMAGE_JOB_TIMEOUT_SECONDS, IMAGE_POLL_INTERVAL_SECONDS],
+                            schedule_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
+                            start_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
+                            heartbeat_timeout=timedelta(minutes=2),
+                            retry_policy=image_retry_policy,
+                        )
+                    )
+                else:
+                    image_hint_tasks.append(
+                        workflow.start_activity(
+                            poll_image_generation,
+                            args=[image_job_id, req.run_id, index],
+                            schedule_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
+                            start_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
+                            heartbeat_timeout=timedelta(minutes=2),
+                            retry_policy=image_retry_policy,
+                        )
+                    )
             image_hints = await asyncio.gather(*image_hint_tasks)
 
             persist_tasks = [
@@ -780,13 +891,15 @@ class StoryBoardVideoGeneration:
 
             video_width, video_height = calculate_video_dimensions(req.video_format, req.target_resolution)
 
+            # Always use Fal Seedance for video generation (mandatory per requirements)
+            workflow.logger.info("[StoryBoardVideoGeneration] Using Fal Seedance for video generation")
             start_tasks = []
             for scene_input in scene_inputs:
                 start_tasks.append(
                     workflow.start_activity(
-                        start_video_generation,
+                        start_video_generation_provider,
                         args=[
-                            req.run_id,
+                            "fal",
                             scene_input["video_prompt"],
                             scene_input["image_path"],
                             int(scene_input["index"]),
@@ -802,8 +915,8 @@ class StoryBoardVideoGeneration:
 
             poll_tasks = [
                 workflow.start_activity(
-                    poll_video_generation,
-                    args=[video_job_id, req.run_id, int(scene_input["index"])],
+                    poll_video_generation_provider,
+                    args=["fal", video_job_id, req.run_id, int(scene_input["index"]), VIDEO_JOB_TIMEOUT_SECONDS, VIDEO_POLL_INTERVAL_SECONDS],
                     schedule_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
                     start_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
                     heartbeat_timeout=timedelta(minutes=2),
