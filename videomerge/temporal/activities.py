@@ -1666,3 +1666,237 @@ async def poll_compose_status(
         f"[poll_compose] Timed out after {timeout_seconds}s waiting for compose_job_id={compose_job_id} "
         f"run_id={run_id} to complete"
     )
+
+
+@activity.defn
+async def classify_scenes_activity(brief_json: str, platform: str) -> List[Dict[str, Any]]:
+    """Classify scenes using the scene classifier.
+    
+    Args:
+        brief_json: JSON-serialized Brief object
+        platform: Platform identifier (e.g., 'LinkedIn')
+    
+    Returns:
+        List of SceneClassification dicts
+    """
+    from videomerge.models import Brief
+    from videomerge.services.scene_classifier import classify_scenes
+    
+    activity.heartbeat()
+    logger.info(f"[classify_scenes] Classifying scenes for platform={platform}")
+    
+    brief = Brief.model_validate_json(brief_json)
+    classifications = classify_scenes(brief, platform)
+    
+    # Convert to dicts for Temporal serialization
+    result = [cls.model_dump() for cls in classifications]
+    
+    logger.info(f"[classify_scenes] Classified {len(result)} scenes")
+    return result
+
+
+@activity.defn
+async def start_image_generation_provider(
+    provider: str,
+    prompt_text: str,
+    model: str,
+    width: int,
+    height: int,
+    index: int,
+    **kwargs
+) -> str:
+    """Submit image generation job to specified provider.
+    
+    Args:
+        provider: Provider name ("fal" or "runpod")
+        prompt_text: Image generation prompt
+        model: Model identifier
+        width: Image width
+        height: Image height
+        index: Scene index
+        **kwargs: Provider-specific parameters
+    
+    Returns:
+        Job ID
+    """
+    from videomerge.services.media_providers.registry import get_image_provider
+    
+    activity.heartbeat()
+    logger.info(f"[start_image_{provider}] Submitting for scene {index}, model={model}")
+    
+    provider_instance = get_image_provider(provider)
+    job_id = await provider_instance.submit_text_to_image(
+        prompt=prompt_text,
+        model=model,
+        width=width,
+        height=height,
+        **kwargs
+    )
+    
+    logger.info(f"[start_image_{provider}] Job submitted: {job_id}")
+    return job_id
+
+
+@activity.defn
+async def poll_image_generation_provider(
+    provider: str,
+    job_id: str,
+    run_id: str,
+    index: int,
+    timeout_s: int,
+    poll_interval_s: float
+) -> str:
+    """Poll image generation job and download outputs.
+    
+    Args:
+        provider: Provider name ("fal" or "runpod")
+        job_id: Job ID from start_image_generation_provider
+        run_id: Run identifier
+        index: Scene index
+        timeout_s: Timeout in seconds
+        poll_interval_s: Poll interval in seconds
+    
+    Returns:
+        Local file path to generated image
+    """
+    from videomerge.services.media_providers.registry import get_image_provider
+    
+    activity.heartbeat()
+    logger.info(f"[poll_image_{provider}] Polling job {job_id} for scene {index}")
+    
+    provider_instance = get_image_provider(provider)
+    
+    # Poll for completion
+    output_urls = await _run_in_thread_with_heartbeats(
+        provider_instance.poll_image_generation,
+        job_id,
+        timeout_s,
+        poll_interval_s,
+        heartbeat_interval_s=30.0
+    )
+    
+    if not output_urls:
+        raise RuntimeError(f"Image generation failed for scene {index}: No outputs")
+    
+    # Download outputs
+    run_dir = DATA_SHARED_BASE / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    
+    saved_files = await provider_instance.download_outputs(
+        output_urls=output_urls,
+        dest_dir=run_dir,
+        index=index
+    )
+    
+    if not saved_files:
+        raise RuntimeError(f"Failed to download image outputs for scene {index}")
+    
+    logger.info(f"[poll_image_{provider}] Saved to {saved_files[0]}")
+    return str(saved_files[0])
+
+
+@activity.defn
+async def start_video_generation_provider(
+    provider: str,
+    prompt_text: str,
+    image_input: str,
+    model: str,
+    width: int,
+    height: int,
+    index: int,
+    **kwargs
+) -> str:
+    """Submit video generation job to specified provider.
+    
+    Args:
+        provider: Provider name ("fal" or "runpod")
+        prompt_text: Video motion prompt
+        image_input: Input image path or data URL
+        model: Model identifier
+        width: Video width
+        height: Video height
+        index: Scene index
+        **kwargs: Provider-specific parameters
+    
+    Returns:
+        Job ID
+    """
+    from videomerge.services.media_providers.registry import get_video_provider
+    
+    activity.heartbeat()
+    logger.info(f"[start_video_{provider}] Submitting for scene {index}, model={model}")
+    
+    provider_instance = get_video_provider(provider)
+    job_id = await provider_instance.submit_image_to_video(
+        prompt=prompt_text,
+        image_input=image_input,
+        model=model,
+        width=width,
+        height=height,
+        **kwargs
+    )
+    
+    logger.info(f"[start_video_{provider}] Job submitted: {job_id}")
+    return job_id
+
+
+@activity.defn
+async def poll_video_generation_provider(
+    provider: str,
+    job_id: str,
+    run_id: str,
+    index: int,
+    timeout_s: int,
+    poll_interval_s: float
+) -> List[str]:
+    """Poll video generation job and download outputs.
+    
+    Args:
+        provider: Provider name ("fal" or "runpod")
+        job_id: Job ID from start_video_generation_provider
+        run_id: Run identifier
+        index: Scene index
+        timeout_s: Timeout in seconds
+        poll_interval_s: Poll interval in seconds
+    
+    Returns:
+        List of local file paths to generated videos
+    """
+    from videomerge.services.media_providers.registry import get_video_provider
+    
+    activity.heartbeat()
+    logger.info(f"[poll_video_{provider}] Polling job {job_id} for scene {index}")
+    
+    provider_instance = get_video_provider(provider)
+    
+    # Poll for completion
+    output_urls = await _run_in_thread_with_heartbeats(
+        provider_instance.poll_video_generation,
+        job_id,
+        timeout_s,
+        poll_interval_s,
+        heartbeat_interval_s=30.0
+    )
+    
+    if not output_urls:
+        raise RuntimeError(f"Video generation failed for scene {index}: No outputs")
+    
+    # Download outputs (if needed - Runpod already downloads during polling)
+    run_dir = DATA_SHARED_BASE / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    
+    if provider == "fal":
+        saved_files = await provider_instance.download_outputs(
+            output_urls=output_urls,
+            dest_dir=run_dir,
+            index=index
+        )
+    else:
+        # Runpod outputs are already local paths
+        saved_files = [Path(url) for url in output_urls]
+    
+    if not saved_files:
+        raise RuntimeError(f"Failed to download video outputs for scene {index}")
+    
+    logger.info(f"[poll_video_{provider}] Saved {len(saved_files)} files")
+    return [str(p) for p in saved_files]

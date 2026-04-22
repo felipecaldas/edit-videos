@@ -78,6 +78,11 @@ with workflow.unsafe.imports_passed_through():
         handoff_to_compositor,
         poll_compose_status,
         download_video,
+        classify_scenes_activity,
+        start_image_generation_provider,
+        poll_image_generation_provider,
+        start_video_generation_provider,
+        poll_video_generation_provider,
         start_video_upscaling,
         poll_upscale_status,
         save_upscaled_video,
@@ -85,6 +90,11 @@ with workflow.unsafe.imports_passed_through():
         list_upscaled_videos,
         encode_file_to_base64,
         send_upscale_completion_webhook,
+        persist_scene_prompts,
+    )
+    from videomerge.services.brand_prompt import (
+        build_prompt_items,
+        resolve_platform_brief,
     )
 
 
@@ -565,8 +575,8 @@ class ImageGenerationWorkflow:
         workflow.logger.info(f"Starting image generation workflow for run_id={req.run_id}")
 
         retry_policy = RetryPolicy(
-            maximum_attempts=1,
-            initial_interval=timedelta(seconds=10),
+            maximum_attempts=3,
+            initial_interval=timedelta(seconds=5),
             backoff_coefficient=2.0,
         )
         prompt_retry_policy = RetryPolicy(
@@ -590,12 +600,30 @@ class ImageGenerationWorkflow:
             )
 
             image_style = req.image_style or "default"
-            scene_prompts = await workflow.execute_activity(
-                generate_image_scene_prompts,
-                args=[req.run_id, req.script, req.language, image_style],
-                start_to_close_timeout=timedelta(minutes=GENERATE_SCENES_TIMEOUT_MINUTES),
-                retry_policy=prompt_retry_policy,
-            )
+
+            if req.brief and req.platform:
+                # Brief-aware path: build prompts locally from branding fields
+                pb = resolve_platform_brief(req.brief, req.platform)
+                prompt_items = build_prompt_items(pb, req.brief)
+                scene_prompts = [item.model_dump() for item in prompt_items]
+                await workflow.execute_activity(
+                    persist_scene_prompts,
+                    args=[req.run_id, scene_prompts],
+                    start_to_close_timeout=timedelta(minutes=GENERATE_SCENES_TIMEOUT_MINUTES),
+                    retry_policy=prompt_retry_policy,
+                )
+                workflow.logger.info(
+                    f"[image-prompts] Built {len(scene_prompts)} prompts from brief "
+                    f"for run_id={req.run_id} platform={req.platform}"
+                )
+            else:
+                # Legacy path: delegate to n8n prompts webhook
+                scene_prompts = await workflow.execute_activity(
+                    generate_image_scene_prompts,
+                    args=[req.run_id, req.script, req.language, image_style],
+                    start_to_close_timeout=timedelta(minutes=GENERATE_SCENES_TIMEOUT_MINUTES),
+                    retry_policy=prompt_retry_policy,
+                )
 
             image_width = int(req.image_width) if req.image_width is not None else int(IMAGE_WIDTH)
             image_height = int(req.image_height) if req.image_height is not None else int(IMAGE_HEIGHT)
