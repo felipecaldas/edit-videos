@@ -178,7 +178,7 @@ class RunPodComfyUIClient(ComfyUIClient):
         prompt_text: str,
         image_data: str,
         *,
-        template_path: Path,
+        template_path: Optional[Path] = None,
         client_id: Optional[str] = None,
         run_id: Optional[str] = None,
         comfyui_workflow_name: Optional[str] = None,

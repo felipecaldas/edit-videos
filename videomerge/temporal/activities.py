@@ -1839,7 +1839,7 @@ async def poll_image_generation_provider(
             heartbeat_interval_s=30.0
         )
     else:
-        output_urls = await _run_in_thread_with_heartbeats(
+        output_urls = await _run_async_with_heartbeats(
             provider_instance.poll_image_generation,
             job_id,
             timeout_s,
@@ -1917,10 +1917,11 @@ async def poll_video_generation_provider(
     run_id: str,
     index: int,
     timeout_s: int,
-    poll_interval_s: float
+    poll_interval_s: float,
+    model: str = ""
 ) -> List[str]:
     """Poll video generation job and download outputs.
-    
+
     Args:
         provider: Provider name ("fal" or "runpod")
         job_id: Job ID from start_video_generation_provider
@@ -1928,15 +1929,16 @@ async def poll_video_generation_provider(
         index: Scene index
         timeout_s: Timeout in seconds
         poll_interval_s: Poll interval in seconds
-    
+        model: Model identifier (required for Fal to construct the correct status URL)
+
     Returns:
         List of local file paths to generated videos
     """
     _safe_heartbeat()
     logger.info(f"[poll_video_{provider}] Polling job {job_id} for scene {index}")
-    
+
     provider_instance = get_video_provider(provider)
-    
+
     # Poll for completion
     if provider == "fal":
         output_urls = await _run_async_with_heartbeats(
@@ -1944,17 +1946,18 @@ async def poll_video_generation_provider(
             job_id,
             timeout_s,
             poll_interval_s,
+            model,
             heartbeat_interval_s=30.0
         )
     else:
-        output_urls = await _run_in_thread_with_heartbeats(
+        output_urls = await _run_async_with_heartbeats(
             provider_instance.poll_video_generation,
             job_id,
             timeout_s,
             poll_interval_s,
             heartbeat_interval_s=30.0
         )
-    
+
     if not output_urls:
         raise RuntimeError(f"Video generation failed for scene {index}: No outputs")
     

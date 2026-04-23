@@ -88,7 +88,8 @@ class MediaProvider(ABC):
         self,
         job_id: str,
         timeout_s: int,
-        poll_interval_s: float
+        poll_interval_s: float,
+        model: str = ""
     ) -> List[str]:
         """Poll for video generation completion.
         

@@ -19,6 +19,7 @@ from typing import List, Optional, Tuple
 from uuid import uuid4
 
 import fal_client
+from fal_client import Completed as FalCompleted, InProgress as FalInProgress, Queued as FalQueued
 
 from videomerge.config import (
     FAL_AI_API_KEY,
@@ -237,15 +238,17 @@ class FalClient:
         while time.time() - start_time < timeout_s:
             try:
                 status = await fal_client.status_async(model, request_id, with_logs=False)
-                # fal_client returns typed objects (Queued/InProgress/Completed), not dicts
-                status_str = getattr(status, "status", "UNKNOWN")
 
                 logger.debug(
-                    "[fal] Poll attempt %d: status=%s, request_id=%s",
-                    attempts + 1, status_str, request_id
+                    "[fal] Poll attempt %d: status_type=%s, request_id=%s",
+                    attempts + 1, type(status).__name__, request_id
                 )
 
-                if status_str == "COMPLETED":
+                if isinstance(status, FalCompleted):
+                    if status.error:
+                        logger.error("[fal] Job FAILED: request_id=%s, error=%s", request_id, status.error)
+                        raise RuntimeError(f"Fal job failed: {status.error}")
+
                     result = await fal_client.result_async(model, request_id)
                     outputs = self._extract_outputs(result, operation_type)
 
@@ -255,38 +258,39 @@ class FalClient:
                     )
                     return outputs
 
-                elif status_str in ("FAILED", "ERROR"):
-                    error_msg = getattr(status, "error", "Unknown Fal error")
-                    logger.error("[fal] Job FAILED: request_id=%s, error=%s", request_id, error_msg)
-                    raise RuntimeError(f"Fal job failed: {error_msg}")
-                
-                elif status_str in ("IN_QUEUE", "IN_PROGRESS"):
+                elif isinstance(status, (FalQueued, FalInProgress)):
                     attempts += 1
                     await asyncio.sleep(poll_interval_s)
                     continue
-                
+
                 else:
                     attempts += 1
                     logger.warning(
-                        "[fal] Unknown status '%s', continuing to poll: request_id=%s",
-                        status_str, request_id
+                        "[fal] Unknown status type '%s', continuing to poll: request_id=%s",
+                        type(status).__name__, request_id
                     )
                     await asyncio.sleep(poll_interval_s)
                     continue
-                    
+
+            except fal_client.FalClientHTTPError as e:
+                if 400 <= e.status_code < 500:
+                    logger.error(
+                        "[fal] HTTP %d error (not retrying): %s, request_id=%s",
+                        e.status_code, e, request_id
+                    )
+                    raise RuntimeError(f"Fal API error ({e.status_code}): {e}")
+                # 5xx are transient — fall through to retry
+                attempts += 1
+                logger.warning(
+                    "[fal] HTTP %d error, will retry: %s, attempt=%d, request_id=%s",
+                    e.status_code, e, attempts, request_id
+                )
+                await asyncio.sleep(poll_interval_s)
+
             except Exception as e:
-                # Check for HTTP errors that shouldn't be retried
-                error_str = str(e)
-                is_http_error = any(x in error_str for x in ["HTTPError", "422", "400", "401", "403", "404", "500", "502", "503", "504"])
-                
-                if is_http_error:
-                    # HTTP errors should fail immediately - don't retry
-                    logger.error("[fal] HTTP error during poll (not retrying): %s, request_id=%s", e, request_id)
-                    raise RuntimeError(f"Fal API error (HTTP): {e}")
-                
-                if isinstance(e, RuntimeError):
+                if isinstance(e, (RuntimeError, ValueError)):
                     raise
-                    
+
                 attempts += 1
                 logger.warning(
                     "[fal] Poll error: %s, attempt=%d, request_id=%s",

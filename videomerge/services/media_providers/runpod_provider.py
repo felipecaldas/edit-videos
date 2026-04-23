@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import List
 
@@ -41,28 +42,28 @@ class RunpodProvider(MediaProvider):
         **kwargs
     ) -> str:
         """Submit text-to-image job to Runpod.
-        
+
         Note: For Runpod, 'model' is the workflow name (e.g., 'z-image-photo').
         """
         client = self._get_image_client()
-        
-        # Extract workflow path from kwargs or derive from model
-        workflow_name = kwargs.get("workflow_name", model)
-        
+
+        # model is the comfyui_workflow_name for RunPod
+        comfyui_workflow_name = kwargs.pop("workflow_name", model)
+
         logger.info(
             "[runpod-provider] Submitting text-to-image: workflow=%s, size=%dx%d",
-            workflow_name, width, height
+            comfyui_workflow_name, width, height
         )
-        
-        # RunPodComfyUIClient.submit_text_to_image returns job_id
-        job_id = await client.submit_text_to_image(
-            prompt_text=prompt,
-            workflow_name=workflow_name,
+
+        job_id = await asyncio.to_thread(
+            client.submit_text_to_image,
+            prompt,
+            comfyui_workflow_name=comfyui_workflow_name,
             image_width=width,
             image_height=height,
             **kwargs
         )
-        
+
         return job_id
 
     async def submit_image_to_video(
@@ -75,28 +76,28 @@ class RunpodProvider(MediaProvider):
         **kwargs
     ) -> str:
         """Submit image-to-video job to Runpod.
-        
+
         Note: For Runpod, 'model' is the workflow name.
         """
         client = self._get_video_client()
-        
-        workflow_name = kwargs.get("workflow_name", model)
-        
+
+        comfyui_workflow_name = kwargs.pop("workflow_name", model)
+
         logger.info(
             "[runpod-provider] Submitting image-to-video: workflow=%s, size=%dx%d",
-            workflow_name, width, height
+            comfyui_workflow_name, width, height
         )
-        
-        # RunPodComfyUIClient.submit_image_to_video returns job_id
-        job_id = await client.submit_image_to_video(
-            prompt_text=prompt,
-            image_data=image_input,
-            template_path=Path(f"/app/videomerge/services/comfyui/workflows/{workflow_name}.json"),
+
+        job_id = await asyncio.to_thread(
+            client.submit_image_to_video,
+            prompt,
+            image_input,
+            comfyui_workflow_name=comfyui_workflow_name,
             video_width=width,
             video_height=height,
             **kwargs
         )
-        
+
         return job_id
 
     async def poll_image_generation(
@@ -106,52 +107,39 @@ class RunpodProvider(MediaProvider):
         poll_interval_s: float,
         model: str = ""
     ) -> List[str]:
-        """Poll for image generation completion.
-        
-        Args:
-            job_id: Job ID from submit_text_to_image
-            timeout_s: Maximum time to wait in seconds
-            poll_interval_s: Seconds between poll attempts
-            model: Model identifier (optional, not used for RunPod)
-        
-        Returns:
-            List of local file paths (Runpod client downloads automatically)
-        """
+        """Poll for image generation completion."""
         client = self._get_image_client()
-        
+
         logger.info("[runpod-provider] Polling image job: %s", job_id)
-        
-        # RunPodComfyUIClient.poll_for_completion returns list of local paths
-        outputs = await client.poll_for_completion(
-            job_id=job_id,
-            timeout_seconds=timeout_s,
-            poll_interval=poll_interval_s
+
+        outputs = await asyncio.to_thread(
+            client.poll_until_complete,
+            job_id,
+            poll_interval_s,
+            timeout_s,
         )
-        
+
         return outputs
 
     async def poll_video_generation(
         self,
         job_id: str,
         timeout_s: int,
-        poll_interval_s: float
+        poll_interval_s: float,
+        model: str = ""
     ) -> List[str]:
-        """Poll for video generation completion.
-        
-        Returns:
-            List of local file paths (Runpod client downloads automatically)
-        """
+        """Poll for video generation completion."""
         client = self._get_video_client()
-        
+
         logger.info("[runpod-provider] Polling video job: %s", job_id)
-        
-        # RunPodComfyUIClient.poll_for_completion returns list of local paths
-        outputs = await client.poll_for_completion(
-            job_id=job_id,
-            timeout_seconds=timeout_s,
-            poll_interval=poll_interval_s
+
+        outputs = await asyncio.to_thread(
+            client.poll_until_complete,
+            job_id,
+            poll_interval_s,
+            timeout_s,
         )
-        
+
         return outputs
 
     async def download_outputs(
@@ -160,17 +148,7 @@ class RunpodProvider(MediaProvider):
         dest_dir: Path,
         index: int
     ) -> List[Path]:
-        """Download outputs (no-op for Runpod - already downloaded during polling).
-        
-        Args:
-            output_urls: List of local file paths (already downloaded)
-            dest_dir: Destination directory (ignored)
-            index: Scene index (ignored)
-        
-        Returns:
-            List of file paths (same as input)
-        """
-        # Runpod client downloads during polling, so outputs are already local paths
+        """No-op for Runpod — outputs are already local paths from polling."""
         return [Path(url) for url in output_urls]
 
     @property
