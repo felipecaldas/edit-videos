@@ -123,7 +123,7 @@ Available image models:
 
 Rules:
 - Use z-image-turbo for scenes with people, portraits, faces
-- Use openai/gpt-image-2 when the scene contains ANY text that must be legible: signs, labels, logos, UI elements, product names, captions, headlines — it is the ONLY model that reliably renders readable text. Set is_text_heavy=true for these scenes.
+- For scenes with ANY legible text (signs, labels, logos, UI elements, product names, captions, headlines): set is_text_heavy=true and skip_image_generation=true — use text overlays instead of image generation for these scenes
 - Use Fal models for abstract, landscapes, objects, text-free backgrounds, fantasy, sci-fi
 - Set skip_image_generation=true ONLY for pure typographic scenes (no visual content needed)
 - When is_text_heavy=true, provide prominent_text_overlay with component + props
@@ -401,7 +401,7 @@ Available image models:
 Rules:
 - Use z-image-turbo for scenes with people, portraits, faces, characters
 - Use z-image-photo for realistic photography-style scenes
-- Use openai/gpt-image-2 when the scene contains ANY text that must be legible: signs, labels, logos, UI elements, product names, captions, headlines — it is the ONLY model that reliably renders readable text. Set is_text_heavy=true for these scenes.
+- For scenes with ANY legible text (signs, labels, logos, UI elements, product names, captions, headlines): set is_text_heavy=true and skip_image_generation=true — use text overlays instead of image generation for these scenes
 - Use Fal models for abstract, landscapes, objects, text-free backgrounds, fantasy, sci-fi
 - Set skip_image_generation=true ONLY for pure typographic scenes (no visual content needed)
 
