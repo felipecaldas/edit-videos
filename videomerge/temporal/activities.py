@@ -1987,7 +1987,10 @@ async def poll_video_generation_provider(
                     clean_url = url
                 raw_b64 = _strip_base64_data_url(clean_url)
                 video_data = base64.b64decode(raw_b64)
-                out_name = fragment_filename or f"video_{index:03d}_{i}.mp4"
+                # Always prefix with scene index so concurrent scenes writing the
+                # same ComfyUI output name (e.g. ComfyUI_00001_.mp4) don't
+                # overwrite each other on disk.
+                out_name = f"{index:03d}_{fragment_filename}" if fragment_filename else f"video_{index:03d}_{i}.mp4"
                 dest_path = run_dir / out_name
                 dest_path.write_bytes(video_data)
                 logger.info(
