@@ -765,6 +765,7 @@ class ImageGenerationWorkflow:
         )
 
         saved_images: list[str] = []
+        ordered_image_prompts: list[str] = []
         try:
             await workflow.execute_activity(
                 setup_run_directory,
@@ -811,7 +812,6 @@ class ImageGenerationWorkflow:
             # Classify scenes for provider selection (brief-aware path)
             scene_classifications = []
             if req.brief and req.platform and SCENE_CLASSIFIER_ENABLED:
-                import json
                 workflow.logger.info("[ImageGenerationWorkflow] Classifying scenes from brief")
                 brief_json = req.brief.model_dump_json()
                 scene_classifications = await workflow.execute_activity(
@@ -940,7 +940,7 @@ class ImageGenerationWorkflow:
                     req.user_id,
                     "failed",
                     saved_images,
-                    ordered_image_prompts if "ordered_image_prompts" in locals() else [],
+                    ordered_image_prompts,
                     req.workflow_id,
                     detail,
                     req.video_idea_id,
