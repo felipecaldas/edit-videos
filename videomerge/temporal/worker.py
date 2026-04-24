@@ -163,6 +163,7 @@ async def main() -> None:
             activities.poll_image_generation_provider,
             activities.start_video_generation_provider,
             activities.poll_video_generation_provider,
+            activities.list_existing_video_clips,
         ],
     )
 

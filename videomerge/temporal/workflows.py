@@ -110,6 +110,7 @@ with workflow.unsafe.imports_passed_through():
         save_upscaled_video,
         list_run_videos_for_upscale,
         list_upscaled_videos,
+        list_existing_video_clips,
         encode_file_to_base64,
         send_upscale_completion_webhook,
         persist_scene_prompts,
@@ -435,8 +436,20 @@ class VideoGenerationWorkflow:
             # Calculate video dimensions from format and resolution
             video_width, video_height = calculate_video_dimensions(req.video_format, req.target_resolution)
 
-            # 4. Process each scene as a child workflow
-            scene_processing_tasks = []
+            # 4. Process each scene as a child workflow, skipping any whose clip
+            #    already exists on disk (so retries don't re-pay for completed scenes).
+            existing_clips = await workflow.execute_activity(
+                list_existing_video_clips,
+                args=[req.run_id],
+                start_to_close_timeout=timedelta(seconds=SETUP_RUN_DIRECTORY_TIMEOUT_SECONDS),
+                retry_policy=RetryPolicy(maximum_attempts=3),
+            )
+            if existing_clips:
+                workflow.logger.info(
+                    "[VideoGenerationWorkflow] Found existing clips for %d scene(s) — those will be skipped",
+                    len(existing_clips),
+                )
+
             workflow_filename = IMAGE_WORKFLOWS.get(image_style, IMAGE_WORKFLOWS["default"])
             workflow_path = f"{WORKFLOWS_BASE_PATH}/{workflow_filename}"
 
@@ -449,8 +462,16 @@ class VideoGenerationWorkflow:
             # Get parent workflow info for child correlation
             parent_workflow_id = workflow.info().workflow_id
             parent_run_id = workflow.info().run_id
-            
+
+            # List of (scene_index, awaitable) so we can map results back to indices.
+            scene_processing_tasks: list[tuple[int, Any]] = []
             for i, prompt in enumerate(scene_prompts):
+                if str(i) in existing_clips:
+                    workflow.logger.info(
+                        "[VideoGenerationWorkflow] Scene %d: clip already on disk — skipping child workflow", i
+                    )
+                    continue
+
                 # Support both dict-based prompts and PromptItem-like objects
                 if isinstance(prompt, dict):
                     image_prompt = prompt.get("image_prompt")
@@ -460,9 +481,7 @@ class VideoGenerationWorkflow:
                     video_prompt = getattr(prompt, "video_prompt", None)
                 # Each scene gets its own child workflow for better isolation and resumability
                 child_id = f"{req.run_id}-scene-{i}"
-                
-                # Add memo and search attributes for parent-child correlation
-                # Note: Parent workflow also has TabarioRunId set (in orchestrate.py)
+
                 # Get classification for this scene (if available)
                 scene_classification = scene_classifications[i] if scene_classifications and i < len(scene_classifications) else None
 
@@ -489,24 +508,40 @@ class VideoGenerationWorkflow:
                         "run_id": req.run_id,
                     },
                     search_attributes={
-                        "TabarioRunId": [req.run_id],  # Allows searching all workflows by run_id
+                        "TabarioRunId": [req.run_id],
                     }
                 )
-                scene_processing_tasks.append(task)
-                
+                scene_processing_tasks.append((i, task))
+
                 workflow.logger.info(
                     f"Started child workflow {child_id} for scene {i} "
                     f"(parent: {parent_workflow_id})"
                 )
 
-            # Collect all video file paths from the child workflows
-            # Start all child workflows immediately - RunPod will handle queuing
-            workflow.logger.info(f"Starting {len(scene_processing_tasks)} scene child workflows (RunPod will queue)")
-            
-            results = await asyncio.gather(*scene_processing_tasks)
+            workflow.logger.info(
+                "[VideoGenerationWorkflow] Starting %d scene child workflow(s) "
+                "(%d skipped — clips already on disk)",
+                len(scene_processing_tasks),
+                len(scene_prompts) - len(scene_processing_tasks),
+            )
+
+            results = await asyncio.gather(*[task for _, task in scene_processing_tasks])
+            new_clips = {
+                i: result_list
+                for (i, _), result_list in zip(scene_processing_tasks, results)
+            }
             video_paths = []
-            for result_list in results:
-                video_paths.extend(result_list)
+            for i in range(len(scene_prompts)):
+                idx_str = str(i)
+                if idx_str in existing_clips:
+                    video_paths.extend(existing_clips[idx_str])
+                elif i in new_clips:
+                    video_paths.extend(new_clips[i])
+                else:
+                    raise ApplicationError(
+                        f"No video clip produced for scene {i}",
+                        non_retryable=True,
+                    )
 
             if not video_paths:
                 raise ApplicationError(
@@ -968,79 +1003,103 @@ class StoryBoardVideoGeneration:
 
             video_width, video_height = calculate_video_dimensions(req.video_format, req.target_resolution)
 
+            # Check for already-completed clips to skip re-generation on retry.
+            existing_clips = await workflow.execute_activity(
+                list_existing_video_clips,
+                args=[req.run_id],
+                start_to_close_timeout=timedelta(seconds=SETUP_RUN_DIRECTORY_TIMEOUT_SECONDS),
+                retry_policy=RetryPolicy(maximum_attempts=3),
+            )
+            scenes_to_generate = [s for s in scene_inputs if str(s["index"]) not in existing_clips]
+            if existing_clips:
+                workflow.logger.info(
+                    "[StoryBoardVideoGeneration] Skipping %d already-completed scene(s); generating %d",
+                    len(existing_clips), len(scenes_to_generate),
+                )
+
             _video_provider = VIDEO_PROVIDER
             workflow.logger.info(f"[StoryBoardVideoGeneration] VIDEO_PROVIDER={_video_provider}")
 
-            if _video_provider == "runpod":
-                start_tasks = [
-                    workflow.start_activity(
-                        start_video_generation_provider,
-                        args=[
-                            "runpod",
-                            scene_input["video_prompt"],
-                            scene_input["image_path"],
-                            DEFAULT_I2V_WORKFLOW_NAME,
-                            video_width,
-                            video_height,
-                            int(scene_input["index"]),
-                        ],
-                        start_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
-                        retry_policy=retry_policy,
-                    )
-                    for scene_input in scene_inputs
-                ]
-                video_job_ids = await asyncio.gather(*start_tasks)
-                poll_tasks = [
-                    workflow.start_activity(
-                        poll_video_generation_provider,
-                        args=["runpod", video_job_id, req.run_id, int(scene_input["index"]), VIDEO_JOB_TIMEOUT_SECONDS, VIDEO_POLL_INTERVAL_SECONDS],
-                        schedule_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
-                        start_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
-                        heartbeat_timeout=timedelta(minutes=2),
-                        retry_policy=retry_policy,
-                    )
-                    for scene_input, video_job_id in zip(scene_inputs, video_job_ids, strict=True)
-                ]
-            else:
-                start_tasks = [
-                    workflow.start_activity(
-                        start_video_generation_provider,
-                        args=[
-                            "fal",
-                            scene_input["video_prompt"],
-                            scene_input["image_path"],
-                            FAL_VIDEO_MODEL,
-                            video_width,
-                            video_height,
-                            int(scene_input["index"]),
-                        ],
-                        start_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
-                        retry_policy=retry_policy,
-                    )
-                    for scene_input in scene_inputs
-                ]
-                video_job_ids = await asyncio.gather(*start_tasks)
-                poll_tasks = [
-                    workflow.start_activity(
-                        poll_video_generation_provider,
-                        args=["fal", video_job_id, req.run_id, int(scene_input["index"]), VIDEO_JOB_TIMEOUT_SECONDS, VIDEO_POLL_INTERVAL_SECONDS, FAL_VIDEO_MODEL],
-                        schedule_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
-                        start_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
-                        heartbeat_timeout=timedelta(minutes=2),
-                        retry_policy=retry_policy,
-                    )
-                    for scene_input, video_job_id in zip(scene_inputs, video_job_ids, strict=True)
-                ]
+            new_clips: dict[str, list[str]] = {}
+            if scenes_to_generate:
+                if _video_provider == "runpod":
+                    start_tasks = [
+                        workflow.start_activity(
+                            start_video_generation_provider,
+                            args=[
+                                "runpod",
+                                scene_input["video_prompt"],
+                                scene_input["image_path"],
+                                DEFAULT_I2V_WORKFLOW_NAME,
+                                video_width,
+                                video_height,
+                                int(scene_input["index"]),
+                            ],
+                            start_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
+                            retry_policy=retry_policy,
+                        )
+                        for scene_input in scenes_to_generate
+                    ]
+                    video_job_ids = await asyncio.gather(*start_tasks)
+                    poll_tasks = [
+                        workflow.start_activity(
+                            poll_video_generation_provider,
+                            args=["runpod", video_job_id, req.run_id, int(scene_input["index"]), VIDEO_JOB_TIMEOUT_SECONDS, VIDEO_POLL_INTERVAL_SECONDS],
+                            schedule_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
+                            start_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
+                            heartbeat_timeout=timedelta(minutes=2),
+                            retry_policy=retry_policy,
+                        )
+                        for scene_input, video_job_id in zip(scenes_to_generate, video_job_ids, strict=True)
+                    ]
+                else:
+                    start_tasks = [
+                        workflow.start_activity(
+                            start_video_generation_provider,
+                            args=[
+                                "fal",
+                                scene_input["video_prompt"],
+                                scene_input["image_path"],
+                                FAL_VIDEO_MODEL,
+                                video_width,
+                                video_height,
+                                int(scene_input["index"]),
+                            ],
+                            start_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
+                            retry_policy=retry_policy,
+                        )
+                        for scene_input in scenes_to_generate
+                    ]
+                    video_job_ids = await asyncio.gather(*start_tasks)
+                    poll_tasks = [
+                        workflow.start_activity(
+                            poll_video_generation_provider,
+                            args=["fal", video_job_id, req.run_id, int(scene_input["index"]), VIDEO_JOB_TIMEOUT_SECONDS, VIDEO_POLL_INTERVAL_SECONDS, FAL_VIDEO_MODEL],
+                            schedule_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
+                            start_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
+                            heartbeat_timeout=timedelta(minutes=2),
+                            retry_policy=retry_policy,
+                        )
+                        for scene_input, video_job_id in zip(scenes_to_generate, video_job_ids, strict=True)
+                    ]
 
-            raw_video_paths = await asyncio.gather(*poll_tasks)
+                raw_new_paths = await asyncio.gather(*poll_tasks)
+                for scene_input, result_list in zip(scenes_to_generate, raw_new_paths, strict=True):
+                    new_clips[str(scene_input["index"])] = result_list
 
-            for scene_input, result_list in zip(scene_inputs, raw_video_paths, strict=True):
-                if not result_list:
-                    raise ApplicationError(
-                        f"No video output generated for scene {scene_input['index']}",
-                        non_retryable=True,
-                    )
-                video_paths.append(result_list[0])
+            # Build final ordered video_paths from existing + newly generated clips.
+            for scene_input in scene_inputs:
+                idx_str = str(scene_input["index"])
+                if idx_str in existing_clips:
+                    video_paths.append(existing_clips[idx_str][0])
+                else:
+                    result = new_clips.get(idx_str, [])
+                    if not result:
+                        raise ApplicationError(
+                            f"No video output generated for scene {scene_input['index']}",
+                            non_retryable=True,
+                        )
+                    video_paths.append(result[0])
 
             # Compositor handoff OR legacy stitch/subtitle/upload/webhook tail
             effective_handoff = (

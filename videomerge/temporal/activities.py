@@ -1369,6 +1369,31 @@ async def list_upscaled_videos(run_id: str) -> List[str]:
     return [str(p) for p in files]
 
 
+@activity.defn
+async def list_existing_video_clips(run_id: str) -> Dict[str, List[str]]:
+    """Scan the run directory for already-generated video clips, keyed by scene index.
+
+    Returns a mapping of ``"<index>"`` → ``[path, ...]`` for every
+    ``{index:03d}_*.mp4`` file found (e.g. ``"0"`` → ``["/data/shared/.../000_ComfyUI_00001_.mp4"]``).
+    Used by StoryBoardVideoGeneration and VideoGenerationWorkflow to skip
+    re-generating clips that already exist on disk, saving cost on retries.
+    """
+    activity.heartbeat()
+    run_dir = DATA_SHARED_BASE / run_id
+    existing: Dict[str, List[str]] = {}
+    if not run_dir.exists():
+        return existing
+    for mp4 in sorted(run_dir.glob("[0-9][0-9][0-9]_*.mp4"), key=lambda p: p.name):
+        prefix = mp4.stem.split("_")[0]
+        if prefix.isdigit():
+            existing.setdefault(prefix, []).append(str(mp4))
+    logger.info(
+        "[list_existing_video_clips] run_id=%s — found clips for %d scene(s): indices=%s",
+        run_id, len(existing), sorted(existing.keys()),
+    )
+    return existing
+
+
 def _strip_base64_data_url(value: str) -> str:
     """Strip a data URL prefix (e.g. data:video/mp4;base64,...) if present."""
 
