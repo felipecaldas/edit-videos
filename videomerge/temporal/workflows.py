@@ -981,6 +981,7 @@ class StoryBoardVideoGeneration:
         }
 
         video_paths: list[str] = []
+        failure_webhook_sent = False
         try:
             run_dir = await workflow.execute_activity(
                 setup_run_directory,
@@ -1165,6 +1166,7 @@ class StoryBoardVideoGeneration:
                         ],
                         **activity_defaults,
                     )
+                    failure_webhook_sent = True
                     raise ApplicationError(
                         f"Handoff to compositor failed for run_id={req.run_id}: {detail}",
                         non_retryable=True,
@@ -1269,24 +1271,25 @@ class StoryBoardVideoGeneration:
         except Exception as e:
             detail = _root_cause_message(e)
             workflow.logger.error(f"Storyboard video generation workflow for run_id={req.run_id} failed: {detail}")
-            await workflow.execute_activity(
-                send_completion_webhook,
-                args=[
-                    req.run_id,
-                    "failed",
-                    "",
-                    req.workflow_id,
-                    locals().get("run_dir", ""),
-                    video_paths,
-                    [],
-                    locals().get("voiceover_path", ""),
-                    detail,
-                    None,  # uploaded_video_object_path
-                    req.video_idea_id,
-                    req.platform,
-                ],
-                **activity_defaults,
-            )
+            if not failure_webhook_sent:
+                await workflow.execute_activity(
+                    send_completion_webhook,
+                    args=[
+                        req.run_id,
+                        "failed",
+                        "",
+                        req.workflow_id,
+                        locals().get("run_dir", ""),
+                        video_paths,
+                        [],
+                        locals().get("voiceover_path", ""),
+                        detail,
+                        None,  # uploaded_video_object_path
+                        req.video_idea_id,
+                        req.platform,
+                    ],
+                    **activity_defaults,
+                )
             if isinstance(e, ApplicationError):
                 raise
             raise ApplicationError(
