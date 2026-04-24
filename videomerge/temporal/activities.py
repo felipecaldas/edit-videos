@@ -1972,8 +1972,32 @@ async def poll_video_generation_provider(
             index=index
         )
     else:
-        # Runpod outputs are already local paths
-        saved_files = [Path(url) for url in output_urls]
+        # RunPod outputs are local file paths OR inline base64 data URLs.
+        # Inline base64 would exceed Temporal's 2 MB activity-return size limit,
+        # so decode and persist them to disk and return local paths instead.
+        saved_files = []
+        for i, url in enumerate(output_urls):
+            if url.startswith("data:"):
+                # Strip optional #filename= fragment before decoding
+                if "#filename=" in url:
+                    fragment_filename: str | None = url.split("#filename=", 1)[1]
+                    clean_url = url.split("#filename=", 1)[0]
+                else:
+                    fragment_filename = None
+                    clean_url = url
+                raw_b64 = _strip_base64_data_url(clean_url)
+                video_data = base64.b64decode(raw_b64)
+                out_name = fragment_filename or f"video_{index:03d}_{i}.mp4"
+                dest_path = run_dir / out_name
+                dest_path.write_bytes(video_data)
+                logger.info(
+                    "[poll_video_runpod] Saved inline base64 video (%d bytes) to %s",
+                    len(video_data),
+                    dest_path,
+                )
+                saved_files.append(dest_path)
+            else:
+                saved_files.append(Path(url))
     
     if not saved_files:
         raise RuntimeError(f"Failed to download video outputs for scene {index}")
