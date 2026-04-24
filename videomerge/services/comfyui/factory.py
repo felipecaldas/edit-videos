@@ -43,22 +43,18 @@ _video_client_config_hash: Optional[str] = None
 
 def _get_config_hash(client_type: ClientType) -> str:
     """Generate a hash of current ComfyUI configuration for a specific client type."""
-    from videomerge.config import (
-        ensure_config_current,
-        COMFYUI_URL,
-        RUN_ENV,
-        RUNPOD_IMAGE_INSTANCE_ID,
-        RUNPOD_VIDEO_INSTANCE_ID,
-    )
+    import videomerge.config as _cfg
 
-    ensure_config_current()
-    
-    if client_type == ClientType.IMAGE:
-        instance_id = RUNPOD_IMAGE_INSTANCE_ID
-    else:
-        instance_id = RUNPOD_VIDEO_INSTANCE_ID
-    
-    config_str = f"{COMFYUI_URL}|{RUN_ENV}|{instance_id or ''}|{client_type.value}"
+    # ensure_config_current() must run before reading the module attributes so that
+    # the hash reflects any runtime updates (e.g. from /refresh-comfyui-client).
+    _cfg.ensure_config_current()
+
+    instance_id = (
+        _cfg.RUNPOD_IMAGE_INSTANCE_ID
+        if client_type == ClientType.IMAGE
+        else _cfg.RUNPOD_VIDEO_INSTANCE_ID
+    )
+    config_str = f"{_cfg.COMFYUI_URL}|{_cfg.RUN_ENV}|{instance_id or ''}|{client_type.value}"
     return str(hash(config_str))
 
 

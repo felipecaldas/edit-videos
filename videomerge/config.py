@@ -15,6 +15,11 @@ _BASE_DIR = Path(__file__).parent.parent
 _ENV_PATH = _BASE_DIR / ".env"
 _LAST_ENV_MTIME: Optional[float] = None
 
+# Shared override file — written by the API, read by both API and temporal-worker
+# via the /data/shared volume mount that both containers share.
+_OVERRIDE_ENV_PATH = Path(os.getenv("DATA_SHARED_BASE", "/data/shared")) / ".tabario-override.env"
+_LAST_OVERRIDE_MTIME: Optional[float] = None
+
 
 def _load_paths() -> tuple[Path, Path, Path]:
     """Load path-based configuration values from the environment."""
@@ -390,20 +395,29 @@ def _apply_config() -> None:
 
 
 def _load_env() -> None:
-    """Load environment variables from the .env file if present."""
-    global _LAST_ENV_MTIME
+    """Load environment variables from the .env file and shared override file if present."""
+    global _LAST_ENV_MTIME, _LAST_OVERRIDE_MTIME
 
     try:
         if _ENV_PATH.exists():
             load_dotenv(dotenv_path=_ENV_PATH, override=True)
             _LAST_ENV_MTIME = _ENV_PATH.stat().st_mtime
-            return
+        else:
+            load_dotenv(override=True)
+            _LAST_ENV_MTIME = None
     except OSError:
-        # If the workflow sandbox restricts filesystem access we fall back to defaults
-        pass
+        load_dotenv(override=True)
+        _LAST_ENV_MTIME = None
 
-    load_dotenv(override=True)
-    _LAST_ENV_MTIME = None
+    # Load the shared override file last so it takes precedence.
+    # This file is written by the API container and read by both containers
+    # via the shared /data/shared volume mount.
+    try:
+        if _OVERRIDE_ENV_PATH.exists():
+            load_dotenv(dotenv_path=_OVERRIDE_ENV_PATH, override=True)
+            _LAST_OVERRIDE_MTIME = _OVERRIDE_ENV_PATH.stat().st_mtime
+    except OSError:
+        pass
 
 
 def reload_config() -> None:
@@ -413,16 +427,26 @@ def reload_config() -> None:
 
 
 def ensure_config_current() -> None:
-    """Ensure in-memory configuration matches the .env file on disk."""
+    """Ensure in-memory configuration is current with both .env and the shared override file."""
+    needs_reload = False
+
     try:
-        if not _ENV_PATH.exists():
-            return
-
-        current_mtime = _ENV_PATH.stat().st_mtime
+        if _ENV_PATH.exists():
+            current_mtime = _ENV_PATH.stat().st_mtime
+            if _LAST_ENV_MTIME is None or current_mtime > _LAST_ENV_MTIME:
+                needs_reload = True
     except OSError:
-        return
+        pass
 
-    if _LAST_ENV_MTIME is None or current_mtime > _LAST_ENV_MTIME:
+    try:
+        if _OVERRIDE_ENV_PATH.exists():
+            override_mtime = _OVERRIDE_ENV_PATH.stat().st_mtime
+            if _LAST_OVERRIDE_MTIME is None or override_mtime > _LAST_OVERRIDE_MTIME:
+                needs_reload = True
+    except OSError:
+        pass
+
+    if needs_reload:
         reload_config()
 
 
