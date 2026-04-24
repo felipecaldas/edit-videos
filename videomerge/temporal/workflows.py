@@ -1086,9 +1086,24 @@ class StoryBoardVideoGeneration:
                         for scene_input, video_job_id in zip(scenes_to_generate, video_job_ids, strict=True)
                     ]
 
-                raw_new_paths = await asyncio.gather(*poll_tasks)
+                raw_new_paths = await asyncio.gather(*poll_tasks, return_exceptions=True)
+                failed_scenes: list[tuple[int, BaseException]] = []
                 for scene_input, result_list in zip(scenes_to_generate, raw_new_paths, strict=True):
+                    if isinstance(result_list, BaseException):
+                        failed_scenes.append((int(scene_input["index"]), result_list))
+                        continue
                     new_clips[str(scene_input["index"])] = result_list
+                if failed_scenes:
+                    details = "; ".join(
+                        f"scene {idx}: {_root_cause_message(exc)}" for idx, exc in failed_scenes
+                    )
+                    workflow.logger.error(
+                        "[StoryBoardVideoGeneration] %d scene(s) failed; %d sibling clip(s) preserved on disk for retry. %s",
+                        len(failed_scenes), len(new_clips), details,
+                    )
+                    raise ApplicationError(
+                        f"Video generation failed for {len(failed_scenes)} scene(s): {details}",
+                    )
 
             # Build final ordered video_paths from existing + newly generated clips.
             for scene_input in scene_inputs:
