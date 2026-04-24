@@ -156,7 +156,7 @@ class FalClient:
             
             if is_seedance:
                 # Convert pixel dimensions to resolution string
-                resolution = self._pixels_to_resolution(height)
+                resolution = self._pixels_to_resolution(width, height)
                 aspect_ratio = self._pixels_to_aspect_ratio(width, height)
                 
                 arguments = {
@@ -475,18 +475,23 @@ class FalClient:
             logger.info("[fal] Downloaded %s to %s", url, out_path)
             return out_path
 
-    def _pixels_to_resolution(self, height: int) -> str:
-        """Convert pixel height to Fal resolution string.
-        
+    def _pixels_to_resolution(self, width: int, height: int) -> str:
+        """Convert pixel dimensions to Fal resolution string.
+
+        Uses the short side so portrait (9:16) video maps correctly:
+        720x1280 → "720p", not "1080p".
+
         Args:
+            width: Video width in pixels
             height: Video height in pixels
-            
+
         Returns:
             Fal resolution string (e.g., "480p", "720p", "1080p")
         """
-        if height >= 1080:
+        short_side = min(width, height)
+        if short_side >= 1080:
             return "1080p"
-        elif height >= 720:
+        elif short_side >= 720:
             return "720p"
         else:
             return "480p"

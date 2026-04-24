@@ -3,9 +3,9 @@
 from typing import Tuple
 
 _RESOLUTION_DIMS = {
-    "480p": {"16:9": (854, 480), "9:16": (360, 640), "1:1": (480, 480)},
-    "720p": {"16:9": (1280, 720), "9:16": (405, 720), "1:1": (720, 720)},
-    "1080p": {"16:9": (1920, 1080), "9:16": (607, 1080), "1:1": (1080, 1080)},
+    "480p": {"16:9": (854, 480), "9:16": (480, 854), "1:1": (480, 480)},
+    "720p": {"16:9": (1280, 720), "9:16": (720, 1280), "1:1": (720, 720)},
+    "1080p": {"16:9": (1920, 1080), "9:16": (1080, 1920), "1:1": (1080, 1080)},
 }
 
 _MAX_IMAGE_RESOLUTION = "720p"
@@ -48,8 +48,8 @@ def calculate_video_dimensions(video_format: str, target_resolution: str) -> Tup
         
     Examples:
         >>> calculate_video_dimensions("9:16", "480p")
-        (360, 640)  # vertical video
-        >>> calculate_video_dimensions("16:9", "480p") 
+        (480, 854)  # vertical video
+        >>> calculate_video_dimensions("16:9", "480p")
         (854, 480)  # horizontal video
         >>> calculate_video_dimensions("1:1", "480p")
         (480, 480)  # square video

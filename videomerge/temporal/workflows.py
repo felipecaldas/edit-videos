@@ -799,8 +799,10 @@ class ImageGenerationWorkflow:
                     retry_policy=prompt_retry_policy,
                 )
 
-            image_width = int(req.image_width) if req.image_width is not None else int(IMAGE_WIDTH)
-            image_height = int(req.image_height) if req.image_height is not None else int(IMAGE_HEIGHT)
+            # Always derive dimensions from aspect ratio + resolution (caps at 720p).
+            # Explicit req.image_width/image_height are ignored to enforce the cap,
+            # matching the same policy used by VideoGenerationWorkflow.
+            image_width, image_height = calculate_image_dimensions(req.video_format, req.target_resolution)
             workflow_filename = IMAGE_WORKFLOWS.get(image_style, IMAGE_WORKFLOWS["default"])
             workflow_path = f"{WORKFLOWS_BASE_PATH}/{workflow_filename}"
             comfyui_workflow_name = IMAGE_STYLE_TO_WORKFLOW_MAPPING.get(image_style)
