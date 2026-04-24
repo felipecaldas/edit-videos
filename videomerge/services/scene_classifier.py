@@ -241,10 +241,19 @@ def _parse_llm_response(response: str, expected_count: int) -> List[SceneClassif
     
     try:
         data = json.loads(cleaned)
-        
+
         if not isinstance(data, list):
             raise RuntimeError(f"Expected JSON array, got {type(data).__name__}")
-        
+
+        # LLM legitimately returns null for image_provider/image_model when
+        # skip_image_generation=true (text-only scenes). Provide harmless
+        # defaults so Pydantic validation doesn't reject them.
+        for item in data:
+            if not item.get("image_provider"):
+                item["image_provider"] = "fal"
+            if not item.get("image_model"):
+                item["image_model"] = FAL_IMAGE_DEFAULT
+
         classifications = [SceneClassification(**item) for item in data]
         
         if len(classifications) != expected_count:
