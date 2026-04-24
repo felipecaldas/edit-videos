@@ -274,6 +274,16 @@ class ImageGenerationStartRequest(BaseModel):
     brief: Optional[Brief] = Field(None, description="V-CaaS brief object. When present together with 'platform', image prompts are built from brief.scenes[] instead of calling the N8N prompts webhook.")
     platform: Optional[str] = Field(None, description="Platform identifier selecting one PlatformBriefModel from brief.platform_briefs (e.g. 'LinkedIn').", examples=["LinkedIn"])
     video_idea_id: Optional[str] = Field(None, description="Supabase video_ideas.id, echoed in completion webhooks for correlation with the source idea.", examples=["fe1004f1-9a5d-4b9f-8e0a-5c7f9b3e6c11"])
+    video_format: Optional[str] = Field(
+        None,
+        description="Video aspect ratio format ('9:16', '16:9', '1:1'). Used to derive correct image dimensions. Defaults to '9:16' when omitted.",
+        examples=["9:16"],
+    )
+    target_resolution: Optional[str] = Field(
+        None,
+        description="Target image resolution ('480p', '720p', '1080p'). Image generation is capped at 720p regardless. Defaults to '720p' when omitted.",
+        examples=["720p"],
+    )
 
 
 class StoryboardVideoGenerationRequest(BaseModel):
