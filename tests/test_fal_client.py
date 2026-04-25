@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fal_client import Completed as FalCompleted, InProgress as FalInProgress, Queued as FalQueued
 
 from videomerge.services.fal.fal_client import FalClient
 
@@ -43,61 +44,62 @@ async def test_submit_text_to_image(fal_client):
 
 @pytest.mark.asyncio
 async def test_submit_image_to_video_with_data_url(fal_client):
-    """Test image-to-video submission with data URL."""
+    """Test image-to-video submission with data URL (Seedance model)."""
     mock_handler = MagicMock()
     mock_handler.request_id = "test-video-456"
-    
+
     data_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
-    
+
     with patch("fal_client.submit_async", new_callable=AsyncMock) as mock_submit:
         mock_submit.return_value = mock_handler
-        
+
         request_id = await fal_client.submit_image_to_video(
             prompt="Slow zoom in",
             image_input=data_url,
             model="bytedance/seedance-2.0/image-to-video",
             width=720,
             height=1280,
-            length=81
         )
-        
+
         assert request_id == "test-video-456"
         mock_submit.assert_called_once()
-        
+
         call_args = mock_submit.call_args
         assert call_args[0][0] == "bytedance/seedance-2.0/image-to-video"
         assert call_args[1]["arguments"]["prompt"] == "Slow zoom in"
-        assert call_args[1]["arguments"]["width"] == 720
-        assert call_args[1]["arguments"]["length"] == 81
+        # Seedance uses resolution/aspect_ratio strings, not raw width/height
+        assert call_args[1]["arguments"]["resolution"] == "720p"
+        assert call_args[1]["arguments"]["aspect_ratio"] == "9:16"
         assert call_args[1]["arguments"]["image_url"].startswith("data:image/png;base64,")
 
 
 @pytest.mark.asyncio
 async def test_poll_until_complete_success(fal_client):
     """Test polling until job completes successfully."""
-    mock_status_responses = [
-        {"status": "IN_QUEUE"},
-        {"status": "IN_PROGRESS"},
-        {"status": "COMPLETED"}
-    ]
-    
+    queued = MagicMock(spec=FalQueued)
+    in_progress = MagicMock(spec=FalInProgress)
+    completed = MagicMock(spec=FalCompleted)
+    completed.error = None
+
     mock_result = {
         "images": [
             {"url": "https://fal.media/files/test-image.png"}
         ]
     }
-    
-    with patch("fal_client.status", side_effect=mock_status_responses) as mock_status, \
-         patch("fal_client.result", return_value=mock_result) as mock_result_call:
-        
+
+    with patch("fal_client.status_async", new_callable=AsyncMock,
+               side_effect=[queued, in_progress, completed]) as mock_status, \
+         patch("fal_client.result_async", new_callable=AsyncMock,
+               return_value=mock_result) as mock_result_call:
+
         outputs = await fal_client.poll_until_complete(
             model="fal-ai/flux/dev",
             request_id="test-123",
             timeout_s=60,
-            poll_interval_s=0.1,
+            poll_interval_s=0.01,
             operation_type="image"
         )
-        
+
         assert len(outputs) == 1
         assert outputs[0] == "https://fal.media/files/test-image.png"
         assert mock_status.call_count == 3
@@ -107,18 +109,16 @@ async def test_poll_until_complete_success(fal_client):
 @pytest.mark.asyncio
 async def test_poll_until_complete_failure(fal_client):
     """Test polling when job fails."""
-    mock_status_response = {
-        "status": "FAILED",
-        "error": "Model inference failed"
-    }
-    
-    with patch("fal_client.status", return_value=mock_status_response):
+    completed = MagicMock(spec=FalCompleted)
+    completed.error = "Model inference failed"
+
+    with patch("fal_client.status_async", new_callable=AsyncMock, return_value=completed):
         with pytest.raises(RuntimeError, match="Fal job failed"):
             await fal_client.poll_until_complete(
                 model="fal-ai/flux/dev",
                 request_id="test-fail",
                 timeout_s=60,
-                poll_interval_s=0.1,
+                poll_interval_s=0.01,
                 operation_type="image"
             )
 
@@ -126,9 +126,9 @@ async def test_poll_until_complete_failure(fal_client):
 @pytest.mark.asyncio
 async def test_poll_until_complete_timeout(fal_client):
     """Test polling timeout."""
-    mock_status_response = {"status": "IN_QUEUE"}
-    
-    with patch("fal_client.status", return_value=mock_status_response):
+    queued = MagicMock(spec=FalQueued)
+
+    with patch("fal_client.status_async", new_callable=AsyncMock, return_value=queued):
         with pytest.raises(TimeoutError, match="Timed out waiting for Fal results"):
             await fal_client.poll_until_complete(
                 model="fal-ai/flux/dev",

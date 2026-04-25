@@ -185,19 +185,21 @@ async def test_fal_provider_download_outputs(tmp_path):
 @pytest.mark.asyncio
 async def test_runpod_provider_submit_text_to_image():
     """Test RunpodProvider text-to-image submission."""
+    # RunpodProvider uses asyncio.to_thread, so the underlying client method must be
+    # a regular (sync) callable — not AsyncMock.
     mock_client = MagicMock()
-    mock_client.submit_text_to_image = AsyncMock(return_value="runpod-job-789")
-    
+    mock_client.submit_text_to_image = MagicMock(return_value="runpod-job-789")
+
     with patch("videomerge.services.media_providers.runpod_provider.get_image_client", return_value=mock_client):
         provider = RunpodProvider()
-        
+
         job_id = await provider.submit_text_to_image(
             prompt="test prompt",
             model="z-image-turbo",
             width=720,
             height=1280
         )
-        
+
         assert job_id == "runpod-job-789"
         mock_client.submit_text_to_image.assert_called_once()
 
@@ -205,20 +207,21 @@ async def test_runpod_provider_submit_text_to_image():
 @pytest.mark.asyncio
 async def test_runpod_provider_poll_image_generation():
     """Test RunpodProvider image polling."""
+    # The provider calls client.poll_until_complete via asyncio.to_thread (sync).
     mock_client = MagicMock()
-    mock_client.poll_for_completion = AsyncMock(return_value=["/data/shared/run/000_image.png"])
-    
+    mock_client.poll_until_complete = MagicMock(return_value=["/data/shared/run/000_image.png"])
+
     with patch("videomerge.services.media_providers.runpod_provider.get_image_client", return_value=mock_client):
         provider = RunpodProvider()
-        
+
         outputs = await provider.poll_image_generation(
             job_id="runpod-job-789",
             timeout_s=600,
             poll_interval_s=5.0
         )
-        
+
         assert outputs == ["/data/shared/run/000_image.png"]
-        mock_client.poll_for_completion.assert_called_once()
+        mock_client.poll_until_complete.assert_called_once()
 
 
 @pytest.mark.asyncio
