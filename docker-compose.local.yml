@@ -13,6 +13,7 @@ services:
       - UVICORN_LOG_LEVEL=debug
       - VIDEO_COMPLETED_N8N_WEBHOOK_URL=https://birthdaypartyai.app/n8n/webhook/07ec5d3d-59ed-4605-b655-fbb3579169cb
       - TEMPORAL_SERVER_URL=temporal:7233
+      - TABARIO_VIDEO_COMPOSITOR_URL=http://tabario-video-compositor:9312
     ports:
       - "8086:8000"
     volumes:
@@ -27,6 +28,7 @@ services:
       - "/mnt/tp-share/n8n-shared:/data/shared"
       - .:/app
     environment:
+      - PYTHONPATH=/app
       - RUN_ENV=local
       - TZ=Australia/Melbourne
       - VOICEOVER_SERVICE_URL=http://192.168.68.51:8083
@@ -39,6 +41,7 @@ services:
       - TIKTOK_VIDEOS_ARCHIVE_FOLDER=/data/shared/archived
       - VIDEO_COMPLETED_N8N_WEBHOOK_URL=https://birthdaypartyai.app/n8n/webhook/07ec5d3d-59ed-4605-b655-fbb3579169cb
       - TEMPORAL_SERVER_URL=temporal:7233
+      - TABARIO_VIDEO_COMPOSITOR_URL=http://tabario-video-compositor:9312
     restart: unless-stopped
     depends_on:
       - temporal

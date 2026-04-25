@@ -61,6 +61,7 @@ class ComfyUIClient(ABC):
         run_id: Optional[str] = None,
         video_width: Optional[int] = None,
         video_height: Optional[int] = None,
+        length: Optional[int] = None,
     ) -> str:
         """Submit an image-to-video workflow and return the prompt_id.
         
@@ -72,6 +73,7 @@ class ComfyUIClient(ABC):
             run_id: Optional run ID for debugging purposes
             video_width: Optional video width in pixels
             video_height: Optional video height in pixels
+            length: Optional number of frames for video generation (default 81 for RunPod)
         """
         pass
 

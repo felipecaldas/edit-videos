@@ -136,7 +136,7 @@ class TestWhisperIntegration:
         mock_whisper_model.assert_called_once_with("small", device="cpu", compute_type="int8")
         mock_model.transcribe.assert_called_once_with(
             str(audio_path),
-            language="en-US",  # Should be mapped from "English (US)"
+            language="en",  # Should be mapped from "English (US)" to "en" for Whisper
             task="transcribe",
             vad_filter=True,
             word_timestamps=True,
@@ -182,10 +182,10 @@ class TestWhisperIntegration:
         audio_path = Path("/test/audio.mp3")
         segments = run_whisper_segments(audio_path, language="UnknownLang")
 
-        # Verify WhisperModel was called with en-US as default
+        # Verify WhisperModel was called with en as default
         mock_model.transcribe.assert_called_once_with(
             str(audio_path),
-            language="en-US",  # Should default to en-US for unknown languages
+            language="en",  # Should default to "en" for unknown languages
             task="transcribe",
             vad_filter=True,
             word_timestamps=True,
@@ -247,7 +247,8 @@ class TestTranscriptionEndpoint:
     @patch('pathlib.Path.exists')
     @patch('pathlib.Path.is_file')
     @patch('pathlib.Path.stat')
-    def test_transcribe_mp3_success_with_language(self, mock_stat, mock_is_file, mock_exists, mock_transcribe):
+    @pytest.mark.asyncio
+    async def test_transcribe_mp3_success_with_language(self, mock_stat, mock_is_file, mock_exists, mock_transcribe):
         """Test successful transcription with specified language."""
         # Setup mocks
         mock_exists.return_value = True
@@ -269,8 +270,8 @@ class TestTranscriptionEndpoint:
             model_size="small"
         )
         
-        response = transcribe_mp3(req)
-        
+        response = await transcribe_mp3(req)
+
         assert isinstance(response, TranscriptionResponse)
         assert response.text == "Hello world"
         assert response.detected_language == "en"
@@ -281,7 +282,8 @@ class TestTranscriptionEndpoint:
     @patch('pathlib.Path.exists')
     @patch('pathlib.Path.is_file')
     @patch('pathlib.Path.stat')
-    def test_transcribe_mp3_success_auto_detect(self, mock_stat, mock_is_file, mock_exists, mock_transcribe):
+    @pytest.mark.asyncio
+    async def test_transcribe_mp3_success_auto_detect(self, mock_stat, mock_is_file, mock_exists, mock_transcribe):
         """Test successful transcription with auto-detected language."""
         # Setup mocks
         mock_exists.return_value = True
@@ -302,28 +304,30 @@ class TestTranscriptionEndpoint:
             model_size="small"
         )
         
-        response = transcribe_mp3(req)
-        
+        response = await transcribe_mp3(req)
+
         assert isinstance(response, TranscriptionResponse)
         assert response.text == "Olá mundo"
         assert response.detected_language == "pt"
         assert response.confidence == 0.88
         mock_transcribe.assert_called_once()
 
-    def test_transcribe_mp3_invalid_path(self):
+    @pytest.mark.asyncio
+    async def test_transcribe_mp3_invalid_path(self):
         """Test transcription with invalid path (not in /data/shared)."""
         req = TranscriptionRequest(
             mp3_path="/invalid/path/test.mp3"
         )
         
         with pytest.raises(HTTPException) as exc_info:
-            transcribe_mp3(req)
+            await transcribe_mp3(req)
         
         assert exc_info.value.status_code == 400
         assert "must be located in /data/shared" in str(exc_info.value.detail)
 
     @patch('pathlib.Path.exists')
-    def test_transcribe_mp3_file_not_found(self, mock_exists):
+    @pytest.mark.asyncio
+    async def test_transcribe_mp3_file_not_found(self, mock_exists):
         """Test transcription with non-existent file."""
         mock_exists.return_value = False
         
@@ -332,14 +336,15 @@ class TestTranscriptionEndpoint:
         )
         
         with pytest.raises(HTTPException) as exc_info:
-            transcribe_mp3(req)
+            await transcribe_mp3(req)
         
         assert exc_info.value.status_code == 404
         assert "not found" in str(exc_info.value.detail)
 
     @patch('pathlib.Path.exists')
     @patch('pathlib.Path.is_file')
-    def test_transcribe_mp3_not_a_file(self, mock_is_file, mock_exists):
+    @pytest.mark.asyncio
+    async def test_transcribe_mp3_not_a_file(self, mock_is_file, mock_exists):
         """Test transcription with path that is not a file."""
         mock_exists.return_value = True
         mock_is_file.return_value = False
@@ -349,7 +354,7 @@ class TestTranscriptionEndpoint:
         )
         
         with pytest.raises(HTTPException) as exc_info:
-            transcribe_mp3(req)
+            await transcribe_mp3(req)
         
         assert exc_info.value.status_code == 400
         assert "not a file" in str(exc_info.value.detail)
@@ -357,7 +362,8 @@ class TestTranscriptionEndpoint:
     @patch('pathlib.Path.exists')
     @patch('pathlib.Path.is_file')
     @patch('pathlib.Path.stat')
-    def test_transcribe_mp3_wrong_extension(self, mock_stat, mock_is_file, mock_exists):
+    @pytest.mark.asyncio
+    async def test_transcribe_mp3_wrong_extension(self, mock_stat, mock_is_file, mock_exists):
         """Test transcription with non-MP3 file."""
         mock_exists.return_value = True
         mock_is_file.return_value = True
@@ -368,7 +374,7 @@ class TestTranscriptionEndpoint:
         )
         
         with pytest.raises(HTTPException) as exc_info:
-            transcribe_mp3(req)
+            await transcribe_mp3(req)
         
         assert exc_info.value.status_code == 400
         assert ".mp3 extension" in str(exc_info.value.detail)
@@ -376,7 +382,8 @@ class TestTranscriptionEndpoint:
     @patch('pathlib.Path.exists')
     @patch('pathlib.Path.is_file')
     @patch('pathlib.Path.stat')
-    def test_transcribe_mp3_empty_file(self, mock_stat, mock_is_file, mock_exists):
+    @pytest.mark.asyncio
+    async def test_transcribe_mp3_empty_file(self, mock_stat, mock_is_file, mock_exists):
         """Test transcription with empty file."""
         mock_exists.return_value = True
         mock_is_file.return_value = True
@@ -387,7 +394,7 @@ class TestTranscriptionEndpoint:
         )
         
         with pytest.raises(HTTPException) as exc_info:
-            transcribe_mp3(req)
+            await transcribe_mp3(req)
         
         assert exc_info.value.status_code == 400
         assert "empty" in str(exc_info.value.detail)

@@ -194,7 +194,7 @@ The `concat` demuxer used by `/stitch` works best when input videos share the sa
 
 This service dynamically selects ComfyUI workflow JSONs based on the `RUN_ENV` environment variable. You can still override the paths explicitly if needed.
 
-- When `RUN_ENV=runpod` (as set in `docker-compose.runpod.yml`):
+- When `RUN_ENV=runpod` (set via `.env`):
   - Text-to-Image default: `videomerge/comfyui-workflows/qwen-image-fast-runpod.json`
   - Image-to-Video default: `videomerge/comfyui-workflows/I2V-Wan-2.2-Lightning-runpod.json`
 
@@ -392,7 +392,7 @@ When using RunPod serverless, the service automatically:
 
 Notes:
 - In containers, the app path is `/app`, so the workflow files live under `/app/videomerge/comfyui-workflows/`.
-- `docker-compose.runpod.yml` already sets `RUN_ENV=runpod` to activate the RunPod defaults.
+- Setting `RUN_ENV=runpod` in `.env` activates the RunPod defaults.
 - The ComfyUI client automatically detects environment changes and refreshes without requiring container restarts.
 - For local development, both image and video operations use the same local ComfyUI instance.
 

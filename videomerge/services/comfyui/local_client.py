@@ -87,8 +87,12 @@ class LocalComfyUIClient(ComfyUIClient):
         run_id: Optional[str] = None,
         video_width: Optional[int] = None,
         video_height: Optional[int] = None,
+        length: Optional[int] = None,
     ) -> str:
-        """Submit an image-to-video workflow to local ComfyUI."""
+        """Submit an image-to-video workflow to local ComfyUI.
+        
+        Note: length parameter is not supported for local ComfyUI deployment.
+        """
         client_id = client_id or str(uuid.uuid4())
         
         workflow_str = self._load_workflow_template(template_path)

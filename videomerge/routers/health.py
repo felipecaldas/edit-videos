@@ -21,34 +21,33 @@ class RefreshRequest(BaseModel):
     video_instance_id: Optional[str] = None
 
 
-def update_env_file(var_name: str, value: str) -> None:
-    """Update a variable in the .env file.
-    
-    Args:
-        var_name: Name of the environment variable
-        value: New value to set
+def update_override_env_file(var_name: str, value: str) -> None:
+    """Write a runtime config override to the shared volume override file.
+
+    Writing to DATA_SHARED_BASE/.tabario-override.env (mounted in both
+    video-merger and temporal-worker) is the only way to propagate config
+    changes to the temporal-worker at runtime without restarting it.
     """
-    repo_root = Path(__file__).resolve().parents[2]
-    env_path = repo_root / ".env"
-    
-    # Read existing .env file if it exists
-    lines = []
+    from videomerge.config import _OVERRIDE_ENV_PATH
+
+    env_path = _OVERRIDE_ENV_PATH
+    lines: list[str] = []
     if env_path.exists():
         lines = env_path.read_text(encoding="utf-8").splitlines(keepends=True)
-    
-    # Update or add the variable
+
     updated = False
     for i, line in enumerate(lines):
         if line.startswith(f"{var_name}="):
             lines[i] = f"{var_name}={value}\n"
             updated = True
             break
-    
+
     if not updated:
         lines.append(f"{var_name}={value}\n")
-    
-    # Write back to .env file
+
+    env_path.parent.mkdir(parents=True, exist_ok=True)
     env_path.write_text("".join(lines), encoding="utf-8")
+    logger.info("Wrote %s to override file %s", var_name, env_path)
 
 
 @router.get("/health")
@@ -77,7 +76,7 @@ async def refresh_comfyui_config(request: RefreshRequest = None):
             os.environ["RUNPOD_IMAGE_INSTANCE_ID"] = request.image_instance_id
             
             # Update .env file
-            update_env_file("RUNPOD_IMAGE_INSTANCE_ID", request.image_instance_id)
+            update_override_env_file("RUNPOD_IMAGE_INSTANCE_ID", request.image_instance_id)
             env_updated = True
             
             logger.info(
@@ -103,7 +102,7 @@ async def refresh_comfyui_config(request: RefreshRequest = None):
             os.environ["RUNPOD_VIDEO_INSTANCE_ID"] = request.video_instance_id
             
             # Update .env file
-            update_env_file("RUNPOD_VIDEO_INSTANCE_ID", request.video_instance_id)
+            update_override_env_file("RUNPOD_VIDEO_INSTANCE_ID", request.video_instance_id)
             env_updated = True
             
             logger.info(

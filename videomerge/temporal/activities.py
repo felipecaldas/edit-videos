@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
+import aiohttp
 import httpx
 from temporalio import activity
 
@@ -16,6 +17,7 @@ from videomerge.config import (
     COMFYUI_TIMEOUT_SECONDS,
     COMFY_ORG_API_KEY,
     DATA_SHARED_BASE,
+    IMAGE_GENERATION_N8N_WEBHOOK_URL,
     IMAGE_JOB_TIMEOUT_SECONDS,
     IMAGE_POLL_INTERVAL_SECONDS,
     IMAGE_HEIGHT,
@@ -27,6 +29,7 @@ from videomerge.config import (
     RUNPOD_API_KEY,
     RUNPOD_BASE_URL,
     RUNPOD_VIDEO_INSTANCE_ID,
+    TABARIO_VIDEO_COMPOSITOR_URL,
     UPSCALE_BATCH_SIZE,
     UPSCALE_JOB_TIMEOUT_SECONDS,
     UPSCALE_POLL_INTERVAL_SECONDS,
@@ -52,7 +55,9 @@ from videomerge.services.metrics import (
     job_total_seconds,
     worker_active,
 )
+from videomerge.models import HandoffPayload
 from videomerge.services.comfyui_client import get_image_client, get_video_client, refresh_comfyui_client, ClientType, get_comfyui_client
+from videomerge.services.media_providers.registry import get_image_provider, get_video_provider
 from videomerge.services.comfyui_wrapper import (
     submit_text_to_image,
     poll_until_complete,
@@ -62,6 +67,7 @@ from videomerge.services.comfyui_wrapper import (
     submit_image_to_video,
 )
 from videomerge.services.stitcher import concat_videos_with_voiceover, generate_and_burn_subtitles
+from videomerge.services.supabase_client import supabase_storage_client
 from videomerge.services.voiceover import synthesize_voice
 from videomerge.services.webhook_manager import webhook_manager
 from videomerge.utils.logging import get_logger
@@ -101,6 +107,35 @@ async def _run_in_thread_with_heartbeats(
     task = asyncio.create_task(_heartbeat_loop())
     try:
         return await asyncio.to_thread(fn, *args, **kwargs)
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
+async def _run_async_with_heartbeats(
+    coro_fn,
+    *args,
+    heartbeat_interval_s: float = 30.0,
+    **kwargs,
+) -> Any:
+    """Run an async function while periodically heartbeating.
+
+    This is used for long-running async operations (e.g., Fal.ai polling)
+    so the activity doesn't appear stuck.
+    """
+
+    async def _heartbeat_loop() -> None:
+        while True:
+            await asyncio.sleep(heartbeat_interval_s)
+            _safe_heartbeat()
+
+    _safe_heartbeat()
+    task = asyncio.create_task(_heartbeat_loop())
+    try:
+        return await coro_fn(*args, **kwargs)
     finally:
         task.cancel()
         try:
@@ -288,6 +323,300 @@ async def generate_scene_prompts(run_id: str, script: str, image_style: str | No
         logger.warning(f"[prompts] Failed to write scene prompts for run_id={run_id}: {exc}")
 
     return prompts
+
+
+@activity.defn
+async def generate_image_scene_prompts(
+    run_id: str,
+    script: str,
+    language: str,
+    image_style: str | None = None,
+) -> List[Dict[str, Any]]:
+    """Generate scene prompts for image-only orchestration and persist the full response."""
+    _safe_heartbeat()
+    run_dir = DATA_SHARED_BASE / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    url = N8N_PROMPTS_WEBHOOK_URL
+    if not url:
+        raise RuntimeError("N8N_PROMPTS_WEBHOOK_URL environment variable is not set")
+
+    payload: Dict[str, Any] = {
+        "script": script,
+        "language": language,
+        "image_style": image_style,
+    }
+
+    logger.info(f"[image-prompts] Calling Create Scenes webhook for run_id={run_id}")
+
+    try:
+        async with httpx.AsyncClient(timeout=float(N8N_WEBHOOK_TIMEOUT_SECONDS)) as client:
+            response = await client.post(url, json=payload)
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                try:
+                    error_detail = response.json()
+                    raise RuntimeError(
+                        f"Create Scenes webhook failed with status {response.status_code}: {error_detail}"
+                    ) from exc
+                except Exception:
+                    raise RuntimeError(
+                        f"Create Scenes webhook failed with status {response.status_code}: {response.text}"
+                    ) from exc
+            data = response.json()
+    except httpx.TimeoutException as exc:
+        raise ActivityTimeoutError(
+            f"Create Scenes webhook timed out after {N8N_WEBHOOK_TIMEOUT_SECONDS}s for run_id={run_id}"
+        ) from exc
+
+    prompts = data.get("prompts")
+    if not isinstance(prompts, list):
+        raise RuntimeError(f"Create Scenes webhook returned invalid payload for run_id={run_id}: {data}")
+
+    scenes_response_path = run_dir / "scenes_response.json"
+    try:
+        scenes_response_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        logger.info(f"[image-prompts] Saved scenes response for run_id={run_id} to {scenes_response_path}")
+    except Exception as exc:
+        logger.warning(f"[image-prompts] Failed to write scenes response for run_id={run_id}: {exc}")
+
+    prompts_path = run_dir / "scene_prompts.json"
+    try:
+        prompts_path.write_text(json.dumps(prompts, ensure_ascii=False, indent=2), encoding="utf-8")
+        logger.info(f"[image-prompts] Saved scene prompts for run_id={run_id} to {prompts_path}")
+    except Exception as exc:
+        logger.warning(f"[image-prompts] Failed to write scene prompts for run_id={run_id}: {exc}")
+
+    return prompts
+
+
+@activity.defn
+async def persist_scene_prompts(run_id: str, prompts: List[Dict[str, Any]]) -> None:
+    """Persist scene_prompts.json to the run directory.
+
+    This activity is used when prompts were built from a V-CaaS brief
+    (rather than fetched from the N8N webhook).
+
+    Args:
+        run_id: The run identifier.
+        prompts: List of prompt dictionaries to write to scene_prompts.json.
+    """
+    activity.heartbeat()
+    run_dir = DATA_SHARED_BASE / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    prompts_path = run_dir / "scene_prompts.json"
+    try:
+        prompts_path.write_text(json.dumps(prompts, ensure_ascii=False, indent=2), encoding="utf-8")
+        logger.info(f"[scene-prompts] Persisted scene_prompts.json for run_id={run_id}")
+    except Exception as exc:
+        logger.error(f"[scene-prompts] Failed to write scene_prompts.json for run_id={run_id}: {exc}")
+        raise
+
+
+@activity.defn
+async def load_storyboard_scene_inputs(run_id: str) -> List[Dict[str, Any]]:
+    """Load ordered storyboard scene prompts and image paths from the shared run directory."""
+    activity.heartbeat()
+    run_dir = DATA_SHARED_BASE / run_id
+    prompts_path = run_dir / "scene_prompts.json"
+
+    if not prompts_path.exists():
+        message = f"scene_prompts.json not found for run_id={run_id} at {prompts_path}"
+        logger.error(message)
+        raise RuntimeError(message)
+
+    try:
+        prompts = json.loads(prompts_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        message = f"Invalid scene_prompts.json for run_id={run_id}: {exc}"
+        logger.error(message)
+        raise RuntimeError(message) from exc
+
+    if not isinstance(prompts, list):
+        message = f"scene_prompts.json must contain a list for run_id={run_id}"
+        logger.error(message)
+        raise RuntimeError(message)
+
+    scene_inputs: List[Dict[str, Any]] = []
+    for sequence_number, prompt in enumerate(prompts, start=1):
+        if not isinstance(prompt, dict):
+            message = f"Scene prompt at index={sequence_number - 1} is not an object for run_id={run_id}"
+            logger.error(message)
+            raise RuntimeError(message)
+
+        video_prompt = prompt.get("video_prompt")
+        if not video_prompt:
+            message = f"Scene prompt at index={sequence_number - 1} is missing video_prompt for run_id={run_id}"
+            logger.error(message)
+            raise RuntimeError(message)
+
+        image_path = run_dir / f"image_{sequence_number:03d}.png"
+        if not image_path.exists():
+            message = f"Storyboard image not found for run_id={run_id}: {image_path}"
+            logger.error(message)
+            raise RuntimeError(message)
+
+        scene_inputs.append(
+            {
+                "index": sequence_number - 1,
+                "image_path": str(image_path),
+                "video_prompt": str(video_prompt),
+            }
+        )
+
+    logger.info("Loaded %s storyboard scene inputs for run_id=%s", len(scene_inputs), run_id)
+    return scene_inputs
+
+
+@activity.defn
+async def persist_image_output(run_id: str, user_id: str, image_hint: str, index: int, user_access_token: str) -> str:
+    """Persist a generated image using a deterministic sequence filename and upload it to Supabase.
+    
+    Args:
+        run_id: Unique run identifier
+        user_id: User identifier for storage path
+        image_hint: URL or path to the generated image
+        index: Sequential index for filename
+        user_access_token: Supabase user JWT for authenticated storage upload
+    """
+    activity.heartbeat()
+    run_dir = DATA_SHARED_BASE / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    sequence_number = index + 1
+    file_name = f"image_{sequence_number:03d}.png"
+    destination_path = run_dir / file_name
+
+    if image_hint.startswith("http://") or image_hint.startswith("https://"):
+        async with aiohttp.ClientSession() as session:
+            async with session.get(image_hint) as resp:
+                resp.raise_for_status()
+                content = await resp.read()
+    else:
+        client = get_comfyui_client()
+        hint_path = Path(image_hint)
+        if hint_path.exists():
+            content = hint_path.read_bytes()
+        else:
+            _, content = await asyncio.to_thread(client.fetch_output_bytes, image_hint)
+
+    destination_path.write_bytes(content)
+    
+    # Create a client instance with user JWT for authenticated upload
+    from videomerge.services.supabase_client import SupabaseStorageClient
+    authenticated_client = SupabaseStorageClient(user_jwt=user_access_token)
+    
+    await asyncio.to_thread(
+        authenticated_client.upload_file,
+        user_id,
+        run_id,
+        file_name,
+        content,
+        "image/png",
+    )
+    logger.info(f"[image] Persisted image {file_name} for run_id={run_id}")
+    return file_name
+
+
+@activity.defn
+async def upload_final_video_output(
+    run_id: str,
+    user_id: str,
+    final_video_path: str,
+    user_access_token: str,
+) -> str:
+    """Upload the final stitched video to Supabase storage."""
+    activity.heartbeat()
+    final_path = Path(final_video_path)
+    if not final_path.exists() or final_path.stat().st_size == 0:
+        raise RuntimeError(f"Final video file does not exist or is empty: {final_video_path}")
+    
+    from videomerge.services.supabase_client import SupabaseStorageClient
+
+    authenticated_client = SupabaseStorageClient(user_jwt=user_access_token)
+    object_path = await asyncio.to_thread(
+        authenticated_client.upload_local_file,
+        user_id,
+        run_id,
+        final_path,
+        "video/mp4",
+    )
+    logger.info("[video] Uploaded final video for run_id=%s to object_path=%s", run_id, object_path)
+    return object_path
+
+
+@activity.defn
+async def send_image_generation_webhook(
+    run_id: str,
+    user_id: str,
+    status: str,
+    image_files: List[str],
+    image_prompts: List[str],
+    workflow_id: str,
+    failure_reason: Optional[str] = None,
+    video_idea_id: Optional[str] = None,
+    platform: Optional[str] = None,
+) -> None:
+    """Send an image-generation completion or failure webhook.
+    
+    Args:
+        run_id: The run identifier.
+        user_id: The user identifier.
+        status: Completion status ("completed" or "failed").
+        image_files: List of generated image file paths.
+        image_prompts: List of image prompts used.
+        workflow_id: The Temporal workflow ID.
+        failure_reason: Optional failure reason for failed status.
+        video_idea_id: Optional Supabase video_ideas.id for V-CaaS correlation.
+        platform: Optional platform identifier for V-CaaS correlation.
+    """
+    activity.heartbeat()
+
+    if not workflow_id:
+        raise RuntimeError(f"workflow_id is required for image generation webhook run_id={run_id}")
+
+    payload: Dict[str, Any] = {
+        "run_id": run_id,
+        "workflow_id": workflow_id,
+        "status": status,
+        "image_files": image_files,
+        "image_prompts": image_prompts,
+        "output_dir": str(DATA_SHARED_BASE / run_id),
+    }
+
+    if video_idea_id is not None:
+        payload["video_idea_id"] = video_idea_id
+    if platform is not None:
+        payload["platform"] = platform
+
+    if not IMAGE_GENERATION_N8N_WEBHOOK_URL:
+        raise RuntimeError("IMAGE_GENERATION_N8N_WEBHOOK_URL environment variable is not set")
+
+    event_type = "job_completed" if status == "completed" else "job_failed"
+    logger.info(f"Sending '{event_type}' webhook for run_id={run_id}")
+    await webhook_manager.send_webhook(IMAGE_GENERATION_N8N_WEBHOOK_URL, payload, event_type)
+
+    duration_observed = False
+    async with _metrics_lock:
+        start_ts = _job_start_times.pop(run_id, None)
+        if run_id in _active_runs:
+            _active_runs.remove(run_id)
+        worker_active.set(len(_active_runs))
+        if start_ts is not None:
+            duration = max(0.0, time.time() - start_ts)
+            job_total_seconds.observe(duration)
+            duration_observed = True
+
+    if status == "completed":
+        jobs_completed_total.inc()
+    else:
+        reason_label = failure_reason or "unknown"
+        jobs_failed_total.labels(reason=reason_label).inc()
+
+    if not duration_observed:
+        logger.debug(f"[metrics] No start timestamp recorded for run_id={run_id}; skipping job_total_seconds")
 
 
 @activity.defn
@@ -521,8 +850,26 @@ async def poll_image_generation(prompt_id: str, run_id: str, index: int) -> str:
 
 
 @activity.defn
-async def start_video_generation(run_id: str, video_prompt: str, image_input: str, index: int, video_width: int, video_height: int) -> str:
-    """Submit a video generation job and return the provider job id."""
+async def start_video_generation(
+    run_id: str,
+    video_prompt: str,
+    image_input: str,
+    index: int,
+    video_width: int,
+    video_height: int,
+    length: Optional[int] = None,
+) -> str:
+    """Submit a video generation job and return the provider job id.
+
+    Args:
+        run_id: The run identifier.
+        video_prompt: The video generation prompt text.
+        image_input: Path to the input image or base64 data URL.
+        index: Scene index for file naming.
+        video_width: Video width in pixels.
+        video_height: Video height in pixels.
+        length: Optional number of frames for video generation (default 81).
+    """
 
     activity.heartbeat()
     logger.info(f"Submitting video generation for prompt index {index}")
@@ -536,6 +883,7 @@ async def start_video_generation(run_id: str, video_prompt: str, image_input: st
         run_id=run_id,
         video_width=video_width,
         video_height=video_height,
+        length=length,
     )
     return prompt_id
 
@@ -640,8 +988,26 @@ async def send_completion_webhook(
     image_files: Optional[List[str]] = None,
     voiceover_path: Optional[str] = None,
     failure_reason: Optional[str] = None,
+    uploaded_video_object_path: Optional[str] = None,
+    video_idea_id: Optional[str] = None,
+    platform: Optional[str] = None,
 ):
-    """Sends a webhook notification to N8N upon completion."""
+    """Sends a webhook notification to N8N upon completion.
+    
+    Args:
+        run_id: The run identifier.
+        status: Completion status ("completed" or "failed").
+        final_video_path: Path to the final video file.
+        workflow_id: Optional Temporal workflow ID.
+        run_dir: Optional output directory path.
+        video_files: Optional list of video file paths.
+        image_files: Optional list of image file paths.
+        voiceover_path: Optional voiceover file path.
+        failure_reason: Optional failure reason for failed status.
+        uploaded_video_object_path: Optional Supabase storage path.
+        video_idea_id: Optional Supabase video_ideas.id for V-CaaS correlation.
+        platform: Optional platform identifier for V-CaaS correlation.
+    """
     activity.heartbeat()
 
     payload: Dict[str, Any] = {
@@ -661,6 +1027,12 @@ async def send_completion_webhook(
         payload["image_files"] = image_files
     if voiceover_path:
         payload["voiceover_path"] = voiceover_path
+    if uploaded_video_object_path:
+        payload["uploaded_video_object_path"] = uploaded_video_object_path
+    if video_idea_id is not None:
+        payload["video_idea_id"] = video_idea_id
+    if platform is not None:
+        payload["platform"] = platform
 
     event_type = "job_completed" if status == "completed" else "job_failed"
     logger.info(f"Sending '{event_type}' webhook for run_id={run_id}")
@@ -997,6 +1369,31 @@ async def list_upscaled_videos(run_id: str) -> List[str]:
     return [str(p) for p in files]
 
 
+@activity.defn
+async def list_existing_video_clips(run_id: str) -> Dict[str, List[str]]:
+    """Scan the run directory for already-generated video clips, keyed by scene index.
+
+    Returns a mapping of ``"<index>"`` → ``[path, ...]`` for every
+    ``{index:03d}_*.mp4`` file found (e.g. ``"0"`` → ``["/data/shared/.../000_ComfyUI_00001_.mp4"]``).
+    Used by StoryBoardVideoGeneration and VideoGenerationWorkflow to skip
+    re-generating clips that already exist on disk, saving cost on retries.
+    """
+    activity.heartbeat()
+    run_dir = DATA_SHARED_BASE / run_id
+    existing: Dict[str, List[str]] = {}
+    if not run_dir.exists():
+        return existing
+    for mp4 in sorted(run_dir.glob("[0-9][0-9][0-9]_*.mp4"), key=lambda p: p.name):
+        prefix = mp4.stem.split("_")[0]
+        if prefix.isdigit():
+            existing.setdefault(prefix, []).append(str(mp4))
+    logger.info(
+        "[list_existing_video_clips] run_id=%s — found clips for %d scene(s): indices=%s",
+        run_id, len(existing), sorted(existing.keys()),
+    )
+    return existing
+
+
 def _strip_base64_data_url(value: str) -> str:
     """Strip a data URL prefix (e.g. data:video/mp4;base64,...) if present."""
 
@@ -1129,3 +1526,597 @@ async def send_upscale_completion_webhook(
     event_type = "job_completed" if status == "completed" else "job_failed"
     logger.info(f"Sending '{event_type}' webhook for run_id={run_id}")
     await webhook_manager.send_webhook(VIDEO_COMPLETED_N8N_WEBHOOK_URL, payload, event_type)
+
+
+@activity.defn
+async def handoff_to_compositor(payload: HandoffPayload) -> str:
+    """POST a HandoffPayload to tabario-video-compositor and return its compose_job_id.
+
+    Retry policy (configured in the calling workflow):
+    - Retryable: 5xx HTTP errors, network-level errors.
+    - Non-retryable: 4xx HTTP errors (bad request — retrying will not help).
+
+    Args:
+        payload: The :class:`HandoffPayload` describing the clips and metadata
+            to pass to the compositor.
+
+    Returns:
+        The ``compose_job_id`` string returned by the compositor.
+
+    Raises:
+        RuntimeError: If ``TABARIO_VIDEO_COMPOSITOR_URL`` is not configured.
+        NonRetryableError: If the compositor responds with a 4xx status code.
+        RuntimeError: On 5xx errors or unexpected response shapes (retryable).
+    """
+    activity.heartbeat()
+
+    if not TABARIO_VIDEO_COMPOSITOR_URL:
+        raise RuntimeError(
+            "TABARIO_VIDEO_COMPOSITOR_URL environment variable is not set; "
+            "cannot forward handoff payload to compositor."
+        )
+
+    url = f"{TABARIO_VIDEO_COMPOSITOR_URL.rstrip('/')}/compose/start"
+    body = payload.model_dump(mode="json")
+
+    logger.info(
+        "[handoff] POSTing HandoffPayload to compositor for run_id=%s workflow_id=%s url=%s",
+        payload.run_id,
+        payload.workflow_id,
+        url,
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(url, json=body)
+    except httpx.TimeoutException as exc:
+        raise RuntimeError(
+            f"[handoff] Request to compositor timed out for run_id={payload.run_id}"
+        ) from exc
+    except httpx.RequestError as exc:
+        raise RuntimeError(
+            f"[handoff] Network error contacting compositor for run_id={payload.run_id}: {exc}"
+        ) from exc
+
+    if 400 <= response.status_code < 500:
+        try:
+            error_detail = response.json()
+        except Exception:
+            error_detail = response.text
+        raise NonRetryableError(
+            f"[handoff] Compositor rejected payload with {response.status_code} for "
+            f"run_id={payload.run_id}: {error_detail}"
+        )
+
+    if not response.is_success:
+        try:
+            error_detail = response.json()
+        except Exception:
+            error_detail = response.text
+        raise RuntimeError(
+            f"[handoff] Compositor returned {response.status_code} for "
+            f"run_id={payload.run_id}: {error_detail}"
+        )
+
+    data = response.json()
+    compose_job_id = data.get("compose_job_id")
+    if not compose_job_id:
+        raise RuntimeError(
+            f"[handoff] Compositor response missing 'compose_job_id' for "
+            f"run_id={payload.run_id}: {data}"
+        )
+
+    logger.info(
+        "[handoff] Compositor accepted handoff for run_id=%s; compose_job_id=%s",
+        payload.run_id,
+        compose_job_id,
+    )
+    return compose_job_id
+
+
+@activity.defn
+async def generate_talking_head_video(
+    run_id: str,
+    scene_index: int,
+    portrait_image_url: str,
+    voiceover_path: str,
+    audio_start_seconds: float,
+    audio_duration_seconds: float,
+    prompt: str,
+) -> str:
+    """Generate a lipsync talking-head video for a single scene via echomimic-v3.
+
+    Args:
+        run_id: Run identifier; used to locate the shared working directory.
+        scene_index: Zero-based scene index, used for output file naming.
+        portrait_image_url: Public URL of the already-generated portrait image.
+        voiceover_path: Absolute path to the full voiceover audio (MP3 or WAV).
+        audio_start_seconds: Start offset within the voiceover for this scene.
+        audio_duration_seconds: Duration of this scene's audio segment.
+        prompt: echomimic-v3 motion prompt; empty string uses the default.
+
+    Returns:
+        Absolute path to the downloaded talking-head video clip.
+    """
+    from videomerge.services.audio_utils import convert_to_wav, cut_audio_segment
+    from videomerge.services.media_providers.fal_provider import FalProvider
+
+    _safe_heartbeat()
+    run_dir = DATA_SHARED_BASE / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    # Convert voiceover to WAV once per run (idempotent)
+    wav_path = run_dir / "voiceover.wav"
+    if not wav_path.exists():
+        logger.info("[talking_head] Converting voiceover to WAV for run_id=%s", run_id)
+        await asyncio.to_thread(convert_to_wav, voiceover_path, str(wav_path))
+    else:
+        logger.info("[talking_head] Using existing voiceover.wav for run_id=%s", run_id)
+
+    # Cut the scene's audio segment from the WAV
+    segment_path = run_dir / f"{scene_index:03d}_audio.wav"
+    logger.info(
+        "[talking_head] Cutting audio segment: scene=%d, start=%.3fs, duration=%.3fs",
+        scene_index, audio_start_seconds, audio_duration_seconds,
+    )
+    await asyncio.to_thread(
+        cut_audio_segment,
+        str(wav_path),
+        str(segment_path),
+        audio_start_seconds,
+        audio_duration_seconds,
+    )
+    _safe_heartbeat()
+
+    # Upload portrait image to fal CDN if we received a local path
+    fal_provider = FalProvider()
+    if portrait_image_url.startswith("/") or (len(portrait_image_url) > 1 and portrait_image_url[1] == ":"):
+        logger.info("[talking_head] Uploading portrait image for scene=%d: %s", scene_index, portrait_image_url)
+        portrait_image_url = await fal_provider.upload_file(portrait_image_url)
+
+    # Upload audio segment to fal CDN
+    logger.info("[talking_head] Uploading audio segment for scene=%d", scene_index)
+    audio_url = await fal_provider.upload_file(str(segment_path))
+    _safe_heartbeat()
+
+    # Submit and poll echomimic-v3
+    logger.info(
+        "[talking_head] Submitting echomimic-v3: scene=%d, image=%s, audio=%s",
+        scene_index, portrait_image_url, audio_url,
+    )
+    request_id = await fal_provider.submit_echomimic(
+        image_url=portrait_image_url,
+        audio_url=audio_url,
+        prompt=prompt,
+    )
+    _safe_heartbeat()
+
+    video_path = await _run_async_with_heartbeats(
+        fal_provider.poll_echomimic,
+        request_id,
+        run_dir,
+        heartbeat_interval_s=30.0,
+    )
+
+    logger.info("[talking_head] echomimic-v3 done for scene=%d: %s", scene_index, video_path)
+    return video_path
+
+
+@activity.defn
+async def poll_compose_status(
+    compose_job_id: str,
+    run_id: str,
+    poll_interval_seconds: float = 15.0,
+    timeout_seconds: float = 900.0,
+) -> str:
+    """Poll ``GET /compose/:id`` until the job is ``done`` or ``failed``.
+
+    Heartbeats on every poll cycle so Temporal knows the activity is alive.
+
+    Args:
+        compose_job_id: The compose job ID returned by ``handoff_to_compositor``.
+        run_id: The run ID, used only for structured log messages.
+        poll_interval_seconds: Seconds to wait between poll requests.
+        timeout_seconds: Maximum total seconds to wait before raising.
+
+    Returns:
+        The ``final_video_path`` from the compositor response (a container-absolute
+        path under ``/data/shared/{run_id}/``).
+
+    Raises:
+        RuntimeError: If ``TABARIO_VIDEO_COMPOSITOR_URL`` is not set or the job fails.
+        NonRetryableError: If the compositor reports ``status=failed``.
+        RuntimeError: If the poll timeout is exceeded.
+    """
+    if not TABARIO_VIDEO_COMPOSITOR_URL:
+        raise RuntimeError(
+            "TABARIO_VIDEO_COMPOSITOR_URL environment variable is not set; "
+            "cannot poll compose status."
+        )
+
+    url = f"{TABARIO_VIDEO_COMPOSITOR_URL.rstrip('/')}/compose/{compose_job_id}"
+    elapsed = 0.0
+
+    logger.info(
+        "[poll_compose] Starting poll for compose_job_id=%s run_id=%s url=%s",
+        compose_job_id,
+        run_id,
+        url,
+    )
+
+    while elapsed < timeout_seconds:
+        activity.heartbeat()
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.get(url)
+        except httpx.RequestError as exc:
+            logger.warning(
+                "[poll_compose] Network error polling compose_job_id=%s: %s — retrying",
+                compose_job_id,
+                exc,
+            )
+            await asyncio.sleep(poll_interval_seconds)
+            elapsed += poll_interval_seconds
+            continue
+
+        if not response.is_success:
+            logger.warning(
+                "[poll_compose] Unexpected %s from compositor for compose_job_id=%s — retrying",
+                response.status_code,
+                compose_job_id,
+            )
+            await asyncio.sleep(poll_interval_seconds)
+            elapsed += poll_interval_seconds
+            continue
+
+        data = response.json()
+        status = data.get("status")
+
+        logger.info(
+            "[poll_compose] compose_job_id=%s run_id=%s status=%s elapsed=%.0fs",
+            compose_job_id,
+            run_id,
+            status,
+            elapsed,
+        )
+
+        if status == "done":
+            final_video_path = data.get("final_video_path")
+            if not final_video_path:
+                raise RuntimeError(
+                    f"[poll_compose] Compositor reported done but final_video_path is missing "
+                    f"for compose_job_id={compose_job_id}"
+                )
+            logger.info(
+                "[poll_compose] compose_job_id=%s complete. final_video_path=%s",
+                compose_job_id,
+                final_video_path,
+            )
+            return final_video_path
+
+        if status == "failed":
+            error = data.get("error", "unknown error")
+            raise NonRetryableError(
+                f"[poll_compose] Compositor job failed for compose_job_id={compose_job_id} "
+                f"run_id={run_id}: {error}"
+            )
+
+        await asyncio.sleep(poll_interval_seconds)
+        elapsed += poll_interval_seconds
+
+    raise RuntimeError(
+        f"[poll_compose] Timed out after {timeout_seconds}s waiting for compose_job_id={compose_job_id} "
+        f"run_id={run_id} to complete"
+    )
+
+
+@activity.defn
+async def classify_scenes_activity(brief_json: str, platform: str) -> List[Dict[str, Any]]:
+    """Classify scenes using the scene classifier.
+    
+    Args:
+        brief_json: JSON-serialized Brief object
+        platform: Platform identifier (e.g., 'LinkedIn')
+    
+    Returns:
+        List of SceneClassification dicts
+    """
+    from videomerge.models import Brief
+    from videomerge.services.scene_classifier import classify_scenes
+    
+    _safe_heartbeat()
+    logger.info(f"[classify_scenes] Classifying scenes for platform={platform}")
+    
+    brief = Brief.model_validate_json(brief_json)
+    classifications = classify_scenes(brief, platform)
+    
+    # Convert to dicts for Temporal serialization
+    result = [cls.model_dump() for cls in classifications]
+    
+    logger.info(f"[classify_scenes] Classified {len(result)} scenes")
+    return result
+
+
+@activity.defn
+async def classify_scenes_from_script_activity(script_json: str, scenes_json: str) -> List[Dict[str, Any]]:
+    """Classify scenes using script and scene prompts from N8N.
+
+    This activity is used by the /orchestrate/start endpoint when SCENE_CLASSIFIER_ENABLED=true.
+    It takes the voiceover script and scene prompts (generated by N8N) and determines
+    which image generation model to use for each scene.
+
+    Args:
+        script_json: JSON-serialized voiceover script string
+        scenes_json: JSON-serialized list of scene dicts from N8N prompts webhook
+
+    Returns:
+        List of SceneClassification dicts
+    """
+    import json
+    from videomerge.services.scene_classifier import classify_scenes_from_script
+
+    _safe_heartbeat()
+    logger.info("[classify_scenes_from_script] Classifying scenes from script")
+
+    script = json.loads(script_json)
+    scenes = json.loads(scenes_json)
+
+    classifications = classify_scenes_from_script(script, scenes)
+
+    # Convert to dicts for Temporal serialization
+    result = [cls.model_dump() for cls in classifications]
+
+    logger.info(f"[classify_scenes_from_script] Classified {len(result)} scenes")
+    return result
+
+
+from videomerge.services.media_providers.registry import get_image_provider, get_video_provider
+
+@activity.defn
+async def start_image_generation_provider(
+    provider: str,
+    prompt_text: str,
+    model: str,
+    width: int,
+    height: int,
+    index: int,
+    **kwargs
+) -> str:
+    """Submit image generation job to specified provider.
+    
+    Args:
+        provider: Provider name ("fal" or "runpod")
+        prompt_text: Image generation prompt
+        model: Model identifier
+        width: Image width
+        height: Image height
+        index: Scene index
+        **kwargs: Provider-specific parameters
+    
+    Returns:
+        Job ID
+    """
+    _safe_heartbeat()
+    logger.info(f"[start_image_{provider}] Submitting for scene {index}, model={model}")
+    
+    provider_instance = get_image_provider(provider)
+    job_id = await provider_instance.submit_text_to_image(
+        prompt=prompt_text,
+        model=model,
+        width=width,
+        height=height,
+        **kwargs
+    )
+    
+    logger.info(f"[start_image_{provider}] Job submitted: {job_id}")
+    return job_id
+
+
+@activity.defn
+async def poll_image_generation_provider(
+    provider: str,
+    job_id: str,
+    run_id: str,
+    index: int,
+    timeout_s: int,
+    poll_interval_s: float,
+    model: str = ""
+) -> str:
+    """Poll image generation job and download outputs.
+    
+    Args:
+        provider: Provider name ("fal" or "runpod")
+        job_id: Job ID from start_image_generation_provider
+        run_id: Run identifier
+        index: Scene index
+        timeout_s: Timeout in seconds
+        poll_interval_s: Poll interval in seconds
+    
+    Returns:
+        Local file path to generated image
+    """
+    _safe_heartbeat()
+    logger.info(f"[poll_image_{provider}] Polling job {job_id} for scene {index}")
+    
+    provider_instance = get_image_provider(provider)
+    
+    # Poll for completion
+    if provider == "fal":
+        output_urls = await _run_async_with_heartbeats(
+            provider_instance.poll_image_generation,
+            job_id,
+            timeout_s,
+            poll_interval_s,
+            model,
+            heartbeat_interval_s=30.0
+        )
+    else:
+        output_urls = await _run_async_with_heartbeats(
+            provider_instance.poll_image_generation,
+            job_id,
+            timeout_s,
+            poll_interval_s,
+            heartbeat_interval_s=30.0
+        )
+    
+    if not output_urls:
+        raise RuntimeError(f"Image generation failed for scene {index}: No outputs")
+    
+    # Download outputs
+    run_dir = DATA_SHARED_BASE / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    
+    saved_files = await provider_instance.download_outputs(
+        output_urls=output_urls,
+        dest_dir=run_dir,
+        index=index
+    )
+    
+    if not saved_files:
+        raise RuntimeError(f"Failed to download image outputs for scene {index}")
+    
+    logger.info(f"[poll_image_{provider}] Saved to {saved_files[0]}")
+    return str(saved_files[0])
+
+
+@activity.defn
+async def start_video_generation_provider(
+    provider: str,
+    prompt_text: str,
+    image_input: str,
+    model: str,
+    width: int,
+    height: int,
+    index: int,
+    **kwargs
+) -> str:
+    """Submit video generation job to specified provider.
+    
+    Args:
+        provider: Provider name ("fal" or "runpod")
+        prompt_text: Video motion prompt
+        image_input: Input image path or data URL
+        model: Model identifier
+        width: Video width
+        height: Video height
+        index: Scene index
+        **kwargs: Provider-specific parameters
+    
+    Returns:
+        Job ID
+    """
+    _safe_heartbeat()
+    logger.info(f"[start_video_{provider}] Submitting for scene {index}, model={model}")
+    
+    provider_instance = get_video_provider(provider)
+    job_id = await provider_instance.submit_image_to_video(
+        prompt=prompt_text,
+        image_input=image_input,
+        model=model,
+        width=width,
+        height=height,
+        **kwargs
+    )
+    
+    logger.info(f"[start_video_{provider}] Job submitted: {job_id}")
+    return job_id
+
+
+@activity.defn
+async def poll_video_generation_provider(
+    provider: str,
+    job_id: str,
+    run_id: str,
+    index: int,
+    timeout_s: int,
+    poll_interval_s: float,
+    model: str = ""
+) -> List[str]:
+    """Poll video generation job and download outputs.
+
+    Args:
+        provider: Provider name ("fal" or "runpod")
+        job_id: Job ID from start_video_generation_provider
+        run_id: Run identifier
+        index: Scene index
+        timeout_s: Timeout in seconds
+        poll_interval_s: Poll interval in seconds
+        model: Model identifier (required for Fal to construct the correct status URL)
+
+    Returns:
+        List of local file paths to generated videos
+    """
+    _safe_heartbeat()
+    logger.info(f"[poll_video_{provider}] Polling job {job_id} for scene {index}")
+
+    provider_instance = get_video_provider(provider)
+
+    # Poll for completion
+    if provider == "fal":
+        output_urls = await _run_async_with_heartbeats(
+            provider_instance.poll_video_generation,
+            job_id,
+            timeout_s,
+            poll_interval_s,
+            model,
+            heartbeat_interval_s=30.0
+        )
+    else:
+        output_urls = await _run_async_with_heartbeats(
+            provider_instance.poll_video_generation,
+            job_id,
+            timeout_s,
+            poll_interval_s,
+            heartbeat_interval_s=30.0
+        )
+
+    if not output_urls:
+        raise RuntimeError(f"Video generation failed for scene {index}: No outputs")
+    
+    # Download outputs (if needed - Runpod already downloads during polling)
+    run_dir = DATA_SHARED_BASE / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    
+    if provider == "fal":
+        saved_files = await provider_instance.download_outputs(
+            output_urls=output_urls,
+            dest_dir=run_dir,
+            index=index
+        )
+    else:
+        # RunPod outputs are local file paths OR inline base64 data URLs.
+        # Inline base64 would exceed Temporal's 2 MB activity-return size limit,
+        # so decode and persist them to disk and return local paths instead.
+        saved_files = []
+        for i, url in enumerate(output_urls):
+            if url.startswith("data:"):
+                # Strip optional #filename= fragment before decoding
+                if "#filename=" in url:
+                    fragment_filename: str | None = url.split("#filename=", 1)[1]
+                    clean_url = url.split("#filename=", 1)[0]
+                else:
+                    fragment_filename = None
+                    clean_url = url
+                raw_b64 = _strip_base64_data_url(clean_url)
+                video_data = base64.b64decode(raw_b64)
+                # Always prefix with scene index so concurrent scenes writing the
+                # same ComfyUI output name (e.g. ComfyUI_00001_.mp4) don't
+                # overwrite each other on disk.
+                out_name = f"{index:03d}_{fragment_filename}" if fragment_filename else f"video_{index:03d}_{i}.mp4"
+                dest_path = run_dir / out_name
+                dest_path.write_bytes(video_data)
+                logger.info(
+                    "[poll_video_runpod] Saved inline base64 video (%d bytes) to %s",
+                    len(video_data),
+                    dest_path,
+                )
+                saved_files.append(dest_path)
+            else:
+                saved_files.append(Path(url))
+    
+    if not saved_files:
+        raise RuntimeError(f"Failed to download video outputs for scene {index}")
+    
+    logger.info(f"[poll_video_{provider}] Saved {len(saved_files)} files")
+    return [str(p) for p in saved_files]

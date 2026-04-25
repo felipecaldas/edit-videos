@@ -1,0 +1,87 @@
+{
+  "user_id": "user-123",
+  "script": "Stop wasting money on video production.",
+  "caption": "Why Most Marketing Videos Fail",
+  "brief": {
+    "title": "Why Most Marketing Videos Fail",
+    "hook": "Stop wasting money on video production.",
+    "narrative_structure": "problem-solution-CTA",
+    "music_sound_mood": "upbeat acoustic",
+    "visual_direction": {
+      "mood": "optimistic",
+      "color_feel": "warm pastels",
+      "shot_style": "clean studio",
+      "branding_elements": "wordmark"
+    },
+    "platform_briefs": [
+      {
+        "platform": "LinkedIn",
+        "hook": "Hook for LinkedIn audience",
+        "tone": "professional",
+        "aspect_ratio": "1:1",
+        "scenes": [
+          {
+            "scene_number": 1,
+            "spoken_line": "Most marketing videos get zero views.",
+            "caption_text": "Zero views",
+            "duration_seconds": 2.0,
+            "visual_description": "Dark office, empty chairs"
+          },
+          {
+            "scene_number": 2,
+            "spoken_line": "Not because the product is bad.",
+            "caption_text": "Not the product",
+            "duration_seconds": 2.0,
+            "visual_description": "Product on desk, nobody using it"
+          },
+          {
+            "scene_number": 3,
+            "spoken_line": "But because the story is weak.",
+            "caption_text": "Weak story",
+            "duration_seconds": 2.0,
+            "visual_description": "Person writing on whiteboard, frustrated"
+          },
+          {
+            "scene_number": 4,
+            "spoken_line": "Here's the framework that changed everything.",
+            "caption_text": "The framework",
+            "duration_seconds": 2.0,
+            "visual_description": "Light bulb moment, person smiling"
+          },
+          {
+            "scene_number": 5,
+            "spoken_line": "First, know your audience's pain point.",
+            "caption_text": "Pain point",
+            "duration_seconds": 2.0,
+            "visual_description": "Person struggling with problem"
+          },
+          {
+            "scene_number": 6,
+            "spoken_line": "Second, make it visual.",
+            "caption_text": "Make it visual",
+            "duration_seconds": 2.0,
+            "visual_description": "Colorful charts and graphics"
+          },
+          {
+            "scene_number": 7,
+            "spoken_line": "Third, end with a clear CTA.",
+            "caption_text": "Clear CTA",
+            "duration_seconds": 1.5,
+            "visual_description": "Call to action on screen"
+          },
+          {
+            "scene_number": 8,
+            "spoken_line": "Try this in your next video.",
+            "caption_text": "Try it now",
+            "duration_seconds": 1.5,
+            "visual_description": "Person ready to record"
+          }
+        ],
+        "call_to_action": "Book a demo",
+        "platform_notes": "LinkedIn professional context"
+      }
+    ]
+  },
+  "platform": "LinkedIn",
+  "video_idea_id": "fe1004f1-9a5d-4b9f-8e0a-5c7f9b3e6c11"
+}

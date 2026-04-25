@@ -28,12 +28,13 @@ class TestComfyUIClientFactory:
 
     def test_create_runpod_client(self):
         """Test creating a RunPod ComfyUI client."""
-        with patch('videomerge.services.comfyui_client.RUNPOD_API_KEY', 'test-key'):
-            client = ComfyUIClientFactory.create_client(
-                "https://api.runpod.ai",
-                "runpod",
-                instance_id="test-instance",
-            )
+        with patch('videomerge.config.RUNPOD_API_KEY', 'test-key'):
+            with patch('videomerge.config.COMFY_ORG_API_KEY', 'test-comfy-org-key'):
+                client = ComfyUIClientFactory.create_client(
+                    "https://api.runpod.ai",
+                    "runpod",
+                    instance_id="test-instance",
+                )
         assert isinstance(client, RunPodComfyUIClient)
         assert client.base_url == "https://api.runpod.ai"
 
@@ -51,8 +52,8 @@ class TestLocalComfyUIClient:
         self.client = LocalComfyUIClient("http://192.168.68.51:8188")
         self.template_path = Path("test_workflow.json")
 
-    @patch('videomerge.services.comfyui_client.Path.open')
-    @patch('videomerge.services.comfyui_client.requests.request')
+    @patch('videomerge.services.comfyui.base.Path.open')
+    @patch('videomerge.services.comfyui.base.requests.request')
     def test_submit_text_to_image_success(self, mock_request, mock_open):
         """Test successful text-to-image submission."""
         # Mock template file
@@ -71,18 +72,18 @@ class TestLocalComfyUIClient:
         assert result == "test-prompt-id"
         mock_request.assert_called_once()
 
-    @patch('videomerge.services.comfyui_client.Path.open')
+    @patch('videomerge.services.comfyui.base.Path.open')
     def test_submit_text_to_image_missing_placeholder(self, mock_open):
         """Test text-to-image submission with missing placeholder."""
         mock_file = MagicMock()
         mock_file.read.return_value = '{"prompt": {"text": "fixed text"}}'
         mock_open.return_value.__enter__.return_value = mock_file
 
-        with pytest.raises(ValueError, match="missing the '{{ POSITIVE_PROMPT }}' placeholder"):
+        with pytest.raises(ValueError, match="missing the '{ POSITIVE_PROMPT }' placeholder"):
             self.client.submit_text_to_image("test prompt", template_path=self.template_path)
 
-    @patch('videomerge.services.comfyui_client.Path.open')
-    @patch('videomerge.services.comfyui_client.requests.request')
+    @patch('videomerge.services.comfyui.base.Path.open')
+    @patch('videomerge.services.comfyui.base.requests.request')
     def test_submit_image_to_video_success(self, mock_request, mock_open):
         """Test successful image-to-video submission."""
         # Mock template file
@@ -105,7 +106,7 @@ class TestLocalComfyUIClient:
         assert result == "test-video-id"
         mock_request.assert_called_once()
 
-    @patch('videomerge.services.comfyui_client.requests.request')
+    @patch('videomerge.services.comfyui.base.requests.request')
     def test_poll_until_complete_success(self, mock_request):
         """Test successful polling until completion."""
         # Mock queue response
@@ -134,7 +135,7 @@ class TestLocalComfyUIClient:
         assert result == ["test.png"]
         assert mock_request.call_count == 2
 
-    @patch('videomerge.services.comfyui_client.requests.request')
+    @patch('videomerge.services.comfyui.base.requests.request')
     def test_download_outputs_success(self, mock_request):
         """Test successful output download."""
         mock_response = Mock()
@@ -152,7 +153,7 @@ class TestLocalComfyUIClient:
             assert len(result) == 1
             assert result[0].name == "test.png"
 
-    @patch('videomerge.services.comfyui_client.requests.request')
+    @patch('videomerge.services.comfyui.base.requests.request')
     def test_fetch_output_bytes_success(self, mock_request):
         """Test successful output bytes fetch."""
         mock_response = Mock()
@@ -165,7 +166,7 @@ class TestLocalComfyUIClient:
         assert filename == "test.png"
         assert content == b"test image data"
 
-    @patch('videomerge.services.comfyui_client.requests.request')
+    @patch('videomerge.services.comfyui.base.requests.request')
     def test_upload_image_to_input_success(self, mock_request):
         """Test successful image upload."""
         mock_response = Mock()
@@ -183,9 +184,9 @@ class TestRunPodComfyUIClient:
 
     def setup_method(self):
         """Set up test fixtures."""
-        self._runpod_key_patcher = patch('videomerge.services.comfyui_client.RUNPOD_API_KEY', 'test-key')
+        self._runpod_key_patcher = patch('videomerge.config.RUNPOD_API_KEY', 'test-key')
         self._runpod_key_patcher.start()
-        self._comfy_org_key_patcher = patch('videomerge.services.comfyui_client.COMFY_ORG_API_KEY', 'test-comfy-org-key')
+        self._comfy_org_key_patcher = patch('videomerge.config.COMFY_ORG_API_KEY', 'test-comfy-org-key')
         self._comfy_org_key_patcher.start()
         self.client = RunPodComfyUIClient("https://api.runpod.ai", "test-instance")
         self.template_path = Path("test_workflow.json")
@@ -194,7 +195,7 @@ class TestRunPodComfyUIClient:
         self._runpod_key_patcher.stop()
         self._comfy_org_key_patcher.stop()
 
-    @patch('videomerge.services.comfyui_client.requests.request')
+    @patch('videomerge.services.comfyui.runpod_client.requests.request')
     def test_submit_text_to_image_success(self, mock_request):
         """Test successful text-to-image submission to RunPod."""
         # Mock HTTP response
@@ -213,7 +214,7 @@ class TestRunPodComfyUIClient:
         assert result == "runpod-job-id"
         mock_request.assert_called_once()
 
-    @patch('videomerge.services.comfyui_client.requests.request')
+    @patch('videomerge.services.comfyui.runpod_client.requests.request')
     def test_submit_text_to_image_validates_payload(self, mock_request):
         """Test RunPod T2I payload structure matches OpenAPI spec."""
         mock_response = Mock()
@@ -247,7 +248,7 @@ class TestRunPodComfyUIClient:
         with pytest.raises(ValueError, match="comfyui_workflow_name is required"):
             self.client.submit_text_to_image("test prompt", image_width=720, image_height=1024)
 
-    @patch('videomerge.services.comfyui_client.requests.request')
+    @patch('videomerge.services.comfyui.base.requests.request')
     def test_poll_until_complete_success(self, mock_request):
         """Test successful RunPod polling until completion."""
         # Mock status response with completed job
@@ -266,7 +267,7 @@ class TestRunPodComfyUIClient:
         assert result == ["test.png"]
         mock_request.assert_called_once()
 
-    @patch('videomerge.services.comfyui_client.requests.request')
+    @patch('videomerge.services.comfyui.runpod_client.requests.request')
     def test_poll_until_complete_failed(self, mock_request):
         """Test RunPod polling with failed job."""
         mock_response = Mock()
@@ -281,8 +282,8 @@ class TestRunPodComfyUIClient:
         with pytest.raises(NonRetryableError, match="RunPod job failed: Processing failed"):
             self.client.poll_until_complete("runpod-job-id", timeout_s=60, poll_interval_s=1)
 
-    @patch('videomerge.services.comfyui_client.time.sleep')
-    @patch('videomerge.services.comfyui_client.requests.request')
+    @patch('videomerge.services.comfyui.runpod_client.time.sleep')
+    @patch('videomerge.services.comfyui.runpod_client.requests.request')
     def test_poll_until_complete_failed_does_not_retry(self, mock_request, mock_sleep):
         """RunPod FAILED should raise immediately (not be swallowed by generic retry loop)."""
         mock_response = Mock()
@@ -299,8 +300,8 @@ class TestRunPodComfyUIClient:
 
         mock_sleep.assert_not_called()
 
-    @patch('videomerge.services.comfyui_client.DEFAULT_I2V_WORKFLOW_NAME', 'video_wan2_2_14B_i2v')
-    @patch('videomerge.services.comfyui_client.requests.request')
+    @patch('videomerge.config.DEFAULT_I2V_WORKFLOW_NAME', 'video_wan2_2_14B_i2v')
+    @patch('videomerge.services.comfyui.runpod_client.requests.request')
     def test_submit_image_to_video_validates_payload(self, mock_request):
         """Test RunPod I2V payload structure matches OpenAPI spec."""
         mock_response = Mock()
@@ -312,6 +313,8 @@ class TestRunPodComfyUIClient:
         result = self.client.submit_image_to_video(
             "video prompt",
             base64_image,
+            video_width=480,
+            video_height=640,
             template_path=self.template_path,
         )
 
@@ -332,19 +335,16 @@ class TestRunPodComfyUIClient:
 class TestRunPodOutputFilenames:
     """Tests for RunPodComfyUIClient output filename generation."""
 
-    def setup_method(self):
-        """Create a bare RunPodComfyUIClient instance without running __init__."""
-        # We only need the helper methods, which don't depend on instance attributes.
-        self.client = object.__new__(RunPodComfyUIClient)
-
     def test_video_outputs_use_uuid_based_filenames(self):
         """Video outputs should always get UUID-based filenames to avoid collisions."""
-        name1 = self.client._output_filename_for_index(
+        from videomerge.services.comfyui.utils import output_filename_for_index
+
+        name1 = output_filename_for_index(
             media_type="video/mp4",
             provided="ComfyUI_00002_.mp4",
             index=0,
         )
-        name2 = self.client._output_filename_for_index(
+        name2 = output_filename_for_index(
             media_type="video/mp4",
             provided="ComfyUI_00002_.mp4",
             index=0,
@@ -361,7 +361,9 @@ class TestRunPodOutputFilenames:
 
     def test_non_video_outputs_preserve_sanitized_name(self):
         """Non-video outputs (e.g. images) should preserve sanitized provided names."""
-        name = self.client._output_filename_for_index(
+        from videomerge.services.comfyui.utils import output_filename_for_index
+
+        name = output_filename_for_index(
             media_type="image/png",
             provided="my image.png",
             index=3,
@@ -376,11 +378,12 @@ class TestRunPodOutputFilenames:
 class TestGlobalClient:
     """Test the global client functions."""
 
-    @patch('videomerge.services.comfyui_client.ComfyUIClientFactory.create_client')
-    @patch('videomerge.services.comfyui_client.COMFYUI_URL', 'http://192.168.68.51:8188')
-    @patch('videomerge.services.comfyui_client.RUN_ENV', 'local')
+    @patch('videomerge.services.comfyui.factory.ComfyUIClientFactory.create_client')
+    @patch('videomerge.config.COMFYUI_URL', 'http://192.168.68.51:8188')
+    @patch('videomerge.config.RUN_ENV', 'local')
     def test_get_comfyui_client_initialization(self, mock_create_client):
         """Test that get_comfyui_client initializes the client on first call."""
+        from videomerge.services.comfyui import ClientType
         mock_client = Mock()
         mock_create_client.return_value = mock_client
 
@@ -388,12 +391,12 @@ class TestGlobalClient:
         reset_comfyui_client()
 
         # First call should create the client
-        result = get_comfyui_client()
+        result = get_comfyui_client(ClientType.IMAGE)
         assert result is mock_client
-        mock_create_client.assert_called_once_with('http://192.168.68.51:8188', 'local')
+        mock_create_client.assert_called_once_with('http://192.168.68.51:8188', 'local', client_type=ClientType.IMAGE)
 
         # Second call should return the same instance
-        result2 = get_comfyui_client()
+        result2 = get_comfyui_client(ClientType.IMAGE)
         assert result2 is mock_client
         assert mock_create_client.call_count == 1  # Should not be called again
 
@@ -428,7 +431,7 @@ class TestComfyUIClientBase:
 
         self.client = TestClient("http://192.168.68.51:8188")
 
-    @patch('videomerge.services.comfyui_client.Path.open')
+    @patch('videomerge.services.comfyui.base.Path.open')
     def test_load_workflow_template(self, mock_open):
         """Test loading workflow template."""
         mock_file = MagicMock()

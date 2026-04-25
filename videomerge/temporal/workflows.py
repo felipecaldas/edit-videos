@@ -24,26 +24,56 @@ def _root_cause_message(exc: BaseException) -> str:
             msg = cause_msg
     return msg
 
+
+def _is_content_policy_violation(exc: BaseException) -> bool:
+    """Return True if the exception chain contains a Fal content-policy rejection."""
+    msg = _root_cause_message(exc).lower()
+    return any(kw in msg for kw in (
+        "content_policy_violation",
+        "likenesses of real people",
+        "partner_validation_failed",
+        "private information that cannot be processed",
+    ))
+
+
 from videomerge.config import (
     ACTIVITY_SHORT_TIMEOUT_MINUTES,
     DATA_SHARED_BASE,
     DEFAULT_ACTIVITY_TIMEOUT_MINUTES,
     ENABLE_VOICEOVER_GEN,
+    DEFAULT_I2V_WORKFLOW_NAME,
+    FAL_IMAGE_DEFAULT,
+    FAL_VIDEO_MODEL,
+    VIDEO_PROVIDER,
     GENERATE_SCENES_TIMEOUT_MINUTES,
     IMAGE_HEIGHT,
+    IMAGE_JOB_TIMEOUT_SECONDS,
+    IMAGE_POLL_INTERVAL_SECONDS,
     IMAGE_STYLE_TO_WORKFLOW_MAPPING,
     IMAGE_WIDTH,
     IMAGE_WORKFLOWS,
+    SCENE_CLASSIFIER_ENABLED,
     SETUP_RUN_DIRECTORY_TIMEOUT_SECONDS,
     STITCH_TIMEOUT_MINUTES,
     SUBTITLES_TIMEOUT_MINUTES,
     TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES,
     TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES,
     TEMPORAL_UPSCALE_GENERATION_TIMEOUT_MINUTES,
+    VIDEO_JOB_TIMEOUT_SECONDS,
+    VIDEO_POLL_INTERVAL_SECONDS,
     WORKFLOWS_BASE_PATH,
 )
-from videomerge.utils.video_dimensions import calculate_video_dimensions
-from videomerge.models import OrchestrateStartRequest, PromptItem, UpscaleStartRequest, UpscaleChildRequest, UpscaleStitchRequest
+from videomerge.utils.video_dimensions import calculate_image_dimensions, calculate_video_dimensions
+from videomerge.models import (
+    HandoffPayload,
+    OrchestrateStartRequest,
+    PromptItem,
+    UpscaleStartRequest,
+    UpscaleChildRequest,
+    UpscaleStitchRequest,
+    ImageGenerationStartRequest,
+    StoryboardVideoGenerationRequest,
+)
 
 # Import all activities from the activities module
 with workflow.unsafe.imports_passed_through():
@@ -51,9 +81,14 @@ with workflow.unsafe.imports_passed_through():
         setup_run_directory,
         generate_voiceover,
         generate_scene_prompts,
+        generate_image_scene_prompts,
+        load_storyboard_scene_inputs,
         generate_image,
+        persist_image_output,
+        upload_final_video_output,
         start_image_generation,
         poll_image_generation,
+        send_image_generation_webhook,
         upload_image_for_video_generation,
         generate_video_from_image,
         start_video_generation,
@@ -61,14 +96,29 @@ with workflow.unsafe.imports_passed_through():
         stitch_videos,
         burn_subtitles_into_video,
         send_completion_webhook,
+        handoff_to_compositor,
+        poll_compose_status,
         download_video,
+        classify_scenes_activity,
+        classify_scenes_from_script_activity,
+        start_image_generation_provider,
+        poll_image_generation_provider,
+        start_video_generation_provider,
+        poll_video_generation_provider,
         start_video_upscaling,
         poll_upscale_status,
         save_upscaled_video,
         list_run_videos_for_upscale,
         list_upscaled_videos,
+        list_existing_video_clips,
         encode_file_to_base64,
         send_upscale_completion_webhook,
+        persist_scene_prompts,
+        generate_talking_head_video,
+    )
+    from videomerge.services.brand_prompt import (
+        build_prompt_items,
+        resolve_platform_brief,
     )
 
 
@@ -87,6 +137,10 @@ class ProcessSceneWorkflow:
         video_height: int,
         comfyui_workflow_name: str | None = None,
         image_style: str | None = None,
+        scene_classification: dict | None = None,
+        audio_start_seconds: float | None = None,
+        audio_duration_seconds: float | None = None,
+        voiceover_path: str | None = None,
     ) -> list[str]:
         """Workflow to process a single scene (image -> video)."""
         # Log parent workflow info for correlation
@@ -108,35 +162,76 @@ class ProcessSceneWorkflow:
             "retry_policy": scene_retry_policy,
         }
 
+        _cls = scene_classification or {}
+        _scene_type = _cls.get("scene_type", "concept_visual")
+        _skip_image = _cls.get("skip_image_generation", False)
+        # Use classifier-provided override prompt when present (e.g. screen-recording scenes
+        # reclassified as concept_visual need a rewritten prompt to avoid hallucinated UI).
+        _effective_image_prompt = _cls.get("image_prompt_override") or prompt.image_prompt
+
         try:
             # 1. Generate image
             image_hint = ""
-            if prompt.image_prompt:
+            if _effective_image_prompt and not _skip_image:
                 try:
-                    image_job_id = await workflow.execute_activity(
-                        start_image_generation,
-                        args=[
-                            run_id,
-                            prompt.image_prompt,
-                            workflow_path,
-                            index,
-                            image_width,
-                            image_height,
-                            comfyui_workflow_name,
-                            image_style,
-                        ],
-                        start_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
-                        retry_policy=scene_retry_policy,
-                    )
+                    # TEMP: force all image generation through Fal for testing.
+                    # Revert by restoring the two lines below to their original form:
+                    #   use_fal_image = scene_classification and scene_classification.get("image_provider") == "fal"
+                    #   image_model = scene_classification.get("image_model") if scene_classification else None
+                    use_fal_image = True
+                    _raw_model = _cls.get("image_model") if _cls else None
+                    image_model = _raw_model if (_raw_model and not _raw_model.startswith("z-image-")) else FAL_IMAGE_DEFAULT
 
-                    image_hint = await workflow.execute_activity(
-                        poll_image_generation,
-                        args=[image_job_id, run_id, index],
-                        schedule_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
-                        start_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
-                        heartbeat_timeout=timedelta(minutes=2),
-                        retry_policy=scene_retry_policy,
-                    )
+                    if use_fal_image and image_model:
+                        workflow.logger.info(f"[ProcessSceneWorkflow] Using Fal for image generation, model={image_model}")
+                        image_job_id = await workflow.execute_activity(
+                            start_image_generation_provider,
+                            args=[
+                                "fal",
+                                _effective_image_prompt,
+                                image_model,
+                                image_width,
+                                image_height,
+                                index,
+                            ],
+                            start_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
+                            retry_policy=scene_retry_policy,
+                        )
+
+                        image_hint = await workflow.execute_activity(
+                            poll_image_generation_provider,
+                            args=["fal", image_job_id, run_id, index, IMAGE_JOB_TIMEOUT_SECONDS, IMAGE_POLL_INTERVAL_SECONDS, image_model],
+                            schedule_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
+                            start_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
+                            heartbeat_timeout=timedelta(minutes=2),
+                            retry_policy=scene_retry_policy,
+                        )
+                    else:
+                        # Fall back to ComfyUI
+                        image_job_id = await workflow.execute_activity(
+                            start_image_generation,
+                            args=[
+                                run_id,
+                                _effective_image_prompt,
+                                workflow_path,
+                                index,
+                                image_width,
+                                image_height,
+                                comfyui_workflow_name,
+                                image_style,
+                            ],
+                            start_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
+                            retry_policy=scene_retry_policy,
+                        )
+
+                        image_hint = await workflow.execute_activity(
+                            poll_image_generation,
+                            args=[image_job_id, run_id, index],
+                            schedule_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
+                            start_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
+                            heartbeat_timeout=timedelta(minutes=2),
+                            retry_policy=scene_retry_policy,
+                        )
                 except Exception as e:
                     detail = _root_cause_message(e)
                     workflow.logger.error(f"Image generation failed for scene {index}: {detail}")
@@ -145,9 +240,51 @@ class ProcessSceneWorkflow:
                         non_retryable=True,
                     )
 
+            # brand_card scenes have no image and no video — Remotion handles them entirely
+            if _scene_type == "brand_card":
+                workflow.logger.info(f"[ProcessSceneWorkflow] Scene {index} is brand_card — skipping generation")
+                return []
+
             if not image_hint:
                 workflow.logger.warning(f"Skipping scene {index} as no image was generated.")
                 return []
+
+            # 2a. Talking-head branch: use echomimic-v3 instead of Wan2.2
+            if (
+                _scene_type == "talking_head"
+                and audio_start_seconds is not None
+                and audio_duration_seconds is not None
+                and voiceover_path
+            ):
+                workflow.logger.info(
+                    "[ProcessSceneWorkflow] Scene %d is talking_head — routing to echomimic-v3",
+                    index,
+                )
+                try:
+                    talking_head_path = await workflow.execute_activity(
+                        generate_talking_head_video,
+                        args=[
+                            run_id,
+                            index,
+                            image_hint,
+                            voiceover_path,
+                            audio_start_seconds,
+                            audio_duration_seconds,
+                            "",  # use echomimic default prompt
+                        ],
+                        start_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
+                        heartbeat_timeout=timedelta(minutes=2),
+                        retry_policy=scene_retry_policy,
+                    )
+                except Exception as e:
+                    detail = _root_cause_message(e)
+                    workflow.logger.error(f"Talking-head generation failed for scene {index}: {detail}")
+                    raise ApplicationError(
+                        f"Scene {index} talking-head generation failed: {detail}",
+                        non_retryable=True,
+                    )
+                workflow.logger.info(f"Scene {index} (talking_head) completed: {talking_head_path}")
+                return [talking_head_path]
 
             # 2. Upload image for video generation
             try:
@@ -166,21 +303,85 @@ class ProcessSceneWorkflow:
             video_paths = []
             if prompt.video_prompt:
                 try:
-                    video_job_id = await workflow.execute_activity(
-                        start_video_generation,
-                        args=[run_id, prompt.video_prompt, image_input, index, video_width, video_height],
-                        start_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
-                        retry_policy=activity_defaults["retry_policy"],
-                    )
-
-                    video_paths = await workflow.execute_activity(
-                        poll_video_generation,
-                        args=[video_job_id, run_id, index],
-                        schedule_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
-                        start_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
-                        heartbeat_timeout=timedelta(minutes=2),
-                        retry_policy=activity_defaults["retry_policy"],
-                    )
+                    if VIDEO_PROVIDER == "runpod":
+                        workflow.logger.info(f"[ProcessSceneWorkflow] VIDEO_PROVIDER=runpod, using RunPod Wan2.2 directly for scene {index}")
+                        video_job_id = await workflow.execute_activity(
+                            start_video_generation_provider,
+                            args=[
+                                "runpod",
+                                prompt.video_prompt,
+                                image_input,
+                                DEFAULT_I2V_WORKFLOW_NAME,
+                                video_width,
+                                video_height,
+                                index,
+                            ],
+                            start_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
+                            retry_policy=activity_defaults["retry_policy"],
+                        )
+                        video_paths = await workflow.execute_activity(
+                            poll_video_generation_provider,
+                            args=["runpod", video_job_id, run_id, index, VIDEO_JOB_TIMEOUT_SECONDS, VIDEO_POLL_INTERVAL_SECONDS],
+                            schedule_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
+                            start_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
+                            heartbeat_timeout=timedelta(minutes=2),
+                            retry_policy=activity_defaults["retry_policy"],
+                        )
+                    else:
+                        # Fal with automatic RunPod fallback on content-policy rejection
+                        workflow.logger.info(f"[ProcessSceneWorkflow] VIDEO_PROVIDER=fal, using Fal for scene {index}")
+                        try:
+                            video_job_id = await workflow.execute_activity(
+                                start_video_generation_provider,
+                                args=[
+                                    "fal",
+                                    prompt.video_prompt,
+                                    image_input,
+                                    FAL_VIDEO_MODEL,
+                                    video_width,
+                                    video_height,
+                                    index,
+                                ],
+                                start_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
+                                retry_policy=activity_defaults["retry_policy"],
+                            )
+                            video_paths = await workflow.execute_activity(
+                                poll_video_generation_provider,
+                                args=["fal", video_job_id, run_id, index, VIDEO_JOB_TIMEOUT_SECONDS, VIDEO_POLL_INTERVAL_SECONDS, FAL_VIDEO_MODEL],
+                                schedule_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
+                                start_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
+                                heartbeat_timeout=timedelta(minutes=2),
+                                retry_policy=activity_defaults["retry_policy"],
+                            )
+                        except Exception as seedance_err:
+                            if not _is_content_policy_violation(seedance_err):
+                                raise
+                            workflow.logger.warning(
+                                f"[ProcessSceneWorkflow] Fal content-policy rejection for scene {index}, "
+                                f"falling back to RunPod Wan2.2"
+                            )
+                            video_job_id = await workflow.execute_activity(
+                                start_video_generation_provider,
+                                args=[
+                                    "runpod",
+                                    prompt.video_prompt,
+                                    image_input,
+                                    DEFAULT_I2V_WORKFLOW_NAME,
+                                    video_width,
+                                    video_height,
+                                    index,
+                                ],
+                                start_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
+                                retry_policy=activity_defaults["retry_policy"],
+                            )
+                            video_paths = await workflow.execute_activity(
+                                poll_video_generation_provider,
+                                args=["runpod", video_job_id, run_id, index, VIDEO_JOB_TIMEOUT_SECONDS, VIDEO_POLL_INTERVAL_SECONDS],
+                                schedule_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
+                                start_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
+                                heartbeat_timeout=timedelta(minutes=2),
+                                retry_policy=activity_defaults["retry_policy"],
+                            )
                 except Exception as e:
                     detail = _root_cause_message(e)
                     workflow.logger.error(f"Video generation failed for scene {index}: {detail}")
@@ -268,14 +469,40 @@ class VideoGenerationWorkflow:
                 retry_policy=timeout_retry_policy,
             )
 
-            image_width = int(req.image_width) if req.image_width is not None else int(IMAGE_WIDTH)
-            image_height = int(req.image_height) if req.image_height is not None else int(IMAGE_HEIGHT)
-            
+            # 3b. Classify scenes for provider selection (when SCENE_CLASSIFIER_ENABLED)
+            scene_classifications = []
+            if SCENE_CLASSIFIER_ENABLED:
+                import json
+                workflow.logger.info("[VideoGenerationWorkflow] Classifying scenes from script")
+                scene_classifications = await workflow.execute_activity(
+                    classify_scenes_from_script_activity,
+                    args=[json.dumps(req.script), json.dumps(scene_prompts)],
+                    start_to_close_timeout=timedelta(minutes=2),
+                    retry_policy=RetryPolicy(maximum_attempts=2),
+                )
+                workflow.logger.info(f"[VideoGenerationWorkflow] Classified {len(scene_classifications)} scenes")
+
+            # Image dimensions are always derived from aspect ratio, capped at 720p.
+            # req.image_width/image_height are intentionally ignored to enforce the cap.
+            image_width, image_height = calculate_image_dimensions(req.video_format, req.target_resolution)
+
             # Calculate video dimensions from format and resolution
             video_width, video_height = calculate_video_dimensions(req.video_format, req.target_resolution)
 
-            # 4. Process each scene as a child workflow
-            scene_processing_tasks = []
+            # 4. Process each scene as a child workflow, skipping any whose clip
+            #    already exists on disk (so retries don't re-pay for completed scenes).
+            existing_clips = await workflow.execute_activity(
+                list_existing_video_clips,
+                args=[req.run_id],
+                start_to_close_timeout=timedelta(seconds=SETUP_RUN_DIRECTORY_TIMEOUT_SECONDS),
+                retry_policy=RetryPolicy(maximum_attempts=3),
+            )
+            if existing_clips:
+                workflow.logger.info(
+                    "[VideoGenerationWorkflow] Found existing clips for %d scene(s) — those will be skipped",
+                    len(existing_clips),
+                )
+
             workflow_filename = IMAGE_WORKFLOWS.get(image_style, IMAGE_WORKFLOWS["default"])
             workflow_path = f"{WORKFLOWS_BASE_PATH}/{workflow_filename}"
 
@@ -288,8 +515,30 @@ class VideoGenerationWorkflow:
             # Get parent workflow info for child correlation
             parent_workflow_id = workflow.info().workflow_id
             parent_run_id = workflow.info().run_id
-            
+
+            # Compute cumulative audio offsets per scene (for talking_head routing).
+            # When the brief carries per-scene duration_seconds, use those directly.
+            # Otherwise assume equal distribution of the voiceover across scenes.
+            scene_audio_starts: list[float] = []
+            scene_audio_durations: list[float] = []
+            if req.brief and req.platform:
+                _pb = next((pb for pb in req.brief.platform_briefs if pb.platform.lower() == req.platform.lower()), None)
+                if _pb and _pb.scenes:
+                    _cumulative = 0.0
+                    for _scene in _pb.scenes:
+                        scene_audio_starts.append(_cumulative)
+                        scene_audio_durations.append(float(_scene.duration_seconds))
+                        _cumulative += float(_scene.duration_seconds)
+
+            # List of (scene_index, awaitable) so we can map results back to indices.
+            scene_processing_tasks: list[tuple[int, Any]] = []
             for i, prompt in enumerate(scene_prompts):
+                if str(i) in existing_clips:
+                    workflow.logger.info(
+                        "[VideoGenerationWorkflow] Scene %d: clip already on disk — skipping child workflow", i
+                    )
+                    continue
+
                 # Support both dict-based prompts and PromptItem-like objects
                 if isinstance(prompt, dict):
                     image_prompt = prompt.get("image_prompt")
@@ -299,9 +548,14 @@ class VideoGenerationWorkflow:
                     video_prompt = getattr(prompt, "video_prompt", None)
                 # Each scene gets its own child workflow for better isolation and resumability
                 child_id = f"{req.run_id}-scene-{i}"
-                
-                # Add memo and search attributes for parent-child correlation
-                # Note: Parent workflow also has TabarioRunId set (in orchestrate.py)
+
+                # Get classification for this scene (if available)
+                scene_classification = scene_classifications[i] if scene_classifications and i < len(scene_classifications) else None
+
+                # Audio offsets for talking-head routing (None when not available)
+                _audio_start = scene_audio_starts[i] if i < len(scene_audio_starts) else None
+                _audio_dur = scene_audio_durations[i] if i < len(scene_audio_durations) else None
+
                 task = workflow.execute_child_workflow(
                     ProcessSceneWorkflow.run,
                     args=[
@@ -315,6 +569,10 @@ class VideoGenerationWorkflow:
                         video_height,
                         comfyui_workflow_name,
                         z_image_style,
+                        scene_classification,
+                        _audio_start,
+                        _audio_dur,
+                        voiceover_path,
                     ],
                     id=child_id,
                     memo={
@@ -324,24 +582,40 @@ class VideoGenerationWorkflow:
                         "run_id": req.run_id,
                     },
                     search_attributes={
-                        "TabarioRunId": [req.run_id],  # Allows searching all workflows by run_id
+                        "TabarioRunId": [req.run_id],
                     }
                 )
-                scene_processing_tasks.append(task)
-                
+                scene_processing_tasks.append((i, task))
+
                 workflow.logger.info(
                     f"Started child workflow {child_id} for scene {i} "
                     f"(parent: {parent_workflow_id})"
                 )
 
-            # Collect all video file paths from the child workflows
-            # Start all child workflows immediately - RunPod will handle queuing
-            workflow.logger.info(f"Starting {len(scene_processing_tasks)} scene child workflows (RunPod will queue)")
-            
-            results = await asyncio.gather(*scene_processing_tasks)
+            workflow.logger.info(
+                "[VideoGenerationWorkflow] Starting %d scene child workflow(s) "
+                "(%d skipped — clips already on disk)",
+                len(scene_processing_tasks),
+                len(scene_prompts) - len(scene_processing_tasks),
+            )
+
+            results = await asyncio.gather(*[task for _, task in scene_processing_tasks])
+            new_clips = {
+                i: result_list
+                for (i, _), result_list in zip(scene_processing_tasks, results)
+            }
             video_paths = []
-            for result_list in results:
-                video_paths.extend(result_list)
+            for i in range(len(scene_prompts)):
+                idx_str = str(i)
+                if idx_str in existing_clips:
+                    video_paths.extend(existing_clips[idx_str])
+                elif i in new_clips:
+                    video_paths.extend(new_clips[i])
+                else:
+                    raise ApplicationError(
+                        f"No video clip produced for scene {i}",
+                        non_retryable=True,
+                    )
 
             if not video_paths:
                 raise ApplicationError(
@@ -349,7 +623,116 @@ class VideoGenerationWorkflow:
                     non_retryable=True,
                 )
 
-            # 6. Stitch all video clips together with the voiceover
+            # 6. Compositor handoff OR legacy stitch/subtitle/upload/webhook tail
+            effective_handoff = (
+                req.handoff_to_compositor
+                if req.handoff_to_compositor is not None
+                else bool(req.brief and req.platform and req.client_id)
+            )
+
+            if effective_handoff:
+                handoff_payload = HandoffPayload(
+                    run_id=req.run_id,
+                    client_id=req.client_id,
+                    brief=req.brief,
+                    platform=req.platform,
+                    voiceover_path=voiceover_path,
+                    clip_paths=video_paths,
+                    video_format=req.video_format or "9:16",
+                    target_resolution=req.target_resolution,
+                    video_idea_id=req.video_idea_id,
+                    workflow_id=req.workflow_id,
+                    user_access_token=req.user_access_token or "",
+                )
+                handoff_retry_policy = RetryPolicy(
+                    maximum_attempts=3,
+                    initial_interval=timedelta(seconds=10),
+                    backoff_coefficient=2.0,
+                    non_retryable_error_types=["NonRetryableError"],
+                )
+                try:
+                    compose_job_id = await workflow.execute_activity(
+                        handoff_to_compositor,
+                        args=[handoff_payload],
+                        start_to_close_timeout=timedelta(minutes=DEFAULT_ACTIVITY_TIMEOUT_MINUTES),
+                        retry_policy=handoff_retry_policy,
+                    )
+                    workflow.logger.info(
+                        f"Handoff to compositor succeeded for run_id={req.run_id} compose_job_id={compose_job_id}"
+                    )
+                except Exception as handoff_exc:
+                    detail = _root_cause_message(handoff_exc)
+                    workflow.logger.error(
+                        f"Handoff activity failed for run_id={req.run_id}: {detail}"
+                    )
+                    await workflow.execute_activity(
+                        send_completion_webhook,
+                        args=[
+                            req.run_id,
+                            "failed",
+                            "",
+                            req.workflow_id,
+                            run_dir,
+                            video_paths,
+                            [],
+                            voiceover_path,
+                            detail,
+                            None,
+                            req.video_idea_id,
+                            req.platform,
+                        ],
+                        start_to_close_timeout=timedelta(minutes=ACTIVITY_SHORT_TIMEOUT_MINUTES),
+                        retry_policy=retry_policy,
+                    )
+                    raise ApplicationError(
+                        f"Handoff to compositor failed for run_id={req.run_id}: {detail}",
+                        non_retryable=True,
+                    ) from handoff_exc
+
+                # Poll compositor until composed.mp4 is ready
+                final_video_path = await workflow.execute_activity(
+                    poll_compose_status,
+                    args=[compose_job_id, req.run_id],
+                    schedule_to_close_timeout=timedelta(minutes=30),
+                    start_to_close_timeout=timedelta(minutes=30),
+                    heartbeat_timeout=timedelta(minutes=2),
+                    retry_policy=retry_policy,
+                )
+                workflow.logger.info(
+                    f"Compositor finished for run_id={req.run_id}; final_video_path={final_video_path}"
+                )
+
+                # Upload composed video to Supabase and fire completion webhook
+                uploaded_object_path = await workflow.execute_activity(
+                    upload_final_video_output,
+                    args=[req.run_id, req.user_id, final_video_path, req.user_access_token],
+                    start_to_close_timeout=timedelta(minutes=DEFAULT_ACTIVITY_TIMEOUT_MINUTES),
+                    retry_policy=retry_policy,
+                )
+                await workflow.execute_activity(
+                    send_completion_webhook,
+                    args=[
+                        req.run_id,
+                        "completed",
+                        final_video_path,
+                        req.workflow_id,
+                        run_dir,
+                        video_paths,
+                        [],
+                        voiceover_path,
+                        None,
+                        uploaded_object_path,
+                        req.video_idea_id,
+                        req.platform,
+                    ],
+                    start_to_close_timeout=timedelta(minutes=ACTIVITY_SHORT_TIMEOUT_MINUTES),
+                    retry_policy=retry_policy,
+                )
+
+                workflow.logger.info(f"Workflow for run_id={req.run_id} completed via compositor handoff.")
+                return final_video_path
+
+            # Legacy tail: stitch -> subtitles -> upload -> webhook
             stitched_video_path = await workflow.execute_activity(
                 stitch_videos,
                 args=[req.run_id, video_paths, voiceover_path],
@@ -357,7 +740,6 @@ class VideoGenerationWorkflow:
                 retry_policy=retry_policy,
             )
 
-            # 7. Burn subtitles into the final video
             final_video_path = await workflow.execute_activity(
                 burn_subtitles_into_video,
                 args=[req.run_id, stitched_video_path, req.language, voiceover_path],
@@ -375,7 +757,6 @@ class VideoGenerationWorkflow:
                 if img:
                     image_files.append(img)
 
-            # 8. Send completion webhook
             await workflow.execute_activity(
                 send_completion_webhook,
                 args=[
@@ -387,6 +768,10 @@ class VideoGenerationWorkflow:
                     video_paths,
                     image_files,
                     voiceover_path,
+                    None,  # failure_reason
+                    None,  # uploaded_video_object_path
+                    req.video_idea_id,
+                    req.platform,
                 ],
                 start_to_close_timeout=timedelta(minutes=ACTIVITY_SHORT_TIMEOUT_MINUTES),
                 retry_policy=retry_policy,
@@ -415,6 +800,9 @@ class VideoGenerationWorkflow:
                     ],
                     voiceover_path if "voiceover_path" in locals() else "",
                     detail,
+                    None,  # uploaded_video_object_path
+                    req.video_idea_id,
+                    req.platform,
                 ],
                 start_to_close_timeout=timedelta(minutes=ACTIVITY_SHORT_TIMEOUT_MINUTES),
                 retry_policy=retry_policy,
@@ -423,6 +811,578 @@ class VideoGenerationWorkflow:
                 raise
             raise ApplicationError(
                 f"Workflow for run_id={req.run_id} failed: {detail}",
+                non_retryable=True,
+            ) from e
+
+
+@workflow.defn
+class ImageGenerationWorkflow:
+    @workflow.run
+    async def run(self, req: ImageGenerationStartRequest) -> list[str]:
+        """Generate ordered scene images and upload them to Supabase."""
+        workflow.logger.info(f"Starting image generation workflow for run_id={req.run_id}")
+
+        retry_policy = RetryPolicy(
+            maximum_attempts=3,
+            initial_interval=timedelta(seconds=5),
+            backoff_coefficient=2.0,
+        )
+        prompt_retry_policy = RetryPolicy(
+            maximum_attempts=3,
+            initial_interval=timedelta(seconds=10),
+            backoff_coefficient=2.0,
+            non_retryable_error_types=["RuntimeError"],
+        )
+        image_retry_policy = RetryPolicy(
+            maximum_attempts=3,
+            non_retryable_error_types=["NonRetryableError"],
+        )
+
+        saved_images: list[str] = []
+        ordered_image_prompts: list[str] = []
+        try:
+            await workflow.execute_activity(
+                setup_run_directory,
+                args=[req.run_id, req.model_dump()],
+                start_to_close_timeout=timedelta(seconds=SETUP_RUN_DIRECTORY_TIMEOUT_SECONDS),
+                retry_policy=RetryPolicy(maximum_attempts=3),
+            )
+
+            image_style = req.image_style or "default"
+
+            if req.brief and req.platform:
+                # Brief-aware path: build prompts locally from branding fields
+                pb = resolve_platform_brief(req.brief, req.platform)
+                prompt_items = build_prompt_items(pb, req.brief)
+                scene_prompts = [item.model_dump() for item in prompt_items]
+                await workflow.execute_activity(
+                    persist_scene_prompts,
+                    args=[req.run_id, scene_prompts],
+                    start_to_close_timeout=timedelta(minutes=GENERATE_SCENES_TIMEOUT_MINUTES),
+                    retry_policy=prompt_retry_policy,
+                )
+                workflow.logger.info(
+                    f"[image-prompts] Built {len(scene_prompts)} prompts from brief "
+                    f"for run_id={req.run_id} platform={req.platform}"
+                )
+            else:
+                # Legacy path: delegate to n8n prompts webhook
+                scene_prompts = await workflow.execute_activity(
+                    generate_image_scene_prompts,
+                    args=[req.run_id, req.script, req.language, image_style],
+                    start_to_close_timeout=timedelta(minutes=GENERATE_SCENES_TIMEOUT_MINUTES),
+                    retry_policy=prompt_retry_policy,
+                )
+
+            # Always derive dimensions from aspect ratio + resolution (caps at 720p).
+            # Explicit req.image_width/image_height are ignored to enforce the cap,
+            # matching the same policy used by VideoGenerationWorkflow.
+            image_width, image_height = calculate_image_dimensions(req.video_format, req.target_resolution)
+            workflow_filename = IMAGE_WORKFLOWS.get(image_style, IMAGE_WORKFLOWS["default"])
+            workflow_path = f"{WORKFLOWS_BASE_PATH}/{workflow_filename}"
+            comfyui_workflow_name = IMAGE_STYLE_TO_WORKFLOW_MAPPING.get(image_style)
+            style_override = req.z_image_style if comfyui_workflow_name == "z-image-photo" else None
+
+            # Classify scenes for provider selection (brief-aware path)
+            scene_classifications = []
+            if req.brief and req.platform and SCENE_CLASSIFIER_ENABLED:
+                workflow.logger.info("[ImageGenerationWorkflow] Classifying scenes from brief")
+                brief_json = req.brief.model_dump_json()
+                scene_classifications = await workflow.execute_activity(
+                    classify_scenes_activity,
+                    args=[brief_json, req.platform],
+                    start_to_close_timeout=timedelta(minutes=2),
+                    retry_policy=RetryPolicy(maximum_attempts=2),
+                )
+                workflow.logger.info(f"[ImageGenerationWorkflow] Classified {len(scene_classifications)} scenes")
+
+            image_prompts: list[tuple[int, str]] = []
+            for index, prompt in enumerate(scene_prompts):
+                image_prompt = prompt.get("image_prompt") if isinstance(prompt, dict) else getattr(prompt, "image_prompt", None)
+                if not image_prompt:
+                    raise ApplicationError(
+                        f"Scene {index} is missing an image_prompt",
+                        non_retryable=True,
+                    )
+                image_prompts.append((index, image_prompt))
+
+            # Generate images using Fal or ComfyUI based on classification
+            image_job_tasks = []
+            for index, image_prompt in image_prompts:
+                classification = scene_classifications[index] if scene_classifications and index < len(scene_classifications) else None
+                use_fal = classification and classification.get("image_provider") == "fal"
+                image_model = classification.get("image_model") if classification else None
+
+                if use_fal and image_model:
+                    workflow.logger.info(f"[ImageGenerationWorkflow] Using Fal for scene {index}, model={image_model}")
+                    image_job_tasks.append(
+                        workflow.start_activity(
+                            start_image_generation_provider,
+                            args=["fal", image_prompt, image_model, image_width, image_height, index],
+                            start_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
+                            retry_policy=image_retry_policy,
+                        )
+                    )
+                else:
+                    image_job_tasks.append(
+                        workflow.start_activity(
+                            start_image_generation,
+                            args=[
+                                req.run_id,
+                                image_prompt,
+                                workflow_path,
+                                index,
+                                image_width,
+                                image_height,
+                                comfyui_workflow_name,
+                                style_override,
+                            ],
+                            start_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
+                            retry_policy=image_retry_policy,
+                        )
+                    )
+            image_job_ids = await asyncio.gather(*image_job_tasks)
+
+            # Poll for image completion
+            image_hint_tasks = []
+            for (index, _), image_job_id in zip(image_prompts, image_job_ids, strict=True):
+                classification = scene_classifications[index] if scene_classifications and index < len(scene_classifications) else None
+                use_fal = classification and classification.get("image_provider") == "fal"
+
+                if use_fal:
+                    image_model = classification.get("image_model") if classification else None
+                    image_hint_tasks.append(
+                        workflow.start_activity(
+                            poll_image_generation_provider,
+                            args=["fal", image_job_id, req.run_id, index, IMAGE_JOB_TIMEOUT_SECONDS, IMAGE_POLL_INTERVAL_SECONDS, image_model],
+                            schedule_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
+                            start_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
+                            heartbeat_timeout=timedelta(minutes=2),
+                            retry_policy=image_retry_policy,
+                        )
+                    )
+                else:
+                    image_hint_tasks.append(
+                        workflow.start_activity(
+                            poll_image_generation,
+                            args=[image_job_id, req.run_id, index],
+                            schedule_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
+                            start_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
+                            heartbeat_timeout=timedelta(minutes=2),
+                            retry_policy=image_retry_policy,
+                        )
+                    )
+            image_hints = await asyncio.gather(*image_hint_tasks)
+
+            persist_tasks = [
+                workflow.start_activity(
+                    persist_image_output,
+                    args=[req.run_id, req.user_id, image_hint, index, req.user_access_token],
+                    start_to_close_timeout=timedelta(minutes=DEFAULT_ACTIVITY_TIMEOUT_MINUTES),
+                    retry_policy=retry_policy,
+                )
+                for (index, _), image_hint in zip(image_prompts, image_hints, strict=True)
+            ]
+            saved_images = await asyncio.gather(*persist_tasks)
+            ordered_image_prompts = [image_prompt for _, image_prompt in image_prompts]
+
+            await workflow.execute_activity(
+                send_image_generation_webhook,
+                args=[
+                    req.run_id,
+                    req.user_id,
+                    "completed",
+                    saved_images,
+                    ordered_image_prompts,
+                    req.workflow_id,
+                    None,  # failure_reason
+                    req.video_idea_id,
+                    req.platform,
+                ],
+                start_to_close_timeout=timedelta(minutes=ACTIVITY_SHORT_TIMEOUT_MINUTES),
+                retry_policy=retry_policy,
+            )
+            return saved_images
+
+        except Exception as e:
+            detail = _root_cause_message(e)
+            workflow.logger.error(f"Image generation workflow for run_id={req.run_id} failed: {detail}")
+            await workflow.execute_activity(
+                send_image_generation_webhook,
+                args=[
+                    req.run_id,
+                    req.user_id,
+                    "failed",
+                    saved_images,
+                    ordered_image_prompts,
+                    req.workflow_id,
+                    detail,
+                    req.video_idea_id,
+                    req.platform,
+                ],
+                start_to_close_timeout=timedelta(minutes=ACTIVITY_SHORT_TIMEOUT_MINUTES),
+                retry_policy=retry_policy,
+            )
+            if isinstance(e, ApplicationError):
+                raise
+            raise ApplicationError(
+                f"Image generation workflow for run_id={req.run_id} failed: {detail}",
+                non_retryable=True,
+            ) from e
+
+
+@workflow.defn
+class StoryBoardVideoGeneration:
+    @workflow.run
+    async def run(self, req: StoryboardVideoGenerationRequest) -> str:
+        """Generate ordered storyboard-based video clips and publish the final video."""
+        workflow.logger.info(f"Starting storyboard video generation workflow for run_id={req.run_id}")
+
+        retry_policy = RetryPolicy(
+            maximum_attempts=1,
+            initial_interval=timedelta(seconds=10),
+            backoff_coefficient=2.0,
+        )
+        prompt_retry_policy = RetryPolicy(
+            maximum_attempts=3,
+            initial_interval=timedelta(seconds=10),
+            backoff_coefficient=2.0,
+            non_retryable_error_types=["RuntimeError"],
+        )
+        activity_defaults = {
+            "start_to_close_timeout": timedelta(minutes=DEFAULT_ACTIVITY_TIMEOUT_MINUTES),
+            "retry_policy": retry_policy,
+        }
+
+        video_paths: list[str] = []
+        failure_webhook_sent = False
+        try:
+            run_dir = await workflow.execute_activity(
+                setup_run_directory,
+                args=[req.run_id, req.model_dump()],
+                start_to_close_timeout=timedelta(seconds=SETUP_RUN_DIRECTORY_TIMEOUT_SECONDS),
+                retry_policy=RetryPolicy(maximum_attempts=3),
+            )
+
+            voiceover_path = await workflow.execute_activity(
+                generate_voiceover,
+                args=[req.run_id, req.script, req.language, req.elevenlabs_voice_id],
+                start_to_close_timeout=timedelta(minutes=ACTIVITY_SHORT_TIMEOUT_MINUTES),
+                retry_policy=retry_policy,
+            )
+
+            scene_inputs = await workflow.execute_activity(
+                load_storyboard_scene_inputs,
+                args=[req.run_id],
+                start_to_close_timeout=timedelta(minutes=ACTIVITY_SHORT_TIMEOUT_MINUTES),
+                retry_policy=prompt_retry_policy,
+            )
+
+            video_width, video_height = calculate_video_dimensions(req.video_format, req.target_resolution)
+
+            # Check for already-completed clips to skip re-generation on retry.
+            existing_clips = await workflow.execute_activity(
+                list_existing_video_clips,
+                args=[req.run_id],
+                start_to_close_timeout=timedelta(seconds=SETUP_RUN_DIRECTORY_TIMEOUT_SECONDS),
+                retry_policy=RetryPolicy(maximum_attempts=3),
+            )
+            scenes_to_generate = [s for s in scene_inputs if str(s["index"]) not in existing_clips]
+            if existing_clips:
+                workflow.logger.info(
+                    "[StoryBoardVideoGeneration] Skipping %d already-completed scene(s); generating %d",
+                    len(existing_clips), len(scenes_to_generate),
+                )
+
+            _video_provider = VIDEO_PROVIDER
+            workflow.logger.info(f"[StoryBoardVideoGeneration] VIDEO_PROVIDER={_video_provider}")
+
+            new_clips: dict[str, list[str]] = {}
+            if scenes_to_generate:
+                if _video_provider == "runpod":
+                    start_tasks = [
+                        workflow.start_activity(
+                            start_video_generation_provider,
+                            args=[
+                                "runpod",
+                                scene_input["video_prompt"],
+                                scene_input["image_path"],
+                                DEFAULT_I2V_WORKFLOW_NAME,
+                                video_width,
+                                video_height,
+                                int(scene_input["index"]),
+                            ],
+                            start_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
+                            retry_policy=retry_policy,
+                        )
+                        for scene_input in scenes_to_generate
+                    ]
+                    video_job_ids = await asyncio.gather(*start_tasks)
+                    poll_tasks = [
+                        workflow.start_activity(
+                            poll_video_generation_provider,
+                            args=["runpod", video_job_id, req.run_id, int(scene_input["index"]), VIDEO_JOB_TIMEOUT_SECONDS, VIDEO_POLL_INTERVAL_SECONDS],
+                            schedule_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
+                            start_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
+                            heartbeat_timeout=timedelta(minutes=2),
+                            retry_policy=retry_policy,
+                        )
+                        for scene_input, video_job_id in zip(scenes_to_generate, video_job_ids, strict=True)
+                    ]
+                else:
+                    start_tasks = [
+                        workflow.start_activity(
+                            start_video_generation_provider,
+                            args=[
+                                "fal",
+                                scene_input["video_prompt"],
+                                scene_input["image_path"],
+                                FAL_VIDEO_MODEL,
+                                video_width,
+                                video_height,
+                                int(scene_input["index"]),
+                            ],
+                            start_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
+                            retry_policy=retry_policy,
+                        )
+                        for scene_input in scenes_to_generate
+                    ]
+                    video_job_ids = await asyncio.gather(*start_tasks)
+                    poll_tasks = [
+                        workflow.start_activity(
+                            poll_video_generation_provider,
+                            args=["fal", video_job_id, req.run_id, int(scene_input["index"]), VIDEO_JOB_TIMEOUT_SECONDS, VIDEO_POLL_INTERVAL_SECONDS, FAL_VIDEO_MODEL],
+                            schedule_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
+                            start_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
+                            heartbeat_timeout=timedelta(minutes=2),
+                            retry_policy=retry_policy,
+                        )
+                        for scene_input, video_job_id in zip(scenes_to_generate, video_job_ids, strict=True)
+                    ]
+
+                raw_new_paths = await asyncio.gather(*poll_tasks, return_exceptions=True)
+                failed_scenes: list[tuple[int, BaseException]] = []
+                for scene_input, result_list in zip(scenes_to_generate, raw_new_paths, strict=True):
+                    if isinstance(result_list, BaseException):
+                        failed_scenes.append((int(scene_input["index"]), result_list))
+                        continue
+                    new_clips[str(scene_input["index"])] = result_list
+                if failed_scenes:
+                    details = "; ".join(
+                        f"scene {idx}: {_root_cause_message(exc)}" for idx, exc in failed_scenes
+                    )
+                    workflow.logger.error(
+                        "[StoryBoardVideoGeneration] %d scene(s) failed; %d sibling clip(s) preserved on disk for retry. %s",
+                        len(failed_scenes), len(new_clips), details,
+                    )
+                    raise ApplicationError(
+                        f"Video generation failed for {len(failed_scenes)} scene(s): {details}",
+                    )
+
+            # Build final ordered video_paths from existing + newly generated clips.
+            for scene_input in scene_inputs:
+                idx_str = str(scene_input["index"])
+                if idx_str in existing_clips:
+                    video_paths.append(existing_clips[idx_str][0])
+                else:
+                    result = new_clips.get(idx_str, [])
+                    if not result:
+                        raise ApplicationError(
+                            f"No video output generated for scene {scene_input['index']}",
+                            non_retryable=True,
+                        )
+                    video_paths.append(result[0])
+
+            # Compositor handoff OR legacy stitch/subtitle/upload/webhook tail
+            effective_handoff = (
+                req.handoff_to_compositor
+                if req.handoff_to_compositor is not None
+                else bool(req.brief and req.platform and req.client_id)
+            )
+
+            if effective_handoff:
+                handoff_payload = HandoffPayload(
+                    run_id=req.run_id,
+                    client_id=req.client_id,
+                    brief=req.brief,
+                    platform=req.platform,
+                    voiceover_path=voiceover_path,
+                    clip_paths=video_paths,
+                    video_format=req.video_format or "9:16",
+                    target_resolution=req.target_resolution,
+                    video_idea_id=req.video_idea_id,
+                    workflow_id=req.workflow_id,
+                    user_access_token=req.user_access_token,
+                )
+                handoff_retry_policy = RetryPolicy(
+                    maximum_attempts=3,
+                    initial_interval=timedelta(seconds=10),
+                    backoff_coefficient=2.0,
+                    non_retryable_error_types=["NonRetryableError"],
+                )
+                try:
+                    compose_job_id = await workflow.execute_activity(
+                        handoff_to_compositor,
+                        args=[handoff_payload],
+                        start_to_close_timeout=timedelta(minutes=DEFAULT_ACTIVITY_TIMEOUT_MINUTES),
+                        retry_policy=handoff_retry_policy,
+                    )
+                    workflow.logger.info(
+                        "Handoff to compositor succeeded for run_id=%s compose_job_id=%s",
+                        req.run_id,
+                        compose_job_id,
+                    )
+                except Exception as handoff_exc:
+                    detail = _root_cause_message(handoff_exc)
+                    workflow.logger.error(
+                        "Handoff activity failed for run_id=%s: %s", req.run_id, detail
+                    )
+                    await workflow.execute_activity(
+                        send_completion_webhook,
+                        args=[
+                            req.run_id,
+                            "failed",
+                            "",
+                            req.workflow_id,
+                            locals().get("run_dir", ""),
+                            video_paths,
+                            [],
+                            voiceover_path,
+                            detail,
+                            None,
+                            req.video_idea_id,
+                            req.platform,
+                        ],
+                        **activity_defaults,
+                    )
+                    failure_webhook_sent = True
+                    raise ApplicationError(
+                        f"Handoff to compositor failed for run_id={req.run_id}: {detail}",
+                        non_retryable=True,
+                    ) from handoff_exc
+
+                # Poll compositor until composed.mp4 is ready
+                final_video_path = await workflow.execute_activity(
+                    poll_compose_status,
+                    args=[compose_job_id, req.run_id],
+                    schedule_to_close_timeout=timedelta(minutes=30),
+                    start_to_close_timeout=timedelta(minutes=30),
+                    heartbeat_timeout=timedelta(minutes=2),
+                    retry_policy=retry_policy,
+                )
+                workflow.logger.info(
+                    "Compositor finished for run_id=%s; final_video_path=%s",
+                    req.run_id,
+                    final_video_path,
+                )
+
+                # Upload composed video to Supabase and fire completion webhook
+                uploaded_object_path = await workflow.execute_activity(
+                    upload_final_video_output,
+                    args=[req.run_id, req.user_id, final_video_path, req.user_access_token],
+                    start_to_close_timeout=timedelta(minutes=DEFAULT_ACTIVITY_TIMEOUT_MINUTES),
+                    retry_policy=retry_policy,
+                )
+                await workflow.execute_activity(
+                    send_completion_webhook,
+                    args=[
+                        req.run_id,
+                        "completed",
+                        final_video_path,
+                        req.workflow_id,
+                        locals().get("run_dir", ""),
+                        video_paths,
+                        [],
+                        voiceover_path,
+                        None,
+                        uploaded_object_path,
+                        req.video_idea_id,
+                        req.platform,
+                    ],
+                    **activity_defaults,
+                )
+
+                workflow.logger.info(
+                    "Storyboard video generation completed via compositor handoff for run_id=%s",
+                    req.run_id,
+                )
+                return final_video_path
+
+            # Legacy tail: stitch -> subtitles -> upload -> webhook
+            stitched_video_path = await workflow.execute_activity(
+                stitch_videos,
+                args=[req.run_id, video_paths, voiceover_path],
+                start_to_close_timeout=timedelta(minutes=ACTIVITY_SHORT_TIMEOUT_MINUTES),
+                retry_policy=retry_policy,
+            )
+
+            final_video_path = await workflow.execute_activity(
+                burn_subtitles_into_video,
+                args=[req.run_id, stitched_video_path, req.language, voiceover_path],
+                start_to_close_timeout=timedelta(minutes=ACTIVITY_SHORT_TIMEOUT_MINUTES),
+                retry_policy=retry_policy,
+            )
+
+            uploaded_object_path = await workflow.execute_activity(
+                upload_final_video_output,
+                args=[req.run_id, req.user_id, final_video_path, req.user_access_token],
+                start_to_close_timeout=timedelta(minutes=DEFAULT_ACTIVITY_TIMEOUT_MINUTES),
+                retry_policy=retry_policy,
+            )
+
+            await workflow.execute_activity(
+                send_completion_webhook,
+                args=[
+                    req.run_id,
+                    "completed",
+                    final_video_path,
+                    req.workflow_id,
+                    run_dir,
+                    video_paths,
+                    [],
+                    voiceover_path,
+                    None,
+                    uploaded_object_path,
+                    req.video_idea_id,
+                    req.platform,
+                ],
+                **activity_defaults,
+            )
+
+            workflow.logger.info(
+                "Storyboard video generation completed for run_id=%s with final_video=%s uploaded_object=%s",
+                req.run_id,
+                final_video_path,
+                uploaded_object_path,
+            )
+            return final_video_path
+
+        except Exception as e:
+            detail = _root_cause_message(e)
+            workflow.logger.error(f"Storyboard video generation workflow for run_id={req.run_id} failed: {detail}")
+            if not failure_webhook_sent:
+                await workflow.execute_activity(
+                    send_completion_webhook,
+                    args=[
+                        req.run_id,
+                        "failed",
+                        "",
+                        req.workflow_id,
+                        locals().get("run_dir", ""),
+                        video_paths,
+                        [],
+                        locals().get("voiceover_path", ""),
+                        detail,
+                        None,  # uploaded_video_object_path
+                        req.video_idea_id,
+                        req.platform,
+                    ],
+                    **activity_defaults,
+                )
+            if isinstance(e, ApplicationError):
+                raise
+            raise ApplicationError(
+                f"Storyboard video generation workflow for run_id={req.run_id} failed: {detail}",
                 non_retryable=True,
             ) from e
 

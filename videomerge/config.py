@@ -15,6 +15,11 @@ _BASE_DIR = Path(__file__).parent.parent
 _ENV_PATH = _BASE_DIR / ".env"
 _LAST_ENV_MTIME: Optional[float] = None
 
+# Shared override file — written by the API, read by both API and temporal-worker
+# via the /data/shared volume mount that both containers share.
+_OVERRIDE_ENV_PATH = Path(os.getenv("DATA_SHARED_BASE", "/data/shared")) / ".tabario-override.env"
+_LAST_OVERRIDE_MTIME: Optional[float] = None
+
 
 def _load_paths() -> tuple[Path, Path, Path]:
     """Load path-based configuration values from the environment."""
@@ -228,6 +233,43 @@ def _load_notifications_defaults() -> tuple[str, str | None, str | None]:
     return n8n_webhook, prompts_webhook_url, webhook_secret
 
 
+def _load_supabase_defaults() -> tuple[str | None, str | None, str | None, str | None]:
+    """Load Supabase configuration values from the environment."""
+    supabase_url = os.getenv("SUPABASE_URL")
+    supabase_anon_key = os.getenv("SUPABASE_ANON_KEY")
+    supabase_storage_bucket = os.getenv("SUPABASE_STORAGE_BUCKET", "storage")
+    image_generation_webhook_url = os.getenv("IMAGE_GENERATION_N8N_WEBHOOK_URL")
+    return supabase_url, supabase_anon_key, supabase_storage_bucket, image_generation_webhook_url
+
+
+def _load_compositor_defaults() -> str | None:
+    """Load tabario-video-compositor configuration values from the environment."""
+    return os.getenv("TABARIO_VIDEO_COMPOSITOR_URL")
+
+
+def _load_fal_defaults() -> tuple[str | None, str, str, list[str], str]:
+    """Load Fal.ai configuration values from the environment."""
+    fal_api_key = os.getenv("FAL_AI_API_KEY")
+    video_provider = os.getenv("VIDEO_PROVIDER", "fal").lower()
+    fal_video_model = os.getenv("FAL_VIDEO_MODEL", "bytedance/seedance-2.0/image-to-video")
+    fal_image_models_str = os.getenv(
+        "FAL_IMAGE_MODELS",
+        "fal-ai/flux-pro/v1.1,fal-ai/flux/dev,fal-ai/ideogram/v2,fal-ai/recraft-v3"
+    )
+    fal_image_models = [m.strip() for m in fal_image_models_str.split(",") if m.strip()]
+    fal_image_default = os.getenv("FAL_IMAGE_DEFAULT", "fal-ai/flux/dev")
+    return fal_api_key, video_provider, fal_video_model, fal_image_models, fal_image_default
+
+
+def _load_scene_classifier_defaults() -> tuple[bool, str, str, str | None]:
+    """Load scene classifier configuration values from the environment."""
+    enabled = _str_to_bool(os.getenv("SCENE_CLASSIFIER_ENABLED"), "true")
+    provider = os.getenv("SCENE_CLASSIFIER_PROVIDER", "openrouter")
+    model = os.getenv("SCENE_CLASSIFIER_MODEL", "google/gemini-2.5-flash")
+    openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
+    return enabled, provider, model, openrouter_api_key
+
+
 def _apply_config() -> None:
     """Populate module-level constants from current environment variables."""
     global TMP_BASE, DATA_SHARED_BASE, TIKTOK_VIDEOS_ARCHIVE_FOLDER
@@ -323,22 +365,59 @@ def _apply_config() -> None:
         WEBHOOK_SECRET,
     ) = _load_notifications_defaults()
 
+    global SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_STORAGE_BUCKET, IMAGE_GENERATION_N8N_WEBHOOK_URL
+    (
+        SUPABASE_URL,
+        SUPABASE_ANON_KEY,
+        SUPABASE_STORAGE_BUCKET,
+        IMAGE_GENERATION_N8N_WEBHOOK_URL,
+    ) = _load_supabase_defaults()
+
+    global TABARIO_VIDEO_COMPOSITOR_URL
+    TABARIO_VIDEO_COMPOSITOR_URL = _load_compositor_defaults()
+
+    global FAL_AI_API_KEY, VIDEO_PROVIDER, FAL_VIDEO_MODEL, FAL_IMAGE_MODELS, FAL_IMAGE_DEFAULT
+    (
+        FAL_AI_API_KEY,
+        VIDEO_PROVIDER,
+        FAL_VIDEO_MODEL,
+        FAL_IMAGE_MODELS,
+        FAL_IMAGE_DEFAULT,
+    ) = _load_fal_defaults()
+
+    global SCENE_CLASSIFIER_ENABLED, SCENE_CLASSIFIER_PROVIDER, SCENE_CLASSIFIER_MODEL, OPENROUTER_API_KEY
+    (
+        SCENE_CLASSIFIER_ENABLED,
+        SCENE_CLASSIFIER_PROVIDER,
+        SCENE_CLASSIFIER_MODEL,
+        OPENROUTER_API_KEY,
+    ) = _load_scene_classifier_defaults()
+
 
 def _load_env() -> None:
-    """Load environment variables from the .env file if present."""
-    global _LAST_ENV_MTIME
+    """Load environment variables from the .env file and shared override file if present."""
+    global _LAST_ENV_MTIME, _LAST_OVERRIDE_MTIME
 
     try:
         if _ENV_PATH.exists():
             load_dotenv(dotenv_path=_ENV_PATH, override=True)
             _LAST_ENV_MTIME = _ENV_PATH.stat().st_mtime
-            return
+        else:
+            load_dotenv(override=True)
+            _LAST_ENV_MTIME = None
     except OSError:
-        # If the workflow sandbox restricts filesystem access we fall back to defaults
-        pass
+        load_dotenv(override=True)
+        _LAST_ENV_MTIME = None
 
-    load_dotenv(override=True)
-    _LAST_ENV_MTIME = None
+    # Load the shared override file last so it takes precedence.
+    # This file is written by the API container and read by both containers
+    # via the shared /data/shared volume mount.
+    try:
+        if _OVERRIDE_ENV_PATH.exists():
+            load_dotenv(dotenv_path=_OVERRIDE_ENV_PATH, override=True)
+            _LAST_OVERRIDE_MTIME = _OVERRIDE_ENV_PATH.stat().st_mtime
+    except OSError:
+        pass
 
 
 def reload_config() -> None:
@@ -348,16 +427,26 @@ def reload_config() -> None:
 
 
 def ensure_config_current() -> None:
-    """Ensure in-memory configuration matches the .env file on disk."""
+    """Ensure in-memory configuration is current with both .env and the shared override file."""
+    needs_reload = False
+
     try:
-        if not _ENV_PATH.exists():
-            return
-
-        current_mtime = _ENV_PATH.stat().st_mtime
+        if _ENV_PATH.exists():
+            current_mtime = _ENV_PATH.stat().st_mtime
+            if _LAST_ENV_MTIME is None or current_mtime > _LAST_ENV_MTIME:
+                needs_reload = True
     except OSError:
-        return
+        pass
 
-    if _LAST_ENV_MTIME is None or current_mtime > _LAST_ENV_MTIME:
+    try:
+        if _OVERRIDE_ENV_PATH.exists():
+            override_mtime = _OVERRIDE_ENV_PATH.stat().st_mtime
+            if _LAST_OVERRIDE_MTIME is None or override_mtime > _LAST_OVERRIDE_MTIME:
+                needs_reload = True
+    except OSError:
+        pass
+
+    if needs_reload:
         reload_config()
 
 

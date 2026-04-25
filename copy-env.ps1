@@ -1,0 +1,1 @@
+scp .env fedora-box:~/apps/tabario/edit-videos/

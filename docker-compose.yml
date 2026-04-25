@@ -8,20 +8,42 @@ services:
       - "8086:8000"
     volumes:
       - "/mnt/tp-share/n8n-shared:/data/shared"
-      - .:/app
     environment:
+      - RUN_ENV=${RUN_ENV}
       - TZ=Australia/Melbourne
       - VOICEOVER_SERVICE_URL=http://192.168.68.51:8083
-      - DATA_SHARED_BASE=/data/shared
-      - COMFYUI_URL=http://192.168.68.51:8188
-      - ENABLE_IMAGE_GEN=true
-      - ENABLE_VOICEOVER_GEN=true
-      - COMFYUI_TIMEOUT_SECONDS=600
-      - COMFYUI_POLL_INTERVAL_SECONDS=15
-      - LOG_LEVEL=DEBUG
-      - UVICORN_LOG_LEVEL=debug
+      - DATA_SHARED_BASE=${DATA_SHARED_BASE}
+      - COMFYUI_URL=${COMFYUI_URL}
+      - RUNPOD_IMAGE_INSTANCE_ID=${RUNPOD_IMAGE_INSTANCE_ID}
+      - RUNPOD_VIDEO_INSTANCE_ID=${RUNPOD_VIDEO_INSTANCE_ID}
+      - RUNPOD_API_KEY=${RUNPOD_API_KEY}
+      - ENABLE_IMAGE_GEN=${ENABLE_IMAGE_GEN}
+      - ENABLE_VOICEOVER_GEN=${ENABLE_VOICEOVER_GEN}
+      - COMFYUI_TIMEOUT_SECONDS=${COMFYUI_TIMEOUT_SECONDS}
+      - COMFYUI_POLL_INTERVAL_SECONDS=${COMFYUI_POLL_INTERVAL_SECONDS}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - UVICORN_LOG_LEVEL=${UVICORN_LOG_LEVEL:-info}
       - TIKTOK_VIDEOS_ARCHIVE_FOLDER=/data/shared/archived
-      - VIDEO_COMPLETED_N8N_WEBHOOK_URL=https://birthdaypartyai.app/n8n/webhook/07ec5d3d-59ed-4605-b655-fbb3579169cb
+      - VIDEO_COMPLETED_N8N_WEBHOOK_URL=${VIDEO_COMPLETED_N8N_WEBHOOK_URL}
+      - TEMPORAL_SERVER_URL=${TEMPORAL_SERVER_URL}
+      - TABARIO_VIDEO_COMPOSITOR_URL=${TABARIO_VIDEO_COMPOSITOR_URL:-http://tabario-video-compositor:9312}
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+      - SUPABASE_STORAGE_BUCKET=${SUPABASE_STORAGE_BUCKET}
+      - N8N_PROMPTS_WEBHOOK_URL=${N8N_PROMPTS_WEBHOOK_URL}
+      - COMFY_ORG_API_KEY=${COMFY_ORG_API_KEY}
+      - RUNPOD_IMAGE_INSTANCE_ID=${RUNPOD_IMAGE_INSTANCE_ID}
+      - RUNPOD_VIDEO_INSTANCE_ID=${RUNPOD_VIDEO_INSTANCE_ID}
+      - FAL_AI_API_KEY=${FAL_AI_API_KEY}
+      - FAL_KEY=${FAL_AI_API_KEY}
+      - VIDEO_PROVIDER=${VIDEO_PROVIDER}
+      - FAL_VIDEO_MODEL=${FAL_VIDEO_MODEL}
+      - FAL_IMAGE_MODELS=${FAL_IMAGE_MODELS}
+      - FAL_IMAGE_DEFAULT=${FAL_IMAGE_DEFAULT}
+      - SCENE_CLASSIFIER_ENABLED=${SCENE_CLASSIFIER_ENABLED}
+      - SCENE_CLASSIFIER_PROVIDER=${SCENE_CLASSIFIER_PROVIDER}
+      - SCENE_CLASSIFIER_MODEL=${SCENE_CLASSIFIER_MODEL}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
     restart: unless-stopped
     command: ["uvicorn", "videomerge.main:app", "--host", "0.0.0.0", "--port", "8000"]
     healthcheck:
@@ -29,6 +51,122 @@ services:
       interval: 200s
       timeout: 10s
       retries: 3
+    depends_on:
+      temporal:
+        condition: service_healthy
+    networks:
+      - tabario
+    extra_hosts:
+      - "birthdaypartyai.app:host-gateway"
+      - "www.birthdaypartyai.app:host-gateway"
+
+  temporal-worker:
+    build: .
+    working_dir: /app
+    volumes:
+      - "/mnt/tp-share/n8n-shared:/data/shared"
+    environment:
+      - PYTHONPATH=/app
+      - RUN_ENV=${RUN_ENV}
+      - TZ=Australia/Melbourne
+      - VOICEOVER_SERVICE_URL=http://192.168.68.51:8083
+      - DATA_SHARED_BASE=/data/shared
+      - COMFYUI_URL=${COMFYUI_URL}
+      - RUNPOD_IMAGE_INSTANCE_ID=${RUNPOD_IMAGE_INSTANCE_ID}
+      - RUNPOD_VIDEO_INSTANCE_ID=${RUNPOD_VIDEO_INSTANCE_ID}
+      - TIKTOK_VIDEOS_ARCHIVE_FOLDER=/data/shared/archived
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - TEMPORAL_SERVER_URL=${TEMPORAL_SERVER_URL}
+      - TABARIO_VIDEO_COMPOSITOR_URL=${TABARIO_VIDEO_COMPOSITOR_URL:-http://tabario-video-compositor:9312}
+      - IMAGE_GENERATION_N8N_WEBHOOK_URL=${IMAGE_GENERATION_N8N_WEBHOOK_URL}
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+      - SUPABASE_STORAGE_BUCKET=${SUPABASE_STORAGE_BUCKET}
+      - ENABLE_IMAGE_GEN=${ENABLE_IMAGE_GEN}
+      - ENABLE_VOICEOVER_GEN=${ENABLE_VOICEOVER_GEN}
+      - COMFYUI_TIMEOUT_SECONDS=${COMFYUI_TIMEOUT_SECONDS}
+      - COMFYUI_POLL_INTERVAL_SECONDS=${COMFYUI_POLL_INTERVAL_SECONDS}
+      - VIDEO_COMPLETED_N8N_WEBHOOK_URL=${VIDEO_COMPLETED_N8N_WEBHOOK_URL}
+      - N8N_PROMPTS_WEBHOOK_URL=${N8N_PROMPTS_WEBHOOK_URL}
+      - N8N_VOICEOVER_WEBHOOK_URL=${N8N_VOICEOVER_WEBHOOK_URL}
+      - RUNPOD_API_KEY=${RUNPOD_API_KEY}
+      - FAL_AI_API_KEY=${FAL_AI_API_KEY}
+      - FAL_KEY=${FAL_AI_API_KEY}
+      - VIDEO_PROVIDER=${VIDEO_PROVIDER}
+      - FAL_VIDEO_MODEL=${FAL_VIDEO_MODEL}
+      - FAL_IMAGE_MODELS=${FAL_IMAGE_MODELS}
+      - FAL_IMAGE_DEFAULT=${FAL_IMAGE_DEFAULT}
+      - SCENE_CLASSIFIER_ENABLED=${SCENE_CLASSIFIER_ENABLED}
+      - SCENE_CLASSIFIER_PROVIDER=${SCENE_CLASSIFIER_PROVIDER}
+      - SCENE_CLASSIFIER_MODEL=${SCENE_CLASSIFIER_MODEL}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+    restart: unless-stopped
+    depends_on:
+      temporal:
+        condition: service_healthy
+    command: ["python", "-m", "videomerge.temporal.worker"]
+    networks:
+      - tabario
+    extra_hosts:
+      - "birthdaypartyai.app:host-gateway"
+      - "www.birthdaypartyai.app:host-gateway"
+
+  temporal:
+    image: temporalio/auto-setup:1.29.0
+    ports:
+      - "7233:7233"
+    environment:
+      - DB=postgres12
+      - DB_PORT=5432
+      - POSTGRES_USER=temporal
+      - POSTGRES_PWD=temporal
+      - POSTGRES_DB=temporal
+      - POSTGRES_SEEDS=postgres
+      - TEMPORAL_WEBSERVER_PORT=8080
+      - LOG_LEVEL=warn
+      - BIND_ON_IP=0.0.0.0
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "tctl", "--address", "localhost:7233", "cluster", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - tabario
+
+  temporal-ui:
+    image: temporalio/ui:2.42.1
+    ports:
+      - "8087:8080"
+    environment:
+      - TZ=Australia/Melbourne
+      - TEMPORAL_GRPC_ENDPOINT=temporal:7233
+      - TEMPORAL_ADDRESS=temporal:7233
+      - TEMPORAL_CORS_ORIGINS=http://192.168.68.52:8087
+      - TEMPORAL_CSRF_COOKIE_INSECURE=true
+    depends_on:
+      - temporal
+    networks:
+      - tabario
+
+  postgres:
+    image: postgres:15-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=temporal
+      - POSTGRES_PASSWORD=temporal
+      - POSTGRES_DB=temporal
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal -d temporal"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
     networks:
       - tabario
 
@@ -36,3 +174,6 @@ networks:
   tabario:
     name: tabario
     driver: bridge
+
+volumes:
+  postgres_data:
