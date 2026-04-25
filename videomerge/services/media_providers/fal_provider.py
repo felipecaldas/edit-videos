@@ -101,6 +101,38 @@ class FalProvider(MediaProvider):
             index=index
         )
 
+    async def upload_file(self, file_path: str) -> str:
+        """Upload a local file to fal.ai CDN and return its public URL."""
+        return await self._client.upload_file(file_path)
+
+    async def submit_echomimic(
+        self,
+        image_url: str,
+        audio_url: str,
+        prompt: str = "",
+    ) -> str:
+        """Submit a talking-head job to fal-ai/echomimic-v3. Returns request_id."""
+        return await self._client.submit_echomimic(
+            image_url=image_url,
+            audio_url=audio_url,
+            prompt=prompt,
+        )
+
+    async def poll_echomimic(
+        self,
+        request_id: str,
+        output_dir: Path,
+        timeout_s: int = 600,
+        poll_interval_s: float = 5.0,
+    ) -> str:
+        """Poll echomimic-v3, download the video, return local file path."""
+        return await self._client.poll_echomimic(
+            request_id=request_id,
+            output_dir=output_dir,
+            timeout_s=timeout_s,
+            poll_interval_s=poll_interval_s,
+        )
+
     @property
     def provider_name(self) -> str:
         """Return provider name."""

@@ -1615,6 +1615,94 @@ async def handoff_to_compositor(payload: HandoffPayload) -> str:
 
 
 @activity.defn
+async def generate_talking_head_video(
+    run_id: str,
+    scene_index: int,
+    portrait_image_url: str,
+    voiceover_path: str,
+    audio_start_seconds: float,
+    audio_duration_seconds: float,
+    prompt: str,
+) -> str:
+    """Generate a lipsync talking-head video for a single scene via echomimic-v3.
+
+    Args:
+        run_id: Run identifier; used to locate the shared working directory.
+        scene_index: Zero-based scene index, used for output file naming.
+        portrait_image_url: Public URL of the already-generated portrait image.
+        voiceover_path: Absolute path to the full voiceover audio (MP3 or WAV).
+        audio_start_seconds: Start offset within the voiceover for this scene.
+        audio_duration_seconds: Duration of this scene's audio segment.
+        prompt: echomimic-v3 motion prompt; empty string uses the default.
+
+    Returns:
+        Absolute path to the downloaded talking-head video clip.
+    """
+    from videomerge.services.audio_utils import convert_to_wav, cut_audio_segment
+    from videomerge.services.media_providers.fal_provider import FalProvider
+
+    _safe_heartbeat()
+    run_dir = DATA_SHARED_BASE / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    # Convert voiceover to WAV once per run (idempotent)
+    wav_path = run_dir / "voiceover.wav"
+    if not wav_path.exists():
+        logger.info("[talking_head] Converting voiceover to WAV for run_id=%s", run_id)
+        await asyncio.to_thread(convert_to_wav, voiceover_path, str(wav_path))
+    else:
+        logger.info("[talking_head] Using existing voiceover.wav for run_id=%s", run_id)
+
+    # Cut the scene's audio segment from the WAV
+    segment_path = run_dir / f"{scene_index:03d}_audio.wav"
+    logger.info(
+        "[talking_head] Cutting audio segment: scene=%d, start=%.3fs, duration=%.3fs",
+        scene_index, audio_start_seconds, audio_duration_seconds,
+    )
+    await asyncio.to_thread(
+        cut_audio_segment,
+        str(wav_path),
+        str(segment_path),
+        audio_start_seconds,
+        audio_duration_seconds,
+    )
+    _safe_heartbeat()
+
+    # Upload portrait image to fal CDN if we received a local path
+    fal_provider = FalProvider()
+    if portrait_image_url.startswith("/") or (len(portrait_image_url) > 1 and portrait_image_url[1] == ":"):
+        logger.info("[talking_head] Uploading portrait image for scene=%d: %s", scene_index, portrait_image_url)
+        portrait_image_url = await fal_provider.upload_file(portrait_image_url)
+
+    # Upload audio segment to fal CDN
+    logger.info("[talking_head] Uploading audio segment for scene=%d", scene_index)
+    audio_url = await fal_provider.upload_file(str(segment_path))
+    _safe_heartbeat()
+
+    # Submit and poll echomimic-v3
+    logger.info(
+        "[talking_head] Submitting echomimic-v3: scene=%d, image=%s, audio=%s",
+        scene_index, portrait_image_url, audio_url,
+    )
+    request_id = await fal_provider.submit_echomimic(
+        image_url=portrait_image_url,
+        audio_url=audio_url,
+        prompt=prompt,
+    )
+    _safe_heartbeat()
+
+    video_path = await _run_async_with_heartbeats(
+        fal_provider.poll_echomimic,
+        request_id,
+        run_dir,
+        heartbeat_interval_s=30.0,
+    )
+
+    logger.info("[talking_head] echomimic-v3 done for scene=%d: %s", scene_index, video_path)
+    return video_path
+
+
+@activity.defn
 async def poll_compose_status(
     compose_job_id: str,
     run_id: str,

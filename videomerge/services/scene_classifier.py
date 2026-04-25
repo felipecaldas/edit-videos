@@ -43,8 +43,9 @@ class TextOverlay(BaseModel):
 
 class SceneClassification(BaseModel):
     """Classification result for a single scene."""
-    
+
     scene_index: int
+    scene_type: Literal["talking_head", "concept_visual", "brand_card"] = "concept_visual"
     is_text_heavy: bool
     image_provider: Literal["fal", "runpod"]
     image_model: str
@@ -112,27 +113,51 @@ def _build_system_prompt() -> str:
     allowed_models = ["z-image-turbo", "z-image-photo"] + FAL_IMAGE_MODELS
     
     return f"""You are a scene classifier for video generation. Analyze each scene and determine:
-1. Whether it's text-heavy (requires prominent text overlays like signs, posters, labels)
-2. Which image generation model is best suited
-3. Whether to skip image/video generation entirely (pure typographic scenes)
-4. Text overlay configuration when applicable
+1. The scene_type (talking_head | concept_visual | brand_card)
+2. Whether it's text-heavy (requires prominent text overlays)
+3. Which image generation model is best suited
+4. Whether to skip image/video generation entirely
+5. Text overlay configuration when applicable
 
 Available image models:
 - Fal models: {', '.join(FAL_IMAGE_MODELS)}
 - Runpod models: z-image-turbo (excellent for people/portraits), z-image-photo
 
-Rules:
-- Use z-image-turbo for scenes with people, portraits, faces
-- For scenes with ANY legible text (signs, labels, logos, UI elements, product names, captions, headlines): set is_text_heavy=true and skip_image_generation=true — use text overlays instead of image generation for these scenes
+Scene type detection (set scene_type accordingly):
+- "talking_head": scene describes a person directly addressing the camera, a presenter,
+  a testimonial, a spokesperson, a talking head, someone speaking to the viewer.
+  → always use image_provider "fal", skip_image_generation=false (portrait image still needed),
+    never use Wan2.2 (echomimic-v3 handles video generation instead).
+
+- "brand_card": scene is purely a logo, CTA text, end screen, URL display, or brand sign-off
+  with no meaningful visual background.
+  → set skip_image_generation=true, set is_text_heavy=true.
+
+- "concept_visual": all other scenes including abstract visuals, environments, product metaphors,
+  and — importantly — any scene that previously described a screen recording, UI, or software
+  dashboard. For those, reinterpret the scene as an abstract metaphorical visual that conveys
+  the same concept without showing actual software UI. Generate an evocative concept image.
+
+Model selection rules:
+- Use z-image-turbo for talking_head scenes (portrait quality needed for lipsync)
+- For concept_visual scenes with ANY legible text as a foreground element (signs, labels, logos,
+  UI elements, product names, captions, headlines, statistics, slogans, CTA text): set
+  is_text_heavy=true and skip_image_generation=true — Remotion renders the text
 - Use Fal models for abstract, landscapes, objects, text-free backgrounds, fantasy, sci-fi
-- Set skip_image_generation=true ONLY for pure typographic scenes (no visual content needed)
-- When is_text_heavy=true, provide prominent_text_overlay with component + props
+- When is_text_heavy=true and skip_image_generation=true for a concept scene, provide
+  prominent_text_overlay with component + props
 - Text overlay components: kinetic_title (animated), stagger_title (word-by-word), caption_bar (subtitle-style)
+
+Text-heavy rule (aggressive):
+- If the scene description mentions brand names to display, statistics, data figures, headlines,
+  slogans, or call-to-action text as foreground elements → is_text_heavy=true,
+  skip_image_generation=true. Remotion will render that text.
 
 Output strict JSON array matching this schema:
 [
   {{
     "scene_index": 0,
+    "scene_type": "concept_visual",
     "is_text_heavy": false,
     "image_provider": "runpod",
     "image_model": "z-image-turbo",
@@ -245,14 +270,15 @@ def _parse_llm_response(response: str, expected_count: int) -> List[SceneClassif
         if not isinstance(data, list):
             raise RuntimeError(f"Expected JSON array, got {type(data).__name__}")
 
-        # LLM legitimately returns null for image_provider/image_model when
-        # skip_image_generation=true (text-only scenes). Provide harmless
+        # LLM legitimately returns null for some fields. Provide harmless
         # defaults so Pydantic validation doesn't reject them.
         for item in data:
             if not item.get("image_provider"):
                 item["image_provider"] = "fal"
             if not item.get("image_model"):
                 item["image_model"] = FAL_IMAGE_DEFAULT
+            if not item.get("scene_type"):
+                item["scene_type"] = "concept_visual"
 
         classifications = [SceneClassification(**item) for item in data]
         
@@ -300,8 +326,8 @@ def _validate_classifications(classifications: List[SceneClassification], expect
             )
             cls.image_provider = expected_provider
         
-        # Validate skip logic
-        if cls.skip_image_generation and not cls.prominent_text_overlay:
+        # brand_card scenes skip image gen entirely — no text overlay required
+        if cls.skip_image_generation and cls.scene_type != "brand_card" and not cls.prominent_text_overlay:
             raise RuntimeError(
                 f"Scene {cls.scene_index}: skip_image_generation=true requires prominent_text_overlay"
             )
@@ -401,23 +427,35 @@ def classify_scenes_from_script(
 
 def _build_system_prompt_script_based() -> str:
     """Build the system prompt for script+scenes based classification."""
-    return f"""You are a scene classifier for video generation. Analyze each scene description and determine which image generation model is best suited.
+    return f"""You are a scene classifier for video generation. Analyze each scene description and determine:
+1. The scene_type (talking_head | concept_visual | brand_card)
+2. Which image generation model is best suited
+3. Whether to skip image/video generation entirely
 
 Available image models:
 - Fal models: {', '.join(FAL_IMAGE_MODELS)}
 - Runpod models: z-image-turbo (excellent for people/portraits), z-image-photo
 
-Rules:
-- Use z-image-turbo for scenes with people, portraits, faces, characters
-- Use z-image-photo for realistic photography-style scenes
-- For scenes with ANY legible text (signs, labels, logos, UI elements, product names, captions, headlines): set is_text_heavy=true and skip_image_generation=true — use text overlays instead of image generation for these scenes
+Scene type detection:
+- "talking_head": person directly addressing camera, presenter, spokesperson, testimonial
+  → image_provider "fal", skip_image_generation=false (portrait still needed for echomimic-v3)
+- "brand_card": logo/CTA/end-screen with no meaningful visual background
+  → skip_image_generation=true, is_text_heavy=true
+- "concept_visual": everything else, including what used to be screen recordings or UI demos
+  (reinterpret as abstract metaphorical visual, not literal software UI)
+
+Model rules:
+- Use z-image-turbo for talking_head scenes
+- Use z-image-photo for realistic photography-style concept scenes
 - Use Fal models for abstract, landscapes, objects, text-free backgrounds, fantasy, sci-fi
-- Set skip_image_generation=true ONLY for pure typographic scenes (no visual content needed)
+- Text-heavy rule: if scene has brand names, statistics, headlines, slogans, CTA text as
+  foreground elements → is_text_heavy=true, skip_image_generation=true
 
 Output strict JSON array matching this schema:
 [
   {{
     "scene_index": 0,
+    "scene_type": "concept_visual",
     "is_text_heavy": false,
     "image_provider": "runpod",
     "image_model": "z-image-turbo",

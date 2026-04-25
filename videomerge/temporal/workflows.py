@@ -114,6 +114,7 @@ with workflow.unsafe.imports_passed_through():
         encode_file_to_base64,
         send_upscale_completion_webhook,
         persist_scene_prompts,
+        generate_talking_head_video,
     )
     from videomerge.services.brand_prompt import (
         build_prompt_items,
@@ -137,6 +138,9 @@ class ProcessSceneWorkflow:
         comfyui_workflow_name: str | None = None,
         image_style: str | None = None,
         scene_classification: dict | None = None,
+        audio_start_seconds: float | None = None,
+        audio_duration_seconds: float | None = None,
+        voiceover_path: str | None = None,
     ) -> list[str]:
         """Workflow to process a single scene (image -> video)."""
         # Log parent workflow info for correlation
@@ -158,17 +162,21 @@ class ProcessSceneWorkflow:
             "retry_policy": scene_retry_policy,
         }
 
+        _cls = scene_classification or {}
+        _scene_type = _cls.get("scene_type", "concept_visual")
+        _skip_image = _cls.get("skip_image_generation", False)
+
         try:
             # 1. Generate image
             image_hint = ""
-            if prompt.image_prompt:
+            if prompt.image_prompt and not _skip_image:
                 try:
                     # TEMP: force all image generation through Fal for testing.
                     # Revert by restoring the two lines below to their original form:
                     #   use_fal_image = scene_classification and scene_classification.get("image_provider") == "fal"
                     #   image_model = scene_classification.get("image_model") if scene_classification else None
                     use_fal_image = True
-                    _raw_model = scene_classification.get("image_model") if scene_classification else None
+                    _raw_model = _cls.get("image_model") if _cls else None
                     image_model = _raw_model if (_raw_model and not _raw_model.startswith("z-image-")) else FAL_IMAGE_DEFAULT
 
                     if use_fal_image and image_model:
@@ -229,9 +237,51 @@ class ProcessSceneWorkflow:
                         non_retryable=True,
                     )
 
+            # brand_card scenes have no image and no video — Remotion handles them entirely
+            if _scene_type == "brand_card":
+                workflow.logger.info(f"[ProcessSceneWorkflow] Scene {index} is brand_card — skipping generation")
+                return []
+
             if not image_hint:
                 workflow.logger.warning(f"Skipping scene {index} as no image was generated.")
                 return []
+
+            # 2a. Talking-head branch: use echomimic-v3 instead of Wan2.2
+            if (
+                _scene_type == "talking_head"
+                and audio_start_seconds is not None
+                and audio_duration_seconds is not None
+                and voiceover_path
+            ):
+                workflow.logger.info(
+                    "[ProcessSceneWorkflow] Scene %d is talking_head — routing to echomimic-v3",
+                    index,
+                )
+                try:
+                    talking_head_path = await workflow.execute_activity(
+                        generate_talking_head_video,
+                        args=[
+                            run_id,
+                            index,
+                            image_hint,
+                            voiceover_path,
+                            audio_start_seconds,
+                            audio_duration_seconds,
+                            "",  # use echomimic default prompt
+                        ],
+                        start_to_close_timeout=timedelta(minutes=TEMPORAL_VIDEO_GENERATION_TIMEOUT_MINUTES),
+                        heartbeat_timeout=timedelta(minutes=2),
+                        retry_policy=scene_retry_policy,
+                    )
+                except Exception as e:
+                    detail = _root_cause_message(e)
+                    workflow.logger.error(f"Talking-head generation failed for scene {index}: {detail}")
+                    raise ApplicationError(
+                        f"Scene {index} talking-head generation failed: {detail}",
+                        non_retryable=True,
+                    )
+                workflow.logger.info(f"Scene {index} (talking_head) completed: {talking_head_path}")
+                return [talking_head_path]
 
             # 2. Upload image for video generation
             try:
@@ -463,6 +513,20 @@ class VideoGenerationWorkflow:
             parent_workflow_id = workflow.info().workflow_id
             parent_run_id = workflow.info().run_id
 
+            # Compute cumulative audio offsets per scene (for talking_head routing).
+            # When the brief carries per-scene duration_seconds, use those directly.
+            # Otherwise assume equal distribution of the voiceover across scenes.
+            scene_audio_starts: list[float] = []
+            scene_audio_durations: list[float] = []
+            if req.brief and req.platform:
+                _pb = next((pb for pb in req.brief.platform_briefs if pb.platform.lower() == req.platform.lower()), None)
+                if _pb and _pb.scenes:
+                    _cumulative = 0.0
+                    for _scene in _pb.scenes:
+                        scene_audio_starts.append(_cumulative)
+                        scene_audio_durations.append(float(_scene.duration_seconds))
+                        _cumulative += float(_scene.duration_seconds)
+
             # List of (scene_index, awaitable) so we can map results back to indices.
             scene_processing_tasks: list[tuple[int, Any]] = []
             for i, prompt in enumerate(scene_prompts):
@@ -485,6 +549,10 @@ class VideoGenerationWorkflow:
                 # Get classification for this scene (if available)
                 scene_classification = scene_classifications[i] if scene_classifications and i < len(scene_classifications) else None
 
+                # Audio offsets for talking-head routing (None when not available)
+                _audio_start = scene_audio_starts[i] if i < len(scene_audio_starts) else None
+                _audio_dur = scene_audio_durations[i] if i < len(scene_audio_durations) else None
+
                 task = workflow.execute_child_workflow(
                     ProcessSceneWorkflow.run,
                     args=[
@@ -499,6 +567,9 @@ class VideoGenerationWorkflow:
                         comfyui_workflow_name,
                         z_image_style,
                         scene_classification,
+                        _audio_start,
+                        _audio_dur,
+                        voiceover_path,
                     ],
                     id=child_id,
                     memo={
