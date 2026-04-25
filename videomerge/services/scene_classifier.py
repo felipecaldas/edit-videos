@@ -52,6 +52,7 @@ class SceneClassification(BaseModel):
     skip_image_generation: bool = False
     prominent_text_overlay: Optional[TextOverlay] = None
     reasoning: str = ""
+    image_prompt_override: Optional[str] = None
 
 
 def classify_scenes(brief: Brief, platform: str) -> List[SceneClassification]:
@@ -137,6 +138,21 @@ Scene type detection (set scene_type accordingly):
   and — importantly — any scene that previously described a screen recording, UI, or software
   dashboard. For those, reinterpret the scene as an abstract metaphorical visual that conveys
   the same concept without showing actual software UI. Generate an evocative concept image.
+  → MANDATORY: set image_prompt_override to a fully rewritten abstract visual prompt that
+    contains NO references to screens, software, UI, dashboards, apps, browsers, or any
+    digital interface. Describe a real-world metaphor, environment, or concept instead.
+
+image_prompt_override rules (CRITICAL):
+- Set image_prompt_override whenever the original scene description mentions: screen recording,
+  dashboard, UI, software, app, browser, interface, workflow tool, SaaS, window, tab, cursor,
+  Slack, Notion, or any digital product UI.
+- The override MUST be a complete, standalone image generation prompt (no references to "the
+  original scene" or "as described"). Write it as a direct prompt to an image model.
+- For talking_head scenes: set image_prompt_override to a natural portrait prompt, e.g.
+  "Professional portrait photo of a confident businesswoman, clean studio background, soft
+  natural lighting, looking directly into camera, shallow depth of field."
+- Leave image_prompt_override null for scenes that are already abstract/environmental with
+  no UI contamination.
 
 Model selection rules:
 - Use z-image-turbo for talking_head scenes (portrait quality needed for lipsync)
@@ -163,6 +179,7 @@ Output strict JSON array matching this schema:
     "image_model": "z-image-turbo",
     "skip_image_generation": false,
     "prominent_text_overlay": null,
+    "image_prompt_override": null,
     "reasoning": "Scene shows a person - z-image-turbo excels at portraits"
   }}
 ]
@@ -443,6 +460,18 @@ Scene type detection:
   → skip_image_generation=true, is_text_heavy=true
 - "concept_visual": everything else, including what used to be screen recordings or UI demos
   (reinterpret as abstract metaphorical visual, not literal software UI)
+  → MANDATORY: set image_prompt_override to a fully rewritten abstract visual prompt whenever
+    the original description mentions screens, dashboards, UI, software, apps, or any digital
+    interface. No references to software UI allowed in the override — describe a real-world
+    metaphor or environment instead.
+
+image_prompt_override rules (CRITICAL):
+- Set image_prompt_override whenever the scene mentions: screen recording, dashboard, UI,
+  software, app, browser, interface, workflow tool, SaaS, window, tab, Slack, Notion, cursor,
+  or any digital product interface.
+- The override must be a complete standalone image generation prompt with NO UI references.
+- For talking_head scenes: set image_prompt_override to a natural portrait prompt.
+- Leave null for purely abstract/environmental scenes with no UI contamination.
 
 Model rules:
 - Use z-image-turbo for talking_head scenes
@@ -461,6 +490,7 @@ Output strict JSON array matching this schema:
     "image_model": "z-image-turbo",
     "skip_image_generation": false,
     "prominent_text_overlay": null,
+    "image_prompt_override": null,
     "reasoning": "Scene shows a person - z-image-turbo excels at portraits"
   }}
 ]

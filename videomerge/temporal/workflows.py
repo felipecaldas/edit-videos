@@ -165,11 +165,14 @@ class ProcessSceneWorkflow:
         _cls = scene_classification or {}
         _scene_type = _cls.get("scene_type", "concept_visual")
         _skip_image = _cls.get("skip_image_generation", False)
+        # Use classifier-provided override prompt when present (e.g. screen-recording scenes
+        # reclassified as concept_visual need a rewritten prompt to avoid hallucinated UI).
+        _effective_image_prompt = _cls.get("image_prompt_override") or prompt.image_prompt
 
         try:
             # 1. Generate image
             image_hint = ""
-            if prompt.image_prompt and not _skip_image:
+            if _effective_image_prompt and not _skip_image:
                 try:
                     # TEMP: force all image generation through Fal for testing.
                     # Revert by restoring the two lines below to their original form:
@@ -185,7 +188,7 @@ class ProcessSceneWorkflow:
                             start_image_generation_provider,
                             args=[
                                 "fal",
-                                prompt.image_prompt,
+                                _effective_image_prompt,
                                 image_model,
                                 image_width,
                                 image_height,
@@ -209,7 +212,7 @@ class ProcessSceneWorkflow:
                             start_image_generation,
                             args=[
                                 run_id,
-                                prompt.image_prompt,
+                                _effective_image_prompt,
                                 workflow_path,
                                 index,
                                 image_width,
