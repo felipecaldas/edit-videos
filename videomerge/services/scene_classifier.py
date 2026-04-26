@@ -37,7 +37,16 @@ logger = get_logger(__name__)
 # image_prompt_override so the LLM cannot silently skip it.
 _UI_KEYWORD_RE = re.compile(
     r"\b(screen|dashboard|UI|software|app|browser|interface|font|logo|statistics|"
-    r"percentage|headline|slogan|CTA)\b",
+    r"percentage|headline|slogan|CTA|monitor|laptop|computer\s+screen|desktop\s+screen)\b",
+    re.IGNORECASE,
+)
+
+# Forbidden terms that must not appear in the generated image_prompt_override itself.
+# If any match, the override is contaminated and must be replaced with the deterministic fallback.
+_OVERRIDE_FORBIDDEN_RE = re.compile(
+    r"\b(screen|dashboard|UI|software|app|browser|interface|monitor|laptop|"
+    r"computer\s+screen|desktop\s+screen|display\s+screen|on\s+a\s+screen|"
+    r"on\s+a\s+monitor|on\s+a\s+laptop)\b",
     re.IGNORECASE,
 )
 
@@ -100,31 +109,42 @@ def _ui_pre_filter(descriptions: List[str]) -> set:
     return {i for i, d in enumerate(descriptions) if _UI_KEYWORD_RE.search(d or "")}
 
 
+_UI_FALLBACK_OVERRIDE = (
+    "Abstract concept visualization conveying digital productivity and workflow, "
+    "cinematic overhead perspective, warm natural textures, no screens, no software "
+    "interfaces, no UI elements, no text overlays"
+)
+
+
 def _enforce_ui_overrides(
     classifications: List[SceneClassification],
     ui_matched_indices: set,
 ) -> None:
     """Force is_text_heavy and ensure image_prompt_override for UI-keyword scenes.
 
-    If the LLM silently omitted an override for a pre-filtered scene, apply a
-    deterministic templated fallback and log loudly so the failure is visible.
+    Applies the deterministic fallback when the LLM omitted the override entirely,
+    and also when the LLM-generated override itself leaks forbidden screen/monitor
+    keywords (contaminated override).
     """
     for cls in classifications:
         if cls.scene_index not in ui_matched_indices:
             continue
         cls.is_text_heavy = True
         if not cls.image_prompt_override:
-            fallback = (
-                "Abstract concept visualization conveying digital productivity and workflow, "
-                "cinematic overhead perspective, warm natural textures, no screens, no software "
-                "interfaces, no UI elements, no text overlays"
-            )
             logger.warning(
                 "[classifier] FALLBACK OVERRIDE applied — scene %d: UI keyword matched but "
                 "LLM emitted no image_prompt_override. Forcing deterministic fallback.",
                 cls.scene_index,
             )
-            cls.image_prompt_override = fallback
+            cls.image_prompt_override = _UI_FALLBACK_OVERRIDE
+        elif _OVERRIDE_FORBIDDEN_RE.search(cls.image_prompt_override):
+            logger.warning(
+                "[classifier] CONTAMINATED OVERRIDE replaced — scene %d: image_prompt_override "
+                "contains forbidden screen/monitor keyword. Original: %r. Forcing deterministic fallback.",
+                cls.scene_index,
+                cls.image_prompt_override,
+            )
+            cls.image_prompt_override = _UI_FALLBACK_OVERRIDE
 
 
 def classify_scenes(brief: Brief, platform: str) -> List[SceneClassification]:

@@ -209,3 +209,44 @@ def test_llm_silent_skip_gets_non_null_override_for_ui_scenes(_mock_llm):
             assert cls.image_prompt_override is not None, (
                 f"Scene {cls.scene_index} has UI keyword but image_prompt_override is null"
             )
+
+
+# ---------------------------------------------------------------------------
+# TAB-172: contaminated override detection
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("contaminated_override", [
+    "A streamlined workspace on a monitor displaying client folders",
+    "Hands typing on a laptop screen showing workflow steps",
+    "A dashboard displayed on a computer screen with charts",
+    "Close-up of a desktop screen with the software interface",
+    "Overview on a monitor of the app's analytics page",
+])
+def test_enforce_ui_overrides_replaces_contaminated_override(contaminated_override):
+    """Override prompts that still contain screen/monitor keywords are replaced with fallback."""
+    from videomerge.services.scene_classifier import _UI_FALLBACK_OVERRIDE
+    cls = _make_cls(0, override=contaminated_override)
+    _enforce_ui_overrides([cls], ui_matched_indices={0})
+    assert cls.image_prompt_override == _UI_FALLBACK_OVERRIDE, (
+        f"Contaminated override was not replaced. Got: {cls.image_prompt_override!r}"
+    )
+
+
+def test_enforce_ui_overrides_keeps_clean_override():
+    """An override that contains no forbidden keywords is kept as-is."""
+    clean_override = "Aerial view of a busy city street, warm morning light, no screens"
+    cls = _make_cls(0, override=clean_override)
+    _enforce_ui_overrides([cls], ui_matched_indices={0})
+    assert cls.image_prompt_override == clean_override
+
+
+@pytest.mark.parametrize("keyword_desc", [
+    "monitor",
+    "laptop",
+    "computer screen",
+])
+def test_ui_pre_filter_catches_new_keywords(keyword_desc):
+    """Extended _UI_KEYWORD_RE catches monitor/laptop/computer screen in descriptions."""
+    descriptions = [f"A workspace with a {keyword_desc} showing productivity metrics"]
+    matched = _ui_pre_filter(descriptions)
+    assert 0 in matched, f"Expected {keyword_desc!r} to trigger pre-filter"
