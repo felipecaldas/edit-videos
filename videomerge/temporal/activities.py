@@ -39,6 +39,8 @@ from videomerge.config import (
     VIDEO_POLL_INTERVAL_SECONDS,
     VIDEO_COMPLETED_N8N_WEBHOOK_URL,
     WORKFLOW_I2V_PATH,
+    SUPABASE_URL,
+    SUPABASE_ANON_KEY,
 )
 from videomerge.services.media import get_duration
 from videomerge.services.metrics import (
@@ -2133,3 +2135,90 @@ async def poll_video_generation_provider(
     
     logger.info(f"[poll_video_{provider}] Saved {len(saved_files)} files")
     return [str(p) for p in saved_files]
+
+
+@activity.defn
+async def fetch_brand_image_params(
+    client_id: str,
+    user_access_token: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Fetch brand image generation parameters from brand_profiles for a client.
+
+    Returns recraft_style_id and negative_prompt_terms so the calling workflow
+    can pass them to start_image_generation_provider without performing any I/O
+    directly inside a Temporal workflow.
+
+    Args:
+        client_id: Supabase clients.id whose brand_profiles row to fetch.
+        user_access_token: Optional user JWT. When provided the request runs
+            under the user's RLS context; otherwise the anon key is used.
+
+    Returns:
+        Dict with keys:
+            - ``recraft_style_id`` (str | None): Recraft brand-style fine-tune ID.
+            - ``negative_prompt_terms`` (list[str]): Brand-specific negative terms
+              to append via build_negative_prompt(extra_terms=...).
+    """
+    _safe_heartbeat()
+
+    if not SUPABASE_URL or not SUPABASE_ANON_KEY:
+        logger.warning(
+            "[fetch_brand_params] SUPABASE_URL or SUPABASE_ANON_KEY not configured — "
+            "returning empty brand params for client_id=%s", client_id
+        )
+        return {"recraft_style_id": None, "negative_prompt_terms": []}
+
+    auth_token = user_access_token if user_access_token else SUPABASE_ANON_KEY
+    headers = {
+        "apikey": SUPABASE_ANON_KEY,
+        "Authorization": f"Bearer {auth_token}",
+        "Accept": "application/json",
+    }
+    url = (
+        f"{SUPABASE_URL.rstrip('/')}/rest/v1/brand_profiles"
+        f"?client_id=eq.{client_id}"
+        f"&select=recraft_style_id,negative_prompt_terms"
+        f"&limit=1"
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.get(url, headers=headers)
+            response.raise_for_status()
+            rows = response.json()
+    except Exception as exc:
+        logger.error(
+            "[fetch_brand_params] Supabase request failed for client_id=%s: %s",
+            client_id, exc,
+        )
+        return {"recraft_style_id": None, "negative_prompt_terms": []}
+
+    if not rows:
+        logger.warning(
+            "[fetch_brand_params] No brand_profiles row found for client_id=%s — "
+            "proceeding without brand conditioning", client_id
+        )
+        return {"recraft_style_id": None, "negative_prompt_terms": []}
+
+    row = rows[0]
+    recraft_style_id: Optional[str] = row.get("recraft_style_id") or None
+    negative_prompt_terms: List[str] = row.get("negative_prompt_terms") or []
+
+    if not recraft_style_id:
+        logger.warning(
+            "[fetch_brand_params] client_id=%s has no recraft_style_id — "
+            "Recraft brand-style conditioning will not be applied. "
+            "Complete the brand kit in the UI to enable style conditioning.",
+            client_id,
+        )
+    else:
+        logger.info(
+            "[fetch_brand_params] client_id=%s → recraft_style_id=%s, "
+            "%d extra negative terms",
+            client_id, recraft_style_id, len(negative_prompt_terms),
+        )
+
+    return {
+        "recraft_style_id": recraft_style_id,
+        "negative_prompt_terms": negative_prompt_terms,
+    }

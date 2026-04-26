@@ -115,6 +115,7 @@ with workflow.unsafe.imports_passed_through():
         send_upscale_completion_webhook,
         persist_scene_prompts,
         generate_talking_head_video,
+        fetch_brand_image_params,
     )
     from videomerge.services.brand_prompt import (
         build_negative_prompt,
@@ -142,6 +143,8 @@ class ProcessSceneWorkflow:
         audio_start_seconds: float | None = None,
         audio_duration_seconds: float | None = None,
         voiceover_path: str | None = None,
+        recraft_style_id: str | None = None,
+        negative_prompt_terms: list[str] | None = None,
     ) -> list[str]:
         """Workflow to process a single scene (image -> video)."""
         # Log parent workflow info for correlation
@@ -179,8 +182,12 @@ class ProcessSceneWorkflow:
                     image_model = scene_classification.get("image_model") if scene_classification else None
 
                     if use_fal_image and image_model:
-                        _negative_prompt = build_negative_prompt()
-                        workflow.logger.info(f"[ProcessSceneWorkflow] Using Fal for image generation, model={image_model}")
+                        _negative_prompt = build_negative_prompt(extra_terms=negative_prompt_terms or [])
+                        workflow.logger.info(
+                            "[ProcessSceneWorkflow] Using Fal for image generation, model=%s, "
+                            "has_style_id=%s, extra_negative_terms=%d",
+                            image_model, bool(recraft_style_id), len(negative_prompt_terms or []),
+                        )
                         image_job_id = await workflow.execute_activity(
                             start_image_generation_provider,
                             args=[
@@ -191,6 +198,7 @@ class ProcessSceneWorkflow:
                                 image_height,
                                 index,
                                 _negative_prompt,
+                                recraft_style_id,
                             ],
                             start_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
                             retry_policy=scene_retry_policy,
@@ -531,6 +539,21 @@ class VideoGenerationWorkflow:
             parent_workflow_id = workflow.info().workflow_id
             parent_run_id = workflow.info().run_id
 
+            # Fetch brand image params (recraft_style_id + negative_prompt_terms).
+            # Runs as a Temporal activity so the workflow itself stays I/O-free.
+            _recraft_style_id: str | None = None
+            _negative_prompt_terms: list[str] | None = None
+            if req.client_id:
+                _brand_params = await workflow.execute_activity(
+                    fetch_brand_image_params,
+                    args=[req.client_id, req.user_access_token],
+                    start_to_close_timeout=timedelta(seconds=30),
+                    retry_policy=RetryPolicy(maximum_attempts=3),
+                )
+                _recraft_style_id = _brand_params.get("recraft_style_id")
+                _terms = _brand_params.get("negative_prompt_terms") or []
+                _negative_prompt_terms = _terms if _terms else None
+
             # Compute cumulative audio offsets per scene (for talking_head routing).
             # When the brief carries per-scene duration_seconds, use those directly.
             # Otherwise assume equal distribution of the voiceover across scenes.
@@ -588,6 +611,8 @@ class VideoGenerationWorkflow:
                         _audio_start,
                         _audio_dur,
                         voiceover_path,
+                        _recraft_style_id,
+                        _negative_prompt_terms,
                     ],
                     id=child_id,
                     memo={
@@ -921,6 +946,20 @@ class ImageGenerationWorkflow:
                     )
                 image_prompts.append((index, image_prompt))
 
+            # Fetch brand image params when a client_id is available.
+            _img_recraft_style_id: str | None = None
+            _img_negative_prompt_terms: list[str] | None = None
+            if req.client_id:
+                _img_brand_params = await workflow.execute_activity(
+                    fetch_brand_image_params,
+                    args=[req.client_id, None],
+                    start_to_close_timeout=timedelta(seconds=30),
+                    retry_policy=RetryPolicy(maximum_attempts=3),
+                )
+                _img_recraft_style_id = _img_brand_params.get("recraft_style_id")
+                _img_terms = _img_brand_params.get("negative_prompt_terms") or []
+                _img_negative_prompt_terms = _img_terms if _img_terms else None
+
             # Generate images using Fal or ComfyUI based on classification
             image_job_tasks = []
             for index, image_prompt in image_prompts:
@@ -929,11 +968,16 @@ class ImageGenerationWorkflow:
                 image_model = classification.get("image_model") if classification else None
 
                 if use_fal and image_model:
-                    workflow.logger.info(f"[ImageGenerationWorkflow] Using Fal for scene {index}, model={image_model}")
+                    _img_neg_prompt = build_negative_prompt(extra_terms=_img_negative_prompt_terms or [])
+                    workflow.logger.info(
+                        "[ImageGenerationWorkflow] Using Fal for scene %d, model=%s, has_style_id=%s",
+                        index, image_model, bool(_img_recraft_style_id),
+                    )
                     image_job_tasks.append(
                         workflow.start_activity(
                             start_image_generation_provider,
-                            args=["fal", image_prompt, image_model, image_width, image_height, index],
+                            args=["fal", image_prompt, image_model, image_width, image_height, index,
+                                  _img_neg_prompt, _img_recraft_style_id],
                             start_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
                             retry_policy=image_retry_policy,
                         )
