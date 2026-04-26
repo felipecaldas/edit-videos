@@ -14,6 +14,7 @@ for all scenes in the platform brief.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Dict, List, Literal, Optional
 
 import httpx
@@ -31,6 +32,45 @@ from videomerge.models import Brief
 from videomerge.utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+# Deterministic pre-filter: scene descriptions containing these keywords always require
+# image_prompt_override so the LLM cannot silently skip it.
+_UI_KEYWORD_RE = re.compile(
+    r"\b(screen|dashboard|UI|software|app|browser|interface|font|logo|statistics|"
+    r"percentage|headline|slogan|CTA)\b",
+    re.IGNORECASE,
+)
+
+# JSON Schema for structured OpenRouter output (scene classification array).
+_SCENE_CLASSIFICATION_RESPONSE_FORMAT = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "scene_classifications",
+        "strict": False,
+        "schema": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": [
+                    "scene_index", "scene_type", "is_text_heavy", "image_provider",
+                    "image_model", "skip_image_generation", "prominent_text_overlay",
+                    "image_prompt_override", "reasoning",
+                ],
+                "properties": {
+                    "scene_index": {"type": "integer"},
+                    "scene_type": {"type": "string", "enum": ["talking_head", "concept_visual", "brand_card"]},
+                    "is_text_heavy": {"type": "boolean"},
+                    "image_provider": {"type": "string", "enum": ["fal", "runpod"]},
+                    "image_model": {"type": "string"},
+                    "skip_image_generation": {"type": "boolean"},
+                    "prominent_text_overlay": {},
+                    "image_prompt_override": {},
+                    "reasoning": {"type": "string"},
+                },
+            },
+        },
+    },
+}
 
 
 class TextOverlay(BaseModel):
@@ -53,6 +93,38 @@ class SceneClassification(BaseModel):
     prominent_text_overlay: Optional[TextOverlay] = None
     reasoning: str = ""
     image_prompt_override: Optional[str] = None
+
+
+def _ui_pre_filter(descriptions: List[str]) -> set:
+    """Return indices of descriptions that contain UI/screen keywords."""
+    return {i for i, d in enumerate(descriptions) if _UI_KEYWORD_RE.search(d or "")}
+
+
+def _enforce_ui_overrides(
+    classifications: List[SceneClassification],
+    ui_matched_indices: set,
+) -> None:
+    """Force is_text_heavy and ensure image_prompt_override for UI-keyword scenes.
+
+    If the LLM silently omitted an override for a pre-filtered scene, apply a
+    deterministic templated fallback and log loudly so the failure is visible.
+    """
+    for cls in classifications:
+        if cls.scene_index not in ui_matched_indices:
+            continue
+        cls.is_text_heavy = True
+        if not cls.image_prompt_override:
+            fallback = (
+                "Abstract concept visualization conveying digital productivity and workflow, "
+                "cinematic overhead perspective, warm natural textures, no screens, no software "
+                "interfaces, no UI elements, no text overlays"
+            )
+            logger.warning(
+                "[classifier] FALLBACK OVERRIDE applied — scene %d: UI keyword matched but "
+                "LLM emitted no image_prompt_override. Forcing deterministic fallback.",
+                cls.scene_index,
+            )
+            cls.image_prompt_override = fallback
 
 
 def classify_scenes(brief: Brief, platform: str) -> List[SceneClassification]:
@@ -88,22 +160,31 @@ def classify_scenes(brief: Brief, platform: str) -> List[SceneClassification]:
         "[classifier] Classifying %d scenes for platform=%s, provider=%s, model=%s",
         num_scenes, platform, SCENE_CLASSIFIER_PROVIDER, SCENE_CLASSIFIER_MODEL
     )
-    
+
+    # Deterministic pre-filter: find scenes requiring image_prompt_override
+    scene_descriptions = [s.visual_description or "" for s in platform_brief.scenes]
+    ui_matched = _ui_pre_filter(scene_descriptions)
+    if ui_matched:
+        logger.info("[classifier] UI pre-filter matched scene indices: %s", sorted(ui_matched))
+
     # Build LLM prompt
     system_prompt = _build_system_prompt()
     user_prompt = _build_user_prompt(brief, platform, num_scenes)
-    
+
     # Call LLM
     try:
         llm_response = _call_llm(system_prompt, user_prompt)
         classifications = _parse_llm_response(llm_response, num_scenes)
-        
+
         # Validate and enforce allowlist
         _validate_classifications(classifications, num_scenes)
-        
+
+        # Post-validate: enforce overrides for UI-keyword scenes
+        _enforce_ui_overrides(classifications, ui_matched)
+
         logger.info("[classifier] Successfully classified %d scenes", len(classifications))
         return classifications
-        
+
     except Exception as e:
         logger.error("[classifier] Classification failed: %s", e)
         raise RuntimeError(f"Scene classification failed: {e}") from e
@@ -184,6 +265,28 @@ Output strict JSON array matching this schema:
   }}
 ]
 
+Few-shot examples of the exact failure modes to avoid:
+
+Scene: "Screencast of a project management dashboard with colourful Kanban columns"
+✗ WRONG — image_prompt_override: null  (silent skip — never do this)
+✓ CORRECT — image_prompt_override: "Birds-eye view of a wooden desk covered in colour-coded sticky notes
+  arranged in columns, warm morning light, analogue productivity, no screens"
+
+Scene: "Split-screen showing two people on a video call with workflow tool panels visible"
+✗ WRONG — scene_type: "talking_head"  (misclassified because two people are present)
+✓ CORRECT — scene_type: "concept_visual", image_prompt_override: "Two professionals collaborating
+  side-by-side at a shared table in a bright modern office, pointing at documents, engaged discussion"
+
+Scene: "UI mockup of the app home screen displaying different fonts and colors"
+✗ WRONG — image_prompt_override: null, is_text_heavy: false
+✓ CORRECT — is_text_heavy: true, image_prompt_override: "Abstract arrangement of colourful geometric
+  shapes on a clean white surface, typography-inspired design, studio lighting, no screens or UI"
+
+Scene: "Close-up of a browser tab with the app's analytics page, showing statistics and a headline"
+✗ WRONG — image_prompt_override: null
+✓ CORRECT — is_text_heavy: true, image_prompt_override: "Macro shot of a sleek desk with a printed
+  chart and a pen, shallow depth of field, professional office environment, no screens"
+
 CRITICAL: Output ONLY the JSON array. No markdown, no explanation, no code fences."""
 
 
@@ -230,6 +333,7 @@ def _call_llm(system_prompt: str, user_prompt: str) -> str:
         ],
         "temperature": 0.5,
         "max_tokens": 4000,
+        "response_format": _SCENE_CLASSIFICATION_RESPONSE_FORMAT,
     }
     
     logger.debug("[classifier] Calling OpenRouter with model=%s", SCENE_CLASSIFIER_MODEL)
@@ -422,6 +526,14 @@ def classify_scenes_from_script(
     if num_scenes == 0:
         return []
 
+    # Deterministic pre-filter: find scenes requiring image_prompt_override
+    scene_descriptions = [
+        s.get("image_prompt") or s.get("video_prompt") or "" for s in scenes
+    ]
+    ui_matched = _ui_pre_filter(scene_descriptions)
+    if ui_matched:
+        logger.info("[classifier] UI pre-filter matched scene indices: %s", sorted(ui_matched))
+
     # Build LLM prompt for script+scenes classification
     system_prompt = _build_system_prompt_script_based()
     user_prompt = _build_user_prompt_script_based(script, scenes)
@@ -433,6 +545,9 @@ def classify_scenes_from_script(
 
         # Validate and enforce allowlist
         _validate_classifications(classifications, num_scenes)
+
+        # Post-validate: enforce overrides for UI-keyword scenes
+        _enforce_ui_overrides(classifications, ui_matched)
 
         logger.info("[classifier] Successfully classified %d scenes from script", len(classifications))
         return classifications
@@ -494,6 +609,23 @@ Output strict JSON array matching this schema:
     "reasoning": "Scene shows a person - z-image-turbo excels at portraits"
   }}
 ]
+
+Few-shot examples of the exact failure modes to avoid:
+
+Scene: "Screencast of a project management dashboard with colourful Kanban columns"
+✗ WRONG — image_prompt_override: null  (silent skip — never do this)
+✓ CORRECT — image_prompt_override: "Birds-eye view of a wooden desk covered in colour-coded sticky notes
+  arranged in columns, warm morning light, analogue productivity, no screens"
+
+Scene: "Split-screen showing two people on a video call with workflow tool panels visible"
+✗ WRONG — scene_type: "talking_head"  (misclassified because two people are present)
+✓ CORRECT — scene_type: "concept_visual", image_prompt_override: "Two professionals collaborating
+  side-by-side at a shared table in a bright modern office, pointing at documents, engaged discussion"
+
+Scene: "UI mockup of the app home screen displaying different fonts and colors"
+✗ WRONG — image_prompt_override: null, is_text_heavy: false
+✓ CORRECT — is_text_heavy: true, image_prompt_override: "Abstract arrangement of colourful geometric
+  shapes on a clean white surface, typography-inspired design, studio lighting, no screens or UI"
 
 CRITICAL: Output ONLY the JSON array. No markdown, no explanation, no code fences."""
 

@@ -175,13 +175,8 @@ class ProcessSceneWorkflow:
             image_hint = ""
             if _effective_image_prompt and not _skip_image:
                 try:
-                    # TEMP: force all image generation through Fal for testing.
-                    # Revert by restoring the two lines below to their original form:
-                    #   use_fal_image = scene_classification and scene_classification.get("image_provider") == "fal"
-                    #   image_model = scene_classification.get("image_model") if scene_classification else None
-                    use_fal_image = True
-                    _raw_model = _cls.get("image_model") if _cls else None
-                    image_model = _raw_model if (_raw_model and not _raw_model.startswith("z-image-")) else FAL_IMAGE_DEFAULT
+                    use_fal_image = scene_classification and scene_classification.get("image_provider") == "fal"
+                    image_model = scene_classification.get("image_model") if scene_classification else None
 
                     if use_fal_image and image_model:
                         _negative_prompt = build_negative_prompt()
@@ -252,7 +247,24 @@ class ProcessSceneWorkflow:
                 workflow.logger.warning(f"Skipping scene {index} as no image was generated.")
                 return []
 
-            # 2a. Talking-head branch: use echomimic-v3 instead of Wan2.2
+            # 2a. Talking-head branch: use echomimic-v3 instead of Wan2.2.
+            # Fail loudly if any required audio field is missing — silent fallthrough to Wan2.2
+            # is never correct for talking_head scenes.
+            if _scene_type == "talking_head":
+                missing = [
+                    name for name, val in (
+                        ("voiceover_path", voiceover_path),
+                        ("audio_start_seconds", audio_start_seconds),
+                        ("audio_duration_seconds", audio_duration_seconds),
+                    ) if val is None
+                ]
+                if missing:
+                    raise ApplicationError(
+                        f"Scene {index} is talking_head but required audio field(s) are null: "
+                        f"{missing}. Cannot route to echomimic-v3.",
+                        non_retryable=True,
+                    )
+
             if (
                 _scene_type == "talking_head"
                 and audio_start_seconds is not None
