@@ -9,6 +9,7 @@ from typing import List
 
 from videomerge.models import (
     Brief,
+    BrandKitRef,
     PlatformBriefModel,
     PromptItem,
     SceneBrief,
@@ -62,8 +63,10 @@ def build_image_prompt(
 ) -> str:
     """Build an enriched image-generation prompt for a scene.
 
-    Combines visual_description with tone, mood, color_feel, shot_style,
-    and branding_elements, skipping any falsy segments.
+    Combines visual_description with tone, mood, color_feel, and shot_style,
+    skipping any falsy segments. Brand identity (logos, typography, product
+    motifs) is intentionally excluded — it is applied by the rendering
+    pipeline via BrandKitRef, not baked into the image-model prompt.
 
     Args:
         scene: The SceneBrief for this scene.
@@ -89,8 +92,6 @@ def build_image_prompt(
             segments.append(vd.color_feel)
         if vd.shot_style:
             segments.append(vd.shot_style)
-        if vd.branding_elements:
-            segments.append(vd.branding_elements)
 
     return ", ".join(segments)
 
