@@ -420,6 +420,18 @@ def _parse_llm_response(response: str, expected_count: int) -> List[SceneClassif
                 item["image_model"] = FAL_IMAGE_DEFAULT
             if not item.get("scene_type"):
                 item["scene_type"] = "concept_visual"
+            # Some LLMs double-encode nested objects as JSON strings. Unwrap them.
+            for field in ("prominent_text_overlay", "image_prompt_override"):
+                val = item.get(field)
+                if isinstance(val, str) and val.strip().startswith("{"):
+                    try:
+                        item[field] = json.loads(val)
+                    except json.JSONDecodeError:
+                        logger.warning(
+                            "[classifier] Field %r in scene %s is a non-parseable JSON string — setting to None",
+                            field, item.get("scene_index"),
+                        )
+                        item[field] = None
 
         classifications = [SceneClassification(**item) for item in data]
         
