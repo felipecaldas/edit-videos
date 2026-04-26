@@ -5,7 +5,8 @@ and compose enriched image/video prompts from the Brief data structure.
 Safe to call from Temporal workflow code (no I/O).
 """
 
-from typing import List
+import re
+from typing import List, Optional
 
 from videomerge.models import (
     Brief,
@@ -15,6 +16,28 @@ from videomerge.models import (
     SceneBrief,
     VisualDirection,
 )
+
+# Curated negative-prompt terms that prevent the most common image-model failure
+# modes: hallucinated brand marks, fake UIs, distorted text, and quality issues.
+# These are applied on every Fal call regardless of brand. Brand-specific terms
+# (from brand_profiles.negative_prompt_terms) are appended on top via
+# build_negative_prompt(extra_terms=...) once Phase 1 columns exist.
+_DEFAULT_NEGATIVE_TERMS: List[str] = [
+    "blurry",
+    "low quality",
+    "watermark",
+    "text artifacts",
+    "distorted logo",
+    "misspelled words",
+    "wrong logo",
+    "fake UI",
+    "fictional interface",
+    "hallucinated brand",
+    "incorrect typography",
+    "fabricated product screen",
+    "on-screen text",
+    "floating text",
+]
 
 
 def resolve_platform_brief(brief: Brief, platform: str) -> PlatformBriefModel:
@@ -58,6 +81,60 @@ def build_script_from_brief(pb: PlatformBriefModel) -> str:
     return " ".join(segments).strip()
 
 
+def build_negative_prompt(extra_terms: Optional[List[str]] = None) -> str:
+    """Build a negative prompt for image generation.
+
+    Combines the curated default terms (which block hallucinated brand marks,
+    fake UIs, and quality issues) with optional brand-specific terms.
+    Once Phase 1 schema columns exist, callers should pass
+    ``brand_profiles.negative_prompt_terms`` as ``extra_terms``.
+
+    Args:
+        extra_terms: Optional brand-specific negative terms (e.g. from
+            brand_profiles.negative_prompt_terms). Duplicates are skipped.
+
+    Returns:
+        Comma-joined negative prompt string ready for Fal's negative_prompt arg.
+    """
+    terms = list(_DEFAULT_NEGATIVE_TERMS)
+    if extra_terms:
+        seen = set(terms)
+        for t in extra_terms:
+            if not t:
+                continue
+            t = str(t).strip()
+            if t and t not in seen:
+                terms.append(t)
+                seen.add(t)
+    return ", ".join(terms)
+
+
+def sanitize_visual_description(text: str, brand_name: Optional[str] = None) -> str:
+    """Strip literal brand-name tokens from a visual description.
+
+    Defensive guard against any residual brand text that slipped through the
+    n8n Brief Generation rules (Phase 2). Called before composing the image
+    prompt so no brand identifier reaches the image model as a text token.
+
+    When brand_name is None (no brand resolved yet), the function is a no-op —
+    the text is returned unchanged. This allows the call to be wired in now
+    and activated automatically once brand resolution is available.
+
+    Args:
+        text: Raw visual_description from the Brief.
+        brand_name: Case-insensitive brand name to remove (e.g. 'Tabario').
+            Pass None to skip sanitization.
+
+    Returns:
+        Sanitized string with brand tokens removed and whitespace normalized.
+    """
+    if not brand_name or not text:
+        return text
+    pattern = re.compile(r"\b" + re.escape(brand_name) + r"\b", re.IGNORECASE)
+    sanitized = pattern.sub("", text)
+    return re.sub(r"\s{2,}", " ", sanitized).strip()
+
+
 def build_image_prompt(
     scene: SceneBrief, pb: PlatformBriefModel, brief: Brief
 ) -> str:
@@ -79,7 +156,7 @@ def build_image_prompt(
     segments = []
 
     if scene.visual_description:
-        segments.append(scene.visual_description)
+        segments.append(sanitize_visual_description(scene.visual_description))
 
     if pb.tone:
         segments.append(pb.tone)

@@ -61,28 +61,41 @@ class FalClient:
         model: str,
         width: int,
         height: int,
+        negative_prompt: Optional[str] = None,
+        style_id: Optional[str] = None,
         **kwargs
     ) -> str:
         """Submit a text-to-image generation job.
-        
+
         Args:
-            prompt: Image generation prompt
-            model: Fal model ID (e.g., "fal-ai/flux/dev")
-            width: Image width in pixels (must be multiple of 8)
-            height: Image height in pixels (must be multiple of 8)
-            **kwargs: Additional model-specific parameters
-        
+            prompt: Image generation prompt.
+            model: Fal model ID (e.g., "fal-ai/recraft-v3").
+            width: Image width in pixels (must be multiple of 8).
+            height: Image height in pixels (must be multiple of 8).
+            negative_prompt: Optional negative prompt. Passed as-is to Fal;
+                build with brand_prompt.build_negative_prompt() for brand-aware
+                negative terms.
+            style_id: Optional Recraft brand-style fine-tune ID. When provided,
+                Recraft applies the pre-trained brand style to every generated
+                frame. Stored on brand_profiles.recraft_style_id once Phase 1
+                schema lands.
+            **kwargs: Additional model-specific parameters.
+
         Returns:
-            Request ID for polling
+            Request ID for polling.
         """
         start_time = time.time()
-        
+
         try:
             arguments = {
                 "prompt": prompt,
                 "image_size": {"width": width, "height": height},
                 **kwargs
             }
+            if negative_prompt:
+                arguments["negative_prompt"] = negative_prompt
+            if style_id:
+                arguments["style_id"] = style_id
             
             logger.info(
                 "[fal] Submitting text-to-image: model=%s, size=%dx%d",

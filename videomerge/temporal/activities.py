@@ -1881,34 +1881,47 @@ async def start_image_generation_provider(
     width: int,
     height: int,
     index: int,
+    negative_prompt: Optional[str] = None,
+    style_id: Optional[str] = None,
     **kwargs
 ) -> str:
     """Submit image generation job to specified provider.
-    
+
     Args:
-        provider: Provider name ("fal" or "runpod")
-        prompt_text: Image generation prompt
-        model: Model identifier
-        width: Image width
-        height: Image height
-        index: Scene index
-        **kwargs: Provider-specific parameters
-    
+        provider: Provider name ("fal" or "runpod").
+        prompt_text: Image generation prompt.
+        model: Model identifier.
+        width: Image width in pixels.
+        height: Image height in pixels.
+        index: Scene index (for logging).
+        negative_prompt: Optional negative prompt built from
+            brand_prompt.build_negative_prompt(). Defaults to None (no
+            negative prompt).
+        style_id: Optional Recraft brand-style fine-tune ID from
+            brand_profiles.recraft_style_id. Defaults to None until
+            Phase 1 schema columns exist.
+        **kwargs: Additional provider-specific parameters.
+
     Returns:
-        Job ID
+        Job ID string.
     """
     _safe_heartbeat()
-    logger.info(f"[start_image_{provider}] Submitting for scene {index}, model={model}")
-    
+    logger.info(
+        f"[start_image_{provider}] Submitting scene {index}, model={model}, "
+        f"has_negative_prompt={bool(negative_prompt)}, has_style_id={bool(style_id)}"
+    )
+
     provider_instance = get_image_provider(provider)
     job_id = await provider_instance.submit_text_to_image(
         prompt=prompt_text,
         model=model,
         width=width,
         height=height,
+        negative_prompt=negative_prompt,
+        style_id=style_id,
         **kwargs
     )
-    
+
     logger.info(f"[start_image_{provider}] Job submitted: {job_id}")
     return job_id
 

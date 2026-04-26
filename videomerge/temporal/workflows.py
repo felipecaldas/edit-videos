@@ -117,6 +117,7 @@ with workflow.unsafe.imports_passed_through():
         generate_talking_head_video,
     )
     from videomerge.services.brand_prompt import (
+        build_negative_prompt,
         build_prompt_items,
         resolve_platform_brief,
     )
@@ -183,6 +184,7 @@ class ProcessSceneWorkflow:
                     image_model = _raw_model if (_raw_model and not _raw_model.startswith("z-image-")) else FAL_IMAGE_DEFAULT
 
                     if use_fal_image and image_model:
+                        _negative_prompt = build_negative_prompt()
                         workflow.logger.info(f"[ProcessSceneWorkflow] Using Fal for image generation, model={image_model}")
                         image_job_id = await workflow.execute_activity(
                             start_image_generation_provider,
@@ -193,6 +195,7 @@ class ProcessSceneWorkflow:
                                 image_width,
                                 image_height,
                                 index,
+                                _negative_prompt,
                             ],
                             start_to_close_timeout=timedelta(minutes=TEMPORAL_IMAGE_GENERATION_TIMEOUT_MINUTES),
                             retry_policy=scene_retry_policy,

@@ -26,6 +26,8 @@ class FalProvider(MediaProvider):
         model: str,
         width: int,
         height: int,
+        negative_prompt: str | None = None,
+        style_id: str | None = None,
         **kwargs
     ) -> str:
         """Submit text-to-image job to Fal."""
@@ -34,6 +36,8 @@ class FalProvider(MediaProvider):
             model=model,
             width=width,
             height=height,
+            negative_prompt=negative_prompt,
+            style_id=style_id,
             **kwargs
         )
 

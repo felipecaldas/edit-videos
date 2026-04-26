@@ -7,21 +7,53 @@ import pytest
 
 from videomerge.models import Brief, PlatformBriefModel, SceneBrief, VisualDirection
 from videomerge.services.brand_prompt import (
+    _DEFAULT_NEGATIVE_TERMS,
     aspect_ratio_to_video_format,
     build_image_prompt,
+    build_negative_prompt,
     build_prompt_items,
     build_script_from_brief,
     build_video_prompt,
     resolve_platform_brief,
+    sanitize_visual_description,
     scene_length_frames,
 )
 
 
-class TestResolvePlatformBrief:
-    """Tests for resolve_platform_brief function."""
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
+def _make_scene(
+    number: int = 1,
+    spoken_line: str = "Test",
+    caption: str = "Caption",
+    duration: float = 1.0,
+    visual: str = "A founder at a desk",
+) -> SceneBrief:
+    return SceneBrief(
+        scene_number=number,
+        spoken_line=spoken_line,
+        caption_text=caption,
+        duration_seconds=duration,
+        visual_description=visual,
+    )
+
+
+def _make_pb(tone: str = "confident, conversational", scenes=None) -> PlatformBriefModel:
+    return PlatformBriefModel(
+        platform="LinkedIn",
+        tone=tone,
+        scenes=scenes or [],
+    )
+
+
+# ---------------------------------------------------------------------------
+# resolve_platform_brief
+# ---------------------------------------------------------------------------
+
+class TestResolvePlatformBrief:
     def test_hit_returns_matching_platform(self):
-        """Returns the matching platform brief when found."""
         brief = Brief(
             platform_briefs=[
                 PlatformBriefModel(platform="LinkedIn", scenes=[]),
@@ -32,214 +64,193 @@ class TestResolvePlatformBrief:
         assert result.platform == "LinkedIn"
 
     def test_miss_raises_value_error(self):
-        """Raises ValueError when platform not found."""
-        brief = Brief(
-            platform_briefs=[
-                PlatformBriefModel(platform="LinkedIn", scenes=[]),
-            ]
-        )
+        brief = Brief(platform_briefs=[PlatformBriefModel(platform="LinkedIn", scenes=[])])
         with pytest.raises(ValueError) as exc_info:
             resolve_platform_brief(brief, "TikTok")
         assert "Platform 'TikTok' not found" in str(exc_info.value)
         assert "LinkedIn" in str(exc_info.value)
 
     def test_case_insensitive_match(self):
-        """Matches platform case-insensitively."""
-        brief = Brief(
-            platform_briefs=[
-                PlatformBriefModel(platform="LinkedIn", scenes=[]),
-            ]
-        )
-        result = resolve_platform_brief(brief, "linkedin")
-        assert result.platform == "LinkedIn"
+        brief = Brief(platform_briefs=[PlatformBriefModel(platform="LinkedIn", scenes=[])])
+        assert resolve_platform_brief(brief, "linkedin").platform == "LinkedIn"
+        assert resolve_platform_brief(brief, "LINKEDIN").platform == "LinkedIn"
 
-        result = resolve_platform_brief(brief, "LINKEDIN")
-        assert result.platform == "LinkedIn"
 
+# ---------------------------------------------------------------------------
+# build_script_from_brief
+# ---------------------------------------------------------------------------
 
 class TestBuildScriptFromBrief:
-    """Tests for build_script_from_brief function."""
-
     def test_concatenates_spoken_lines(self):
-        """Joins all spoken lines with spaces."""
-        pb = PlatformBriefModel(
-            platform="LinkedIn",
+        pb = _make_pb(
             scenes=[
-                SceneBrief(
-                    scene_number=1,
-                    spoken_line="First line.",
-                    caption_text="Caption 1",
-                    duration_seconds=1.0,
-                    visual_description="Visual 1",
-                ),
-                SceneBrief(
-                    scene_number=2,
-                    spoken_line="Second line.",
-                    caption_text="Caption 2",
-                    duration_seconds=1.0,
-                    visual_description="Visual 2",
-                ),
-            ],
+                _make_scene(1, spoken_line="First line."),
+                _make_scene(2, spoken_line="Second line."),
+            ]
         )
-        result = build_script_from_brief(pb)
-        assert result == "First line. Second line."
+        assert build_script_from_brief(pb) == "First line. Second line."
 
     def test_handles_empty_spoken_lines(self):
-        """Skips empty spoken_line values."""
-        pb = PlatformBriefModel(
-            platform="LinkedIn",
+        pb = _make_pb(
             scenes=[
-                SceneBrief(
-                    scene_number=1,
-                    spoken_line="First line.",
-                    caption_text="Caption 1",
-                    duration_seconds=1.0,
-                    visual_description="Visual 1",
-                ),
-                SceneBrief(
-                    scene_number=2,
-                    spoken_line="",
-                    caption_text="Caption 2",
-                    duration_seconds=1.0,
-                    visual_description="Visual 2",
-                ),
-                SceneBrief(
-                    scene_number=3,
-                    spoken_line="Third line.",
-                    caption_text="Caption 3",
-                    duration_seconds=1.0,
-                    visual_description="Visual 3",
-                ),
-            ],
+                _make_scene(1, spoken_line="First line."),
+                _make_scene(2, spoken_line=""),
+                _make_scene(3, spoken_line="Third line."),
+            ]
         )
-        result = build_script_from_brief(pb)
-        assert result == "First line. Third line."
+        assert build_script_from_brief(pb) == "First line. Third line."
 
     def test_trims_whitespace(self):
-        """Trims leading and trailing whitespace."""
-        pb = PlatformBriefModel(
-            platform="LinkedIn",
-            scenes=[
-                SceneBrief(
-                    scene_number=1,
-                    spoken_line="  First line.  ",
-                    caption_text="Caption 1",
-                    duration_seconds=1.0,
-                    visual_description="Visual 1",
-                ),
-            ],
-        )
-        result = build_script_from_brief(pb)
-        assert result == "First line."
+        pb = _make_pb(scenes=[_make_scene(1, spoken_line="  First line.  ")])
+        assert build_script_from_brief(pb) == "First line."
 
+
+# ---------------------------------------------------------------------------
+# build_negative_prompt
+# ---------------------------------------------------------------------------
+
+class TestBuildNegativePrompt:
+    def test_returns_non_empty_string(self):
+        result = build_negative_prompt()
+        assert isinstance(result, str)
+        assert len(result) > 0
+
+    def test_contains_all_default_terms(self):
+        result = build_negative_prompt()
+        for term in _DEFAULT_NEGATIVE_TERMS:
+            assert term in result, f"Default term '{term}' missing from negative prompt"
+
+    def test_comma_separated(self):
+        result = build_negative_prompt()
+        assert ", " in result
+
+    def test_extra_terms_appended(self):
+        result = build_negative_prompt(extra_terms=["corporate stock photo", "generic office"])
+        assert "corporate stock photo" in result
+        assert "generic office" in result
+
+    def test_duplicate_extra_terms_deduplicated(self):
+        # "blurry" is already in defaults — should not appear twice
+        result = build_negative_prompt(extra_terms=["blurry", "new term"])
+        terms = [t.strip() for t in result.split(",")]
+        assert terms.count("blurry") == 1
+
+    def test_empty_extra_terms_ignored(self):
+        result = build_negative_prompt(extra_terms=["", "  ", None])  # type: ignore[list-item]
+        # Should not raise and should not add empty entries
+        for term in result.split(", "):
+            assert term.strip() != ""
+
+    def test_none_extra_terms_same_as_defaults(self):
+        assert build_negative_prompt(None) == build_negative_prompt()
+
+
+# ---------------------------------------------------------------------------
+# sanitize_visual_description
+# ---------------------------------------------------------------------------
+
+class TestSanitizeVisualDescription:
+    def test_no_brand_name_returns_unchanged(self):
+        text = "A founder at a desk at night"
+        assert sanitize_visual_description(text) == text
+
+    def test_strips_brand_name_case_insensitive(self):
+        result = sanitize_visual_description("A Tabario dashboard UI shot", "Tabario")
+        assert "Tabario" not in result
+        assert "tabario" not in result.lower() or "Tabario" not in result
+
+    def test_strips_brand_name_mixed_case(self):
+        result = sanitize_visual_description("TABARIO logo appears", "Tabario")
+        assert "TABARIO" not in result
+
+    def test_normalises_extra_whitespace(self):
+        result = sanitize_visual_description("A  Tabario  logo", "Tabario")
+        assert "  " not in result
+
+    def test_empty_text_returns_empty(self):
+        assert sanitize_visual_description("", "Tabario") == ""
+
+    def test_none_brand_name_no_op(self):
+        text = "Tabario dashboard scene"
+        assert sanitize_visual_description(text, None) == text
+
+    def test_does_not_strip_partial_word(self):
+        # "Tabario" should not strip "Tabarios" or "preTabario" — word boundary
+        result = sanitize_visual_description("Tabarios and Tabario tools", "Tabario")
+        # "Tabario" (exact word) is removed; "Tabarios" is NOT a whole-word match
+        assert "Tabarios" in result
+
+
+# ---------------------------------------------------------------------------
+# build_image_prompt
+# ---------------------------------------------------------------------------
 
 class TestBuildImagePrompt:
-    """Tests for build_image_prompt function."""
-
-    def test_all_fields_included(self):
-        """Includes all visual fields when present."""
+    def test_includes_all_cinematic_fields(self):
         brief = Brief(
             visual_direction=VisualDirection(
                 mood="optimistic",
                 color_feel="warm pastels",
                 shot_style="cinematic handheld",
-                branding_elements="Tabario wordmark",
             ),
             platform_briefs=[],
         )
-        pb = PlatformBriefModel(
-            platform="LinkedIn",
-            tone="confident, conversational",
-            scenes=[],
-        )
-        scene = SceneBrief(
-            scene_number=1,
-            spoken_line="Test",
-            caption_text="Test",
-            duration_seconds=1.0,
-            visual_description="A founder at a desk",
-        )
+        pb = _make_pb(tone="confident, conversational")
+        scene = _make_scene(visual="A founder at a desk")
         result = build_image_prompt(scene, pb, brief)
         assert "A founder at a desk" in result
         assert "confident, conversational" in result
         assert "optimistic" in result
         assert "warm pastels" in result
         assert "cinematic handheld" in result
-        assert "Tabario wordmark" in result
+
+    def test_never_contains_branding_elements(self):
+        """branding_elements was removed from VisualDirection — image prompts must never carry it."""
+        brief = Brief(platform_briefs=[])
+        pb = _make_pb()
+        scene = _make_scene()
+        result = build_image_prompt(scene, pb, brief)
+        assert "Tabario" not in result
+        assert "logo" not in result.lower()
 
     def test_missing_fields_skipped(self):
-        """Skips falsy fields in the output."""
         brief = Brief(platform_briefs=[])
         pb = PlatformBriefModel(platform="LinkedIn", scenes=[])
-        scene = SceneBrief(
-            scene_number=1,
-            spoken_line="Test",
-            caption_text="Test",
-            duration_seconds=1.0,
-            visual_description="A founder at a desk",
-        )
+        scene = _make_scene(visual="A founder at a desk")
         result = build_image_prompt(scene, pb, brief)
         assert result == "A founder at a desk"
 
-    def test_all_fields_combined_with_commas(self):
-        """Combines all visual fields with comma separation."""
+    def test_fields_comma_separated(self):
         brief = Brief(
-            visual_direction=VisualDirection(
-                mood="optimistic",
-                color_feel="warm pastels",
-                shot_style="cinematic",
-                branding_elements="Tabario wordmark",
-            ),
+            visual_direction=VisualDirection(mood="optimistic", color_feel="warm pastels"),
             platform_briefs=[],
         )
-        pb = PlatformBriefModel(
-            platform="LinkedIn",
-            tone="confident",
-            scenes=[],
-        )
-        scene = SceneBrief(
-            scene_number=1,
-            spoken_line="Test",
-            caption_text="Test",
-            duration_seconds=1.0,
-            visual_description="A founder at a desk",
-        )
+        pb = _make_pb(tone="confident")
+        scene = _make_scene(visual="A founder at a desk")
         result = build_image_prompt(scene, pb, brief)
-        # All fields should be present, comma-separated
-        assert "A founder at a desk" in result
-        assert "confident" in result
-        assert "optimistic" in result
-        assert "warm pastels" in result
-        assert "cinematic" in result
-        assert "Tabario wordmark" in result
-        # Should be comma-separated
         assert ", " in result
 
+    def test_sanitize_applied_to_visual_description(self):
+        """sanitize_visual_description is called even when brand_name=None — no-op, no crash."""
+        brief = Brief(platform_briefs=[])
+        pb = _make_pb()
+        scene = _make_scene(visual="A person using a product tool")
+        result = build_image_prompt(scene, pb, brief)
+        assert "A person using a product tool" in result
+
+
+# ---------------------------------------------------------------------------
+# build_video_prompt
+# ---------------------------------------------------------------------------
 
 class TestBuildVideoPrompt:
-    """Tests for build_video_prompt function."""
-
     def test_motion_based_prompt(self):
-        """Creates motion-biased prompt with tone and mood."""
         brief = Brief(
-            visual_direction=VisualDirection(
-                mood="optimistic",
-                color_feel="warm pastels",
-            ),
+            visual_direction=VisualDirection(mood="optimistic", color_feel="warm pastels"),
             platform_briefs=[],
         )
-        pb = PlatformBriefModel(
-            platform="LinkedIn",
-            tone="confident, conversational",
-            scenes=[],
-        )
-        scene = SceneBrief(
-            scene_number=1,
-            spoken_line="Test",
-            caption_text="Test",
-            duration_seconds=1.0,
-            visual_description="A founder at a desk",
-        )
+        pb = _make_pb(tone="confident, conversational")
+        scene = _make_scene()
         result = build_video_prompt(scene, pb, brief)
         assert "A founder at a desk" in result
         assert "confident, conversational" in result
@@ -247,55 +258,27 @@ class TestBuildVideoPrompt:
         assert "warm pastels" in result
 
     def test_carries_tone_and_mood(self):
-        """Includes tone and mood in video prompts."""
-        brief = Brief(
-            visual_direction=VisualDirection(mood="urgent"),
-            platform_briefs=[],
-        )
-        pb = PlatformBriefModel(platform="LinkedIn", tone="professional", scenes=[])
-        scene = SceneBrief(
-            scene_number=1,
-            spoken_line="Test",
-            caption_text="Test",
-            duration_seconds=1.0,
-            visual_description="Test scene",
-        )
+        brief = Brief(visual_direction=VisualDirection(mood="urgent"), platform_briefs=[])
+        pb = _make_pb(tone="professional")
+        scene = _make_scene()
         result = build_video_prompt(scene, pb, brief)
         assert "urgent" in result
         assert "professional" in result
 
 
-class TestBuildPromptItems:
-    """Tests for build_prompt_items function."""
+# ---------------------------------------------------------------------------
+# build_prompt_items
+# ---------------------------------------------------------------------------
 
+class TestBuildPromptItems:
     def test_preserves_scene_order(self):
-        """Returns PromptItems in the same order as scenes."""
         brief = Brief(platform_briefs=[])
-        pb = PlatformBriefModel(
-            platform="LinkedIn",
+        pb = _make_pb(
             scenes=[
-                SceneBrief(
-                    scene_number=1,
-                    spoken_line="First",
-                    caption_text="Caption 1",
-                    duration_seconds=1.0,
-                    visual_description="Scene 1",
-                ),
-                SceneBrief(
-                    scene_number=2,
-                    spoken_line="Second",
-                    caption_text="Caption 2",
-                    duration_seconds=1.0,
-                    visual_description="Scene 2",
-                ),
-                SceneBrief(
-                    scene_number=3,
-                    spoken_line="Third",
-                    caption_text="Caption 3",
-                    duration_seconds=1.0,
-                    visual_description="Scene 3",
-                ),
-            ],
+                _make_scene(1, visual="Scene 1"),
+                _make_scene(2, visual="Scene 2"),
+                _make_scene(3, visual="Scene 3"),
+            ]
         )
         items = build_prompt_items(pb, brief)
         assert len(items) == 3
@@ -304,54 +287,44 @@ class TestBuildPromptItems:
         assert "Scene 3" in items[2].image_prompt
 
 
-class TestAspectRatioToVideoFormat:
-    """Tests for aspect_ratio_to_video_format function."""
+# ---------------------------------------------------------------------------
+# aspect_ratio_to_video_format
+# ---------------------------------------------------------------------------
 
+class TestAspectRatioToVideoFormat:
     def test_known_ratio_1_1(self):
-        """Maps 1:1 to 1:1."""
         assert aspect_ratio_to_video_format("1:1") == "1:1"
 
     def test_known_ratio_9_16(self):
-        """Maps 9:16 to 9:16."""
         assert aspect_ratio_to_video_format("9:16") == "9:16"
 
     def test_known_ratio_16_9(self):
-        """Maps 16:9 to 16:9."""
         assert aspect_ratio_to_video_format("16:9") == "16:9"
 
     def test_unknown_ratio_defaults(self):
-        """Unknown ratios default to 9:16."""
         assert aspect_ratio_to_video_format("4:3") == "9:16"
         assert aspect_ratio_to_video_format("21:9") == "9:16"
         assert aspect_ratio_to_video_format("invalid") == "9:16"
 
 
-class TestSceneLengthFrames:
-    """Tests for scene_length_frames function."""
+# ---------------------------------------------------------------------------
+# scene_length_frames
+# ---------------------------------------------------------------------------
 
+class TestSceneLengthFrames:
     def test_fractional_seconds(self):
-        """Handles fractional seconds correctly."""
-        result = scene_length_frames(2.5, frame_rate=24)
-        assert result == 60
+        assert scene_length_frames(2.5, frame_rate=24) == 60
 
     def test_zero_duration_clamped_to_min(self):
-        """Zero duration clamps to minimum of 16 frames."""
-        result = scene_length_frames(0, frame_rate=24)
-        assert result == 16
+        assert scene_length_frames(0, frame_rate=24) == 16
 
     def test_exceeds_model_max_clamped(self):
-        """Duration exceeding model_max is clamped."""
-        result = scene_length_frames(100, frame_rate=24, model_max=1611)
-        assert result == 1611
+        assert scene_length_frames(100, frame_rate=24, model_max=1611) == 1611
 
     def test_below_min_clamped(self):
-        """Duration below minimum is clamped to 16."""
-        result = scene_length_frames(0.5, frame_rate=24)
-        assert result == 16
+        assert scene_length_frames(0.5, frame_rate=24) == 16
 
     def test_default_parameters(self):
-        """Works with default parameters."""
         result = scene_length_frames(10.0)
         assert result == 240
-        assert result <= 1611
-        assert result >= 16
+        assert 16 <= result <= 1611
