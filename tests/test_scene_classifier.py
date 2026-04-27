@@ -219,6 +219,23 @@ def test_parse_llm_response_invalid_schema():
         _parse_llm_response(response, 1)
 
 
+def test_parse_llm_response_plain_string_text_overlay():
+    """LLM returns prominent_text_overlay as a bare string — should be coerced to None."""
+    response = json.dumps([
+        {
+            "scene_index": 0,
+            "is_text_heavy": True,
+            "image_provider": "runpod",
+            "image_model": "z-image-turbo",
+            "skip_image_generation": False,
+            "prominent_text_overlay": "Tabario.com",
+            "reasoning": "CTA scene",
+        }
+    ])
+    classifications = _parse_llm_response(response, 1)
+    assert classifications[0].prominent_text_overlay is None
+
+
 def test_validate_classifications_success():
     """Test validation passes with valid classifications."""
     with patch("videomerge.services.scene_classifier.FAL_IMAGE_MODELS", ["fal-ai/flux/dev"]):
