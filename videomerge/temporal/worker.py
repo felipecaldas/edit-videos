@@ -164,6 +164,8 @@ async def main() -> None:
             activities.start_video_generation_provider,
             activities.poll_video_generation_provider,
             activities.list_existing_video_clips,
+            activities.fetch_brand_image_params,
+            activities.generate_talking_head_video,
         ],
     )
 
