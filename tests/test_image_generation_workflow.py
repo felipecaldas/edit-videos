@@ -168,6 +168,8 @@ def _build_stubs(rec: _Recorder) -> List[Any]:
         width: int,
         height: int,
         index: int,
+        negative_prompt: str | None = None,
+        style_id: str | None = None,
     ) -> str:
         rec.record("start_image_generation_provider", (provider, model, width, height, index))
         return f"{provider}-job-{index}"

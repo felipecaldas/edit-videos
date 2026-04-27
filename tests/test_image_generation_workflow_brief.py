@@ -90,7 +90,9 @@ class TestBriefPromptContent:
         assert "optimistic" in prompt
         assert "warm pastels" in prompt
         assert "cinematic handheld" in prompt
-        assert "Tabario wordmark" in prompt
+        # branding_elements are intentionally excluded from image prompts and applied
+        # by the rendering pipeline via BrandKitRef instead
+        assert "Tabario wordmark" not in prompt
 
     def test_image_prompt_second_scene_has_its_own_visual_description(self):
         brief = _make_brief("LinkedIn")
@@ -155,9 +157,9 @@ class TestImageGenerationWorkflowBriefBranch:
         # All image_prompts must be populated
         assert all(d["image_prompt"] for d in scene_prompts)
 
-        # Branding must be present in every scene prompt
+        # Branding elements are excluded from image prompts (applied by rendering pipeline)
         for d in scene_prompts:
-            assert "Tabario wordmark" in d["image_prompt"]
+            assert "Tabario wordmark" not in d["image_prompt"]
             assert "optimistic" in d["image_prompt"]
             assert "warm pastels" in d["image_prompt"]
             assert "cinematic handheld" in d["image_prompt"]
