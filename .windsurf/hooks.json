@@ -1,0 +1,10 @@
+{
+  "hooks": {
+    "post_run_command": [
+      {
+        "command": "python3 -c \"\nimport sys, json, subprocess\ndata = json.load(sys.stdin)\ncmd = (data.get('tool_info') or {}).get('command_line', '') or ''\nif 'git commit' not in cmd or '--dry-run' in cmd:\n    sys.exit(0)\nsubprocess.Popen(['ssh', 'fedora-local', 'cd ~/apps/tabario/edit-videos && docker compose up --build --no-deps -d video-merger temporal-worker && docker exec video-editor-video-merger-1 python3 -m pytest tests/ -v --tb=short'])\n\"",
+        "show_output": false
+      }
+    ]
+  }
+}

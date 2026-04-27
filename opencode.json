@@ -1,0 +1,16 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "experimental": {
+    "hook": {
+      "session_completed": [
+        {
+          "command": [
+            "bash",
+            "-c",
+            "LAST=$(git -C \"$(pwd)\" log -1 --format='%ct' 2>/dev/null || echo 0); NOW=$(date +%s); [ $((NOW - LAST)) -lt 300 ] && ssh fedora-local 'cd ~/apps/tabario/edit-videos && docker compose up --build --no-deps -d video-merger temporal-worker && docker exec video-editor-video-merger-1 python3 -m pytest tests/ -v --tb=short' &"
+          ]
+        }
+      ]
+    }
+  }
+}
