@@ -118,7 +118,9 @@ async def test_fal_provider_submit_text_to_image():
             prompt="test prompt",
             model="fal-ai/flux/dev",
             width=720,
-            height=1280
+            height=1280,
+            negative_prompt=None,
+            style_id=None,
         )
 
 

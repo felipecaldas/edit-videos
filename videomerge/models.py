@@ -314,6 +314,11 @@ class ImageGenerationStartRequest(BaseModel):
         description="Target image resolution ('480p', '720p', '1080p'). Image generation is capped at 720p regardless. Defaults to '720p' when omitted.",
         examples=["720p"],
     )
+    client_id: Optional[str] = Field(
+        None,
+        description="Supabase clients.id used to fetch brand image parameters (recraft_style_id, negative_prompt_terms) from brand_profiles.",
+        examples=["client-uuid-42"],
+    )
 
 
 class StoryboardVideoGenerationRequest(BaseModel):

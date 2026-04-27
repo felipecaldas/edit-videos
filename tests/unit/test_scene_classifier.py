@@ -82,8 +82,8 @@ def test_enforce_ui_overrides_applies_fallback_when_no_override():
 
 
 def test_enforce_ui_overrides_preserves_existing_override():
-    """Matched scene that already has an LLM override keeps its override unchanged."""
-    original_override = "Aerial view of a forest, no UI, no screens"
+    """Matched scene that already has a clean LLM override keeps its override unchanged."""
+    original_override = "Aerial view of a dense forest with morning light, cinematic wide shot"
     cls = _make_cls(0, override=original_override)
     with patch("videomerge.services.scene_classifier.FAL_IMAGE_MODELS", ["fal-ai/flux/dev"]):
         _enforce_ui_overrides([cls], ui_matched_indices={0})
