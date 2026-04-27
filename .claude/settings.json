@@ -1,0 +1,18 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"\nimport sys, json, re, subprocess\ndata = json.load(sys.stdin)\nstdout = (data.get('tool_response') or {}).get('stdout', '') or ''\nif not re.search(r'\\\\[[^\\\\]]+\\\\s+[0-9a-f]{7,}\\\\]', stdout):\n    sys.exit(0)\nsubprocess.run([\n    'ssh', 'fedora-local',\n    'cd ~/apps/tabario/edit-videos && docker compose up --build --no-deps -d video-merger temporal-worker && docker exec video-editor-video-merger-1 python3 -m pytest tests/ -v --tb=short'\n])\n\"",
+            "timeout": 600,
+            "statusMessage": "Building on fedora-local and running tests...",
+            "async": true
+          }
+        ]
+      }
+    ]
+  }
+}
