@@ -14,6 +14,8 @@ from videomerge.models import (
     FolderStitchWithSubsRequest,
     TranscriptionRequest,
     TranscriptionResponse,
+    WordTimestamp,
+    WordTranscriptionResponse,
 )
 from videomerge.services.downloads import obtain_source_to_path
 from videomerge.services.subtitles import (
@@ -292,4 +294,76 @@ async def transcribe_mp3(req: TranscriptionRequest):
         raise
     except Exception as e:
         logger.exception("[transcribe] Transcription failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
+
+
+@router.post("/transcribe/words", response_model=WordTranscriptionResponse)
+async def transcribe_words(req: TranscriptionRequest):
+    """Transcribe an MP3 file using Whisper and return per-word timestamps.
+
+    - Accepts a path to an MP3 file in /data/shared
+    - Returns one entry per word with start/end times in seconds
+    - Used by tabario-video-compositor to build frame-accurate CaptionTrack
+    """
+    logger.info("[transcribe/words] Starting word-level transcription for: %s", req.mp3_path)
+
+    mp3_path = Path(req.mp3_path)
+    if not str(mp3_path).startswith("/data/shared/"):
+        raise HTTPException(status_code=400, detail="MP3 file must be located in /data/shared directory")
+
+    if not mp3_path.exists():
+        raise HTTPException(status_code=404, detail=f"MP3 file not found: {req.mp3_path}")
+
+    if not mp3_path.is_file():
+        raise HTTPException(status_code=400, detail=f"Path is not a file: {req.mp3_path}")
+
+    if mp3_path.suffix.lower() != '.mp3':
+        raise HTTPException(status_code=400, detail="File must have .mp3 extension")
+
+    if mp3_path.stat().st_size == 0:
+        raise HTTPException(status_code=400, detail="MP3 file is empty")
+
+    try:
+        whisper_language = None
+        if req.language:
+            whisper_language = map_language_to_whisper_code(req.language)
+            logger.info("[transcribe/words] Using specified language: %s -> %s", req.language, whisper_language)
+        else:
+            logger.info("[transcribe/words] No language specified, Whisper will auto-detect")
+
+        segments, info = run_whisper_segments_with_info(
+            mp3_path,
+            language=whisper_language,
+            model_size=req.model_size,
+        )
+
+        words: list[WordTimestamp] = []
+        for segment in segments:
+            segment_words = getattr(segment, "words", None)
+            if segment_words:
+                for w in segment_words:
+                    words.append(WordTimestamp(
+                        word=w.word.strip(),
+                        start=float(w.start),
+                        end=float(w.end),
+                    ))
+
+        response = WordTranscriptionResponse(words=words)
+
+        if info:
+            detected_lang = getattr(info, "language", None)
+            lang_prob = getattr(info, "language_probability", None)
+            if detected_lang:
+                response.detected_language = detected_lang
+                if lang_prob:
+                    response.confidence = float(lang_prob)
+                logger.info("[transcribe/words] Detected language: %s (confidence: %.2f)", detected_lang, lang_prob or 0.0)
+
+        logger.info("[transcribe/words] Completed. Word count: %d", len(words))
+        return response
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("[transcribe/words] Transcription failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")

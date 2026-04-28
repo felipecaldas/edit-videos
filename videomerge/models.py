@@ -406,6 +406,18 @@ class TranscriptionResponse(BaseModel):
     confidence: Optional[float] = Field(None, description="Language detection confidence (if available)")
 
 
+class WordTimestamp(BaseModel):
+    word: str = Field(..., description="The transcribed word token")
+    start: float = Field(..., description="Word start time in seconds")
+    end: float = Field(..., description="Word end time in seconds")
+
+
+class WordTranscriptionResponse(BaseModel):
+    words: List[WordTimestamp] = Field(..., description="Per-word timestamps from Whisper")
+    detected_language: Optional[str] = Field(None, description="Detected language code")
+    confidence: Optional[float] = Field(None, description="Language detection confidence")
+
+
 class HandoffPayload(BaseModel):
     """Payload forwarded to ``tabario-video-compositor`` via the ``handoff_to_compositor`` activity.
 

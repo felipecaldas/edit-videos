@@ -11,8 +11,8 @@ from videomerge.services.subtitles import (
     _format_timestamp_srt,
     _clean_chunk_text,
 )
-from videomerge.models import TranscriptionRequest, TranscriptionResponse
-from videomerge.routers.subtitles import transcribe_mp3
+from videomerge.models import TranscriptionRequest, TranscriptionResponse, WordTimestamp, WordTranscriptionResponse
+from videomerge.routers.subtitles import transcribe_mp3, transcribe_words
 from fastapi import HTTPException
 
 
@@ -398,3 +398,83 @@ class TestTranscriptionEndpoint:
         
         assert exc_info.value.status_code == 400
         assert "empty" in str(exc_info.value.detail)
+
+
+class TestWordTranscriptionEndpoint:
+    """Test the word-level transcription endpoint used by video-compositor."""
+
+    @patch('videomerge.routers.subtitles.run_whisper_segments_with_info')
+    @patch('pathlib.Path.exists')
+    @patch('pathlib.Path.is_file')
+    @patch('pathlib.Path.stat')
+    @pytest.mark.asyncio
+    async def test_transcribe_words_success(self, mock_stat, mock_is_file, mock_exists, mock_transcribe):
+        """Test successful word-level transcription with per-word timestamps."""
+        mock_exists.return_value = True
+        mock_is_file.return_value = True
+        mock_stat.return_value = Mock(st_size=1000)
+
+        mock_word1 = Mock(word=" Hello ", start=0.0, end=0.5)
+        mock_word2 = Mock(word=" world ", start=0.6, end=1.0)
+        mock_segment = Mock()
+        mock_segment.words = [mock_word1, mock_word2]
+        mock_info = Mock()
+        mock_info.language = "en"
+        mock_info.language_probability = 0.97
+        mock_transcribe.return_value = ([mock_segment], mock_info)
+
+        req = TranscriptionRequest(mp3_path="/data/shared/test.mp3", language="English", model_size="small")
+        response = await transcribe_words(req)
+
+        assert isinstance(response, WordTranscriptionResponse)
+        assert len(response.words) == 2
+        assert response.words[0].word == "Hello"
+        assert response.words[0].start == 0.0
+        assert response.words[0].end == 0.5
+        assert response.words[1].word == "world"
+        assert response.detected_language == "en"
+        assert response.confidence == pytest.approx(0.97)
+
+    @patch('videomerge.routers.subtitles.run_whisper_segments_with_info')
+    @patch('pathlib.Path.exists')
+    @patch('pathlib.Path.is_file')
+    @patch('pathlib.Path.stat')
+    @pytest.mark.asyncio
+    async def test_transcribe_words_no_word_timestamps(self, mock_stat, mock_is_file, mock_exists, mock_transcribe):
+        """Test word-level endpoint when segments have no word-level data returns empty list."""
+        mock_exists.return_value = True
+        mock_is_file.return_value = True
+        mock_stat.return_value = Mock(st_size=1000)
+
+        mock_segment = Mock()
+        mock_segment.words = None
+        mock_info = Mock()
+        mock_info.language = "pt"
+        mock_info.language_probability = 0.85
+        mock_transcribe.return_value = ([mock_segment], mock_info)
+
+        req = TranscriptionRequest(mp3_path="/data/shared/test.mp3")
+        response = await transcribe_words(req)
+
+        assert isinstance(response, WordTranscriptionResponse)
+        assert response.words == []
+        assert response.detected_language == "pt"
+
+    @pytest.mark.asyncio
+    async def test_transcribe_words_invalid_path(self):
+        """Test that paths outside /data/shared are rejected."""
+        req = TranscriptionRequest(mp3_path="/tmp/test.mp3")
+        with pytest.raises(HTTPException) as exc_info:
+            await transcribe_words(req)
+        assert exc_info.value.status_code == 400
+        assert "must be located in /data/shared" in str(exc_info.value.detail)
+
+    @patch('pathlib.Path.exists')
+    @pytest.mark.asyncio
+    async def test_transcribe_words_file_not_found(self, mock_exists):
+        """Test 404 when MP3 does not exist."""
+        mock_exists.return_value = False
+        req = TranscriptionRequest(mp3_path="/data/shared/missing.mp3")
+        with pytest.raises(HTTPException) as exc_info:
+            await transcribe_words(req)
+        assert exc_info.value.status_code == 404
